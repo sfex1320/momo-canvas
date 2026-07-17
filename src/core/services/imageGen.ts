@@ -12,6 +12,12 @@ export type ImageGenReq = {
   size?: string;
   n?: number;
   refImages?: string[]; // dataURL
+  /** GPT Image：质量 auto/high/medium/low */
+  quality?: string;
+  /** Nano Banana：宽高比（imageConfig.aspectRatio） */
+  aspect?: string;
+  /** Nano Banana：分辨率档 1K/2K/4K（imageConfig.imageSize） */
+  resolution?: string;
 };
 
 async function normalizeResults(data: any[]): Promise<string[]> {
@@ -30,13 +36,15 @@ async function genOpenAI(card: ModelCard, req: ImageGenReq): Promise<string[]> {
   const n = req.n ?? 1;
 
   if (req.refImages?.length) {
+    const refs = req.refImages.slice(0, 16); // GPT Image 系列最多 16 张输入图
     const fd = new FormData();
     fd.append("model", card.model);
     fd.append("prompt", req.prompt);
     fd.append("n", String(n));
     if (size !== "auto") fd.append("size", size);
-    req.refImages.forEach((img, i) => {
-      fd.append(req.refImages!.length > 1 ? "image[]" : "image", dataUrlToBlob(img), `ref_${i}.png`);
+    if (req.quality && req.quality !== "auto") fd.append("quality", req.quality);
+    refs.forEach((img, i) => {
+      fd.append(refs.length > 1 ? "image[]" : "image", dataUrlToBlob(img), `ref_${i}.png`);
     });
     const resp = await xfetch(`${base}/images/edits`, { method: "POST", headers, body: fd });
     if (!resp.ok) throw new Error(`图生图请求失败 ${resp.status}: ${await readErrorBody(resp)}`);
@@ -45,6 +53,7 @@ async function genOpenAI(card: ModelCard, req: ImageGenReq): Promise<string[]> {
 
   const body: Record<string, unknown> = { model: card.model, prompt: req.prompt, n };
   if (size !== "auto") body.size = size;
+  if (req.quality && req.quality !== "auto") body.quality = req.quality;
   let resp = await xfetch(`${base}/images/generations`, {
     method: "POST",
     headers: { ...headers, "Content-Type": "application/json" },
@@ -67,19 +76,26 @@ async function genGemini(card: ModelCard, req: ImageGenReq): Promise<string[]> {
   const root = base.includes("/v1beta") ? base : `${base}/v1beta`;
   const url = `${root}/models/${card.model}:generateContent?key=${encodeURIComponent(card.apiKey)}`;
   const parts: unknown[] = [
-    ...(req.refImages ?? []).map((img) => {
+    ...(req.refImages ?? []).slice(0, 14).map((img) => {
+      // Nano Banana 系列最多 14 张参考图
       const mime = img.match(/^data:([^;]+)/)?.[1] ?? "image/png";
       return { inline_data: { mime_type: mime, data: img.split(",")[1] ?? "" } };
     }),
     { text: req.prompt },
   ];
+  // 宽高比 / 分辨率（1K 为默认档，不传以兼容不支持 imageSize 的旧模型）
+  const imageConfig: Record<string, string> = {};
+  if (req.aspect && req.aspect !== "auto") imageConfig.aspectRatio = req.aspect;
+  if (req.resolution && req.resolution !== "1K") imageConfig.imageSize = req.resolution;
+  const payload: Record<string, unknown> = { contents: [{ role: "user", parts }] };
+  if (Object.keys(imageConfig).length) payload.generationConfig = { imageConfig };
   const n = Math.min(req.n ?? 1, 4);
   const out: string[] = [];
   for (let i = 0; i < n; i++) {
     const resp = await xfetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ contents: [{ role: "user", parts }] }),
+      body: JSON.stringify(payload),
     });
     if (!resp.ok) throw new Error(`Gemini 生图失败 ${resp.status}: ${await readErrorBody(resp)}`);
     const j = await resp.json();

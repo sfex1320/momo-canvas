@@ -12,6 +12,7 @@ import { generateVideo } from "./services/videoGen";
 import { webSearch, searchContext } from "./services/webSearch";
 import { runComfyTemplate, uploadImageToComfy } from "./services/comfy";
 import { autoSaveImage } from "./services/imageSaver";
+import { imageFamily } from "./modelMeta";
 import { errMsg } from "./utils";
 import type {
   CaptionData,
@@ -143,12 +144,18 @@ export async function runImageGen(id: string) {
   upd(id, { status: "running", error: undefined });
   try {
     const card = resolveModelCard("image", data.modelId);
-    const size = data.size === "default" ? card.size : data.size;
+    const family = imageFamily(card);
+    // 自定义宽高优先；Nano Banana 走 aspect/resolution，不传 size
+    const customSize = data.width && data.height ? `${data.width}x${data.height}` : undefined;
+    const size = family === "banana" ? undefined : customSize ?? (data.size === "default" ? card.size : data.size);
     const results = await generateImage(card, {
       prompt,
       size,
       n: data.count ?? 1,
       refImages: images.length ? images : undefined,
+      aspect: family === "banana" ? data.aspect : undefined,
+      resolution: family === "banana" ? data.resolution : undefined,
+      quality: family === "gpt" ? data.quality : undefined,
     });
     upd(id, { status: "done", results, picked: 0 });
     for (const src of results) {

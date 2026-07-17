@@ -156,6 +156,21 @@ export function edgeClassFor(port: PortType | null): string {
   return port ? `edge-${port}` : "";
 }
 
+/** 连 source→target 是否会成环（target 沿下游已能回到 source，含互连） */
+export function wouldCycle(edges: Edge[], source: string, target: string): boolean {
+  if (source === target) return true;
+  const stack = [target];
+  const seen = new Set<string>();
+  while (stack.length) {
+    const cur = stack.pop()!;
+    if (cur === source) return true;
+    if (seen.has(cur)) continue;
+    seen.add(cur);
+    for (const e of edges) if (e.source === cur) stack.push(e.target);
+  }
+  return false;
+}
+
 /* ---------- 贴近/覆盖 自动连线 ---------- */
 const PROX_GAP_MAX = 130; // 左右贴近的最大间距
 const PROX_V_OVERLAP = 24; // 需要的最小纵向重叠
@@ -163,7 +178,7 @@ const PROX_SNAP_GAP = 48; // 覆盖放置后自动摆开的间距
 
 type ProxPair = { up: AppNode; down: AppNode; handle: string; overlap: boolean; dist: number };
 
-/** up→down 是否可连（端口类型匹配且尚无同款边），可连则返回目标端口 */
+/** up→down 是否可连（端口类型匹配、尚无同款边、不会成环），可连则返回目标端口 */
 function linkHandle(up: AppNode, down: AppNode, edges: Edge[]): string | null {
   const pt = outPortType(up.type as NodeKind);
   if (!pt || pt === "video") return null;
@@ -171,6 +186,7 @@ function linkHandle(up: AppNode, down: AppNode, edges: Edge[]): string | null {
   const handle = pt === "image" ? (ins.image ? "in-image" : null) : ins.text ? "in-text" : null;
   if (!handle) return null;
   if (edges.some((e) => e.source === up.id && e.target === down.id && e.targetHandle === handle)) return null;
+  if (wouldCycle(edges, up.id, down.id)) return null;
   return handle;
 }
 
@@ -308,7 +324,7 @@ export const useBoard = create<BoardState>((set, get) => {
       const src = get().nodes.find((n) => n.id === conn.source);
       const port = src ? outPortType(src.type as NodeKind) : null;
       set({
-        edges: addEdge({ ...conn, id: `e_${uid(8)}`, className: edgeClassFor(port) }, get().edges),
+        edges: addEdge({ ...conn, id: `e_${uid(8)}`, className: edgeClassFor(port), interactionWidth: 28 }, get().edges),
       });
       persist();
     },
@@ -318,7 +334,7 @@ export const useBoard = create<BoardState>((set, get) => {
       const port = src ? outPortType(src.type as NodeKind) : null;
       set({
         edges: addEdge(
-          { source, target, sourceHandle: "out", targetHandle, id: `e_${uid(8)}`, className: edgeClassFor(port) },
+          { source, target, sourceHandle: "out", targetHandle, id: `e_${uid(8)}`, className: edgeClassFor(port), interactionWidth: 28 },
           get().edges,
         ),
       });

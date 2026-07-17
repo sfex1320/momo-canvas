@@ -1,24 +1,42 @@
 import { memo } from "react";
 import type { NodeProps } from "@xyflow/react";
 import { NodeShell, PortImageIn, PortOut, PortTextIn } from "../NodeShell";
-import { IcDownload, IcLoading, IcSparkles } from "../../../ui/icons";
-import { ModelPicker } from "../../../ui/ModelPicker";
+import { IcDownload, IcGear, IcLoading, IcSparkles } from "../../../ui/icons";
 import { useBoard } from "../../../core/stores/boardStore";
 import { resolveModelCard, useSettings } from "../../../core/stores/settingsStore";
+import { imageFamily } from "../../../core/modelMeta";
 import { toast, useUi } from "../../../core/stores/uiStore";
 import { runImageGen } from "../../../core/runner";
 import { saveImageAs } from "../../../core/services/imageSaver";
 import { errMsg } from "../../../core/utils";
 import type { ImageGenData } from "../../../core/types";
 
-const SIZES = ["default", "1024x1024", "768x1024", "1024x768", "1024x1536", "1536x1024", "auto"];
-
 export const ImageGenNode = memo(function ImageGenNode({ id, data, selected }: NodeProps) {
   const d = data as ImageGenData;
   const upd = useBoard((s) => s.updateData);
+  const models = useSettings((s) => s.settings.models);
   const setLightbox = useUi((s) => s.setLightbox);
   const running = d.status === "running";
   const main = d.results?.[d.picked ?? 0];
+
+  // 参数摘要（详细调控在左下角面板）
+  let summary = "";
+  try {
+    const card = resolveModelCard("image", d.modelId);
+    const fam = imageFamily(card);
+    const size =
+      fam === "banana"
+        ? `${d.aspect ?? "auto"} · ${d.resolution ?? "1K"}`
+        : d.width && d.height
+          ? `${d.width}×${d.height}`
+          : d.size === "default"
+            ? (card.size ?? "auto")
+            : d.size;
+    summary = `${card.model} · ${size} · ${d.count ?? 1}张`;
+  } catch {
+    summary = "尚未配置绘画模型";
+  }
+  void models; // 订阅设置变化以刷新摘要
 
   const save = async () => {
     if (!main) return;
@@ -56,7 +74,6 @@ export const ImageGenNode = memo(function ImageGenNode({ id, data, selected }: N
       }
     >
       <div className="mnode-body">
-        <ModelPicker role="image" value={d.modelId} onChange={(v) => upd(id, { modelId: v })} />
         <textarea
           className="textarea nodrag nowheel"
           rows={3}
@@ -64,33 +81,9 @@ export const ImageGenNode = memo(function ImageGenNode({ id, data, selected }: N
           value={d.prompt}
           onChange={(e) => upd(id, { prompt: e.target.value })}
         />
-        <div style={{ display: "flex", gap: 8 }}>
-          <select
-            className="select nodrag"
-            style={{ flex: 1.4, minHeight: 34 }}
-            value={d.size}
-            onChange={(e) => upd(id, { size: e.target.value })}
-            title="输出尺寸"
-          >
-            {SIZES.map((s) => (
-              <option key={s} value={s}>
-                {s === "default" ? "尺寸·跟随全局" : s === "auto" ? "自动" : s}
-              </option>
-            ))}
-          </select>
-          <select
-            className="select nodrag"
-            style={{ flex: 1, minHeight: 34 }}
-            value={d.count}
-            onChange={(e) => upd(id, { count: Number(e.target.value) })}
-            title="生成张数"
-          >
-            {[1, 2, 3, 4].map((n) => (
-              <option key={n} value={n}>
-                {n} 张
-              </option>
-            ))}
-          </select>
+        <div className="gen-sum nodrag" title="选中节点后，在画布左下角的「生成设置」面板中调整模型/尺寸/数量">
+          <IcGear size={13} />
+          <span>{summary}</span>
         </div>
         <button className="btn primary nodrag" disabled={running} onClick={() => void runImageGen(id)}>
           {running ? <IcLoading size={17} /> : <IcSparkles size={17} />}

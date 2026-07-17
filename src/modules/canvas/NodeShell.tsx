@@ -53,17 +53,17 @@ export function NodeShell({
   );
 }
 
-/** 文本输入端口（左上，紫色） */
+/** 文本输入端口（左上，紫色）；data-lab 会在悬停节点时显示为小标签 */
 export const PortTextIn = () => (
-  <Handle type="target" position={Position.Left} id="in-text" title="文本输入 · 接提示词/对话等" className="port port-text" style={{ top: 26 }} />
+  <Handle type="target" position={Position.Left} id="in-text" data-lab="文本入" title="文本输入 · 接提示词/对话等" className="port port-text" style={{ top: 26 }} />
 );
 
 /** 图片输入端口（左下一格，蓝色） */
 export const PortImageIn = ({ top = 58 }: { top?: number }) => (
-  <Handle type="target" position={Position.Left} id="in-image" title="图片输入 · 接图片/生成图像等" className="port port-image" style={{ top }} />
+  <Handle type="target" position={Position.Left} id="in-image" data-lab="图片入" title="图片输入 · 接图片/生成图像等" className="port port-image" style={{ top }} />
 );
 
 /** 输出端口（右中） */
 export const PortOut = ({ kind }: { kind: "text" | "image" }) => (
-  <Handle type="source" position={Position.Right} id="out" title={kind === "text" ? "文本输出" : "图片输出"} className={`port port-${kind}`} />
+  <Handle type="source" position={Position.Right} id="out" data-lab={kind === "text" ? "文本出" : "图片出"} title={kind === "text" ? "文本输出" : "图片输出"} className={`port port-${kind}`} />
 );

@@ -54,11 +54,21 @@ export type ImageGenData = {
   status: RunStatus;
   error?: string;
   prompt: string;
+  /** 通用家族预设尺寸（"default" = 跟随服务商配置） */
   size: string;
   count: number;
   results: string[];
   picked: number;
   modelId?: string;
+  /** Nano Banana：宽高比（auto/1:1/16:9…） */
+  aspect?: string;
+  /** Nano Banana：分辨率档（1K/2K/4K） */
+  resolution?: string;
+  /** GPT Image：质量（auto/high/medium/low） */
+  quality?: string;
+  /** GPT Image / 通用：自定义宽高（同时填写才生效） */
+  width?: number;
+  height?: number;
 };
 
 export type VideoGenData = {

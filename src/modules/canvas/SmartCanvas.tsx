@@ -20,7 +20,8 @@ import {
 import "@xyflow/react/dist/style.css";
 import "./canvas.css";
 
-import { useBoard, outPortType, findProximityPair } from "../../core/stores/boardStore";
+import { useBoard, outPortType, findProximityPair, wouldCycle } from "../../core/stores/boardStore";
+import { GenConfigPanel } from "./GenConfigPanel";
 import { useUi } from "../../core/stores/uiStore";
 import type { AppNode, NodeKind } from "../../core/types";
 import { fileToDataUrl } from "../../core/utils";
@@ -91,6 +92,8 @@ export function SmartCanvas() {
     if (want !== pt) return false;
     if (s.edges.some((e) => e.source === conn.source && e.target === conn.target && e.targetHandle === conn.targetHandle))
       return false;
+    // 已是自己的上游就不能再接成自己的下游（禁止互连/成环）
+    if (wouldCycle(s.edges, conn.source, conn.target)) return false;
     return true;
   }, []);
 
@@ -333,6 +336,8 @@ export function SmartCanvas() {
           </button>
         </div>
       ) : null}
+
+      {!zen ? <GenConfigPanel /> : null}
 
       <AddNodeMenu />
     </div>
