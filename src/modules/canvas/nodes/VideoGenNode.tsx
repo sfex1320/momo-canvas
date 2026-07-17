@@ -52,7 +52,19 @@ export const VideoGenNode = memo(function VideoGenNode({ id, data, selected }: N
       }
     >
       <div className="mnode-body">
-        <ModelPicker role="video" value={d.modelId} onChange={(v) => upd(id, { modelId: v })} />
+        <div style={{ display: "flex", gap: 7 }}>
+          <div style={{ flex: 1 }}>
+            <ModelPicker role="video" value={d.modelId} onChange={(v) => upd(id, { modelId: v })} />
+          </div>
+          <div className="lang-seg nodrag" title="提示词语言：中文直发 / 生成前译成英文">
+            <button className={(d.lang ?? "zh") === "zh" ? "on" : ""} onClick={() => upd(id, { lang: "zh" })}>
+              中
+            </button>
+            <button className={d.lang === "en" ? "on" : ""} onClick={() => upd(id, { lang: "en" })}>
+              EN
+            </button>
+          </div>
+        </div>
         <textarea
           className="textarea nodrag nowheel"
           rows={3}

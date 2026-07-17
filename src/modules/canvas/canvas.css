@@ -848,6 +848,111 @@
   background: var(--grad-brand-soft);
 }
 
+/* Alt 拖拽复制中的副本：虚线显示便于定位 */
+.mnode.ghost,
+.group-node.ghost {
+  border-style: dashed;
+  opacity: 0.65;
+}
+
+/* 上游传入提示徽标 */
+.up-badge {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex-wrap: wrap;
+  margin: 0 12px 2px;
+  padding: 5px 8px;
+  border-radius: var(--r-sm);
+  background: var(--grad-brand-soft);
+  border: 1px solid rgba(91, 140, 255, 0.25);
+}
+.up-badge img {
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  object-fit: cover;
+  border: 1px solid var(--panel-border);
+}
+.up-badge .ub-more {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--accent);
+}
+.up-badge .ub-txt {
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--accent);
+}
+
+/* 方格选项组（替代下拉菜单） */
+.opt-grid {
+  display: grid;
+  gap: 5px;
+}
+.opt-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  padding: 7px 3px 6px;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--input-border);
+  background: var(--input-bg);
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--text-2);
+  transition: border-color var(--t-fast), background var(--t-fast), color var(--t-fast);
+}
+.opt-cell:hover {
+  border-color: var(--accent);
+  color: var(--text-1);
+}
+.opt-cell.on {
+  border-color: var(--accent);
+  background: var(--grad-brand-soft);
+  color: var(--accent);
+}
+.opt-cell .oc-ic {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.opt-cell .oc-lab {
+  max-width: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 节点内的中/英语言小开关 */
+.lang-seg {
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--input-border);
+  background: var(--input-bg);
+  flex: none;
+}
+.lang-seg button {
+  min-width: 30px;
+  height: 26px;
+  border-radius: 7px;
+  font-size: 11.5px;
+  font-weight: 700;
+  color: var(--text-3);
+}
+.lang-seg button.on {
+  background: var(--grad-brand-soft);
+  color: var(--accent);
+}
+
+/* 锁定的备注：头部常显，给出锁定状态 */
+.note-card.locked .note-head {
+  opacity: 1;
+}
+
 /* ============ 提示词节点：同路参考图 @ 引用 ============ */
 .ref-strip .rs-lab {
   display: block;

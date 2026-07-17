@@ -8,13 +8,10 @@ import { useUi } from "../../core/stores/uiStore";
 import { useAssets } from "../../core/stores/assetStore";
 import { isTauri } from "../../core/utils";
 import {
-  IcCheck,
-  IcChevronD,
   IcClose,
-  IcEdit,
   IcGallery,
   IcGear,
-  IcLayers,
+  IcHistory,
   IcLibrary,
   IcLogo,
   IcMax,
@@ -47,111 +44,119 @@ function useWindowControls() {
   return { maximized, call };
 }
 
-function BoardSwitch() {
+/** 浏览器式画布标签：单击切换 · 双击重命名 · × 关闭进历史 · + 新建 · 历史可恢复 */
+function BoardTabs() {
   const order = useBoard((s) => s.order);
   const boards = useBoard((s) => s.boards);
   const activeId = useBoard((s) => s.activeId);
+  const archived = useBoard((s) => s.archived);
   const switchBoard = useBoard((s) => s.switchBoard);
   const newBoard = useBoard((s) => s.newBoard);
   const renameBoard = useBoard((s) => s.renameBoard);
-  const deleteBoard = useBoard((s) => s.deleteBoard);
-  const [open, setOpen] = useState(false);
+  const archiveBoard = useBoard((s) => s.archiveBoard);
+  const restoreBoard = useBoard((s) => s.restoreBoard);
+  const purgeBoard = useBoard((s) => s.purgeBoard);
   const [editing, setEditing] = useState<string | null>(null);
-  const [confirmDel, setConfirmDel] = useState<string | null>(null);
+  const [histOpen, setHistOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const onDown = (e: MouseEvent) => {
-      if (!ref.current?.contains(e.target as Node)) {
-        setOpen(false);
-        setEditing(null);
-        setConfirmDel(null);
-      }
+      if (!ref.current?.contains(e.target as Node)) setHistOpen(false);
     };
     window.addEventListener("mousedown", onDown);
     return () => window.removeEventListener("mousedown", onDown);
   }, []);
 
-  const active = boards[activeId];
+  const histList = Object.values(archived).sort((a, b) => b.meta.updatedAt - a.meta.updatedAt);
+
   return (
-    <div className="board-switch" ref={ref}>
-      <button onClick={() => setOpen(!open)} title="切换 / 管理画布">
-        <IcLayers size={16} />
-        <span className="bname">{active?.meta.name ?? "画布"}</span>
-        <IcChevronD size={14} />
-      </button>
-      {open ? (
-        <div className="board-pop glass">
-          {order.map((id) => {
-            const b = boards[id];
-            if (!b) return null;
-            return (
-              <div key={id} className={`brow ${id === activeId ? "on" : ""}`} onClick={() => switchBoard(id)}>
-                {editing === id ? (
-                  <input
-                    className="input"
-                    autoFocus
-                    defaultValue={b.meta.name}
-                    onClick={(e) => e.stopPropagation()}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") {
-                        renameBoard(id, (e.target as HTMLInputElement).value.trim() || b.meta.name);
-                        setEditing(null);
-                      }
-                      if (e.key === "Escape") setEditing(null);
-                    }}
-                    onBlur={(e) => {
-                      renameBoard(id, e.target.value.trim() || b.meta.name);
+    <div className="board-tabs" ref={ref}>
+      <div className="bt-scroll">
+        {order.map((id) => {
+          const b = boards[id];
+          if (!b) return null;
+          const on = id === activeId;
+          return (
+            <div
+              key={id}
+              className={`btab ${on ? "on" : ""}`}
+              title={`${b.meta.name}（双击重命名）`}
+              onClick={() => switchBoard(id)}
+              onDoubleClick={() => setEditing(id)}
+            >
+              {editing === id ? (
+                <input
+                  autoFocus
+                  defaultValue={b.meta.name}
+                  onClick={(e) => e.stopPropagation()}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      renameBoard(id, (e.target as HTMLInputElement).value.trim() || b.meta.name);
                       setEditing(null);
-                    }}
-                  />
-                ) : (
-                  <span className="bn">{b.meta.name}</span>
-                )}
+                    }
+                    if (e.key === "Escape") setEditing(null);
+                  }}
+                  onBlur={(e) => {
+                    renameBoard(id, e.target.value.trim() || b.meta.name);
+                    setEditing(null);
+                  }}
+                />
+              ) : (
+                <span className="bt-name">{b.meta.name}</span>
+              )}
+              <button
+                className="bt-close"
+                title="关闭画布（进入画布历史，可恢复）"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  archiveBoard(id);
+                }}
+              >
+                <IcClose size={12} />
+              </button>
+            </div>
+          );
+        })}
+      </div>
+      <button className="bt-add" title="新建画布" onClick={() => newBoard()}>
+        <IcPlus size={15} />
+      </button>
+      <button
+        className={`bt-add ${histOpen ? "on" : ""}`}
+        title={`画布历史（${histList.length}）：恢复或彻底删除关闭过的画布`}
+        onClick={() => setHistOpen(!histOpen)}
+      >
+        <IcHistory size={15} />
+      </button>
+      {histOpen ? (
+        <div className="board-pop glass">
+          {histList.length === 0 ? (
+            <div className="brow" style={{ color: "var(--text-3)", cursor: "default" }}>
+              暂无历史画布——关闭标签后会收进这里
+            </div>
+          ) : (
+            histList.map((b) => (
+              <div key={b.meta.id} className="brow" onClick={() => { restoreBoard(b.meta.id); setHistOpen(false); }}>
+                <span className="bn">
+                  {b.meta.name}
+                  <span style={{ color: "var(--text-3)", fontWeight: 500, fontSize: 11.5, marginLeft: 7 }}>
+                    {new Date(b.meta.updatedAt).toLocaleDateString()} · {b.nodes.length} 节点
+                  </span>
+                </span>
                 <button
-                  className="icon-btn"
-                  title="重命名"
+                  className="icon-btn danger"
+                  title="彻底删除（不可恢复）"
                   onClick={(e) => {
                     e.stopPropagation();
-                    setEditing(id);
+                    purgeBoard(b.meta.id);
                   }}
                 >
-                  <IcEdit size={15} />
+                  <IcTrash size={15} />
                 </button>
-                {order.length > 1 ? (
-                  confirmDel === id ? (
-                    <button
-                      className="icon-btn danger"
-                      style={{ opacity: 1, color: "var(--danger)" }}
-                      title="再点一次确认删除"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        deleteBoard(id);
-                        setConfirmDel(null);
-                      }}
-                    >
-                      <IcCheck size={15} />
-                    </button>
-                  ) : (
-                    <button
-                      className="icon-btn danger"
-                      title="删除画布"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setConfirmDel(id);
-                      }}
-                    >
-                      <IcTrash size={15} />
-                    </button>
-                  )
-                ) : null}
               </div>
-            );
-          })}
-          <div className="brow new-row" onClick={() => newBoard()}>
-            <IcPlus size={16} />
-            <span className="bn">新建画布</span>
-          </div>
+            ))
+          )}
         </div>
       ) : null}
     </div>
@@ -177,7 +182,7 @@ export function Titlebar() {
           MOMO <span className="grad-text">智能画布</span>
         </span>
       </div>
-      <BoardSwitch />
+      <BoardTabs />
       <div className="spacer" data-tauri-drag-region />
       <button className={`icon-btn ${libOpen ? "on" : ""}`} title="资产库" onClick={() => setLibOpen(!libOpen)}>
         <IcLibrary size={19} />

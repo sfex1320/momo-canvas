@@ -22,6 +22,30 @@ export function Row({ children, gap = 10, style }: { children: ReactNode; gap?: 
   return <div style={{ display: "flex", alignItems: "center", gap, ...style }}>{children}</div>;
 }
 
+/** 方格选项组：圆角方形按钮（图标 + 名称），替代下拉菜单 */
+export function OptGrid({
+  options,
+  value,
+  onChange,
+  cols = 3,
+}: {
+  options: { value: string; label: string; icon?: ReactNode }[];
+  value: string;
+  onChange: (v: string) => void;
+  cols?: number;
+}) {
+  return (
+    <div className="opt-grid nodrag" style={{ gridTemplateColumns: `repeat(${cols}, 1fr)` }}>
+      {options.map((o) => (
+        <button key={o.value} className={`opt-cell ${value === o.value ? "on" : ""}`} onClick={() => onChange(o.value)}>
+          {o.icon ? <span className="oc-ic">{o.icon}</span> : null}
+          <span className="oc-lab">{o.label}</span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
 export function Modal({
   title,
   onClose,

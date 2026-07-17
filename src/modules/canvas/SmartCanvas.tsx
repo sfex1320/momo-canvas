@@ -272,9 +272,14 @@ export function SmartCanvas() {
     return () => window.removeEventListener("paste", onPaste);
   }, [screenToFlowPosition, addNode]);
 
-  /* ---- 建组：多选打包 / 进入框画模式 ---- */
+  /* ---- 建组/解组：选中有组则解散；多选则打包；否则进入框画模式 ---- */
   const groupAction = useCallback(() => {
-    const sel = useBoard.getState().nodes.filter((n) => n.selected && n.type !== "group" && !n.parentId);
+    const s = useBoard.getState();
+    if (s.nodes.some((n) => n.selected && n.type === "group")) {
+      s.ungroupSelected();
+      return;
+    }
+    const sel = s.nodes.filter((n) => n.selected && n.type !== "group" && !n.parentId);
     if (sel.length >= 2) groupSelected();
     else useUi.getState().setGroupDraw(true);
   }, [groupSelected]);
@@ -339,6 +344,7 @@ export function SmartCanvas() {
     (_: unknown, node: AppNode) => {
       proximityConnect(node.id);
       useUi.getState().setProxHint(null);
+      useUi.getState().setDupGhost(null);
     },
     [proximityConnect],
   );
@@ -371,7 +377,14 @@ export function SmartCanvas() {
         onConnect={onConnect}
         onConnectEnd={onConnectEnd}
         onPaneClick={onPaneClick}
-        onNodeDragStart={() => snapshot()}
+        onNodeDragStart={(e, node) => {
+          snapshot();
+          // Alt+拖拽 = 复制：原工作流原地保留，被拖走的是副本（虚线显示）
+          if ((e as unknown as { altKey?: boolean }).altKey) {
+            const ids = useBoard.getState().altDuplicateStart(node.id);
+            if (ids) useUi.getState().setDupGhost(ids);
+          }
+        }}
         onNodeDrag={onNodeDrag}
         onNodeDragStop={onNodeDragStop}
         isValidConnection={isValidConnection}
@@ -426,7 +439,7 @@ export function SmartCanvas() {
           </button>
           <button
             className={`tb-btn ${groupDraw ? "on" : ""}`}
-            title={`建组（${hotkeys.group.toUpperCase()}）：已多选节点时直接打包成组；否则框画一个区域建组`}
+            title={`建组/解组（${hotkeys.group.toUpperCase()}）：选中组时解散；多选节点时打包成组并自动排布；否则框画区域建组`}
             onClick={groupAction}
           >
             <IcGroup size={18} />

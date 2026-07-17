@@ -80,6 +80,25 @@ export const NODE_INPUTS: Record<NodeKind, { text?: boolean; image?: boolean }> 
   group: {},
 };
 
+/** 成组自动排布时的类别顺序：输入 → 智能处理 → 生成 → 备注 */
+const KIND_RANK: Record<NodeKind, number> = {
+  image: 0,
+  prompt: 1,
+  stylePreset: 2,
+  chat: 3,
+  caption: 4,
+  llmText: 5,
+  combine: 6,
+  imageGen: 7,
+  videoGen: 8,
+  comfy: 9,
+  note: 10,
+  group: 11,
+};
+function kindRank(kind: NodeKind): number {
+  return KIND_RANK[kind] ?? 99;
+}
+
 export const NODE_LABEL: Record<NodeKind, string> = {
   image: "图片",
   prompt: "提示词",
@@ -101,6 +120,8 @@ type PersistShape = {
   order: string[];
   activeId: string;
   boards: Record<string, BoardRecord>;
+  /** 画布历史（关闭的画布，可恢复/彻底删除） */
+  archived?: Record<string, BoardRecord>;
 };
 
 type Snapshot = { nodes: AppNode[]; edges: Edge[] };
@@ -110,6 +131,7 @@ type BoardState = {
   boards: Record<string, BoardRecord>;
   order: string[];
   activeId: string;
+  archived: Record<string, BoardRecord>;
   nodes: AppNode[];
   edges: Edge[];
   canUndo: boolean;
@@ -134,6 +156,10 @@ type BoardState = {
   toggleIgnoreSelected: () => void;
   /** 选中与矩形（flow 坐标）相交的连线（Ctrl 框选连线用） */
   selectEdgesInRect: (rect: { x: number; y: number; w: number; h: number }) => void;
+  /** 解散所选的组（成员保留） */
+  ungroupSelected: () => void;
+  /** Alt+拖拽开始：原地留一份完整拷贝（含连线），被拖走的成为副本；返回被拖动的节点 id 列表 */
+  altDuplicateStart: (dragId: string) => string[] | null;
   snapshot: () => void;
   undo: () => void;
   redo: () => void;
@@ -141,7 +167,11 @@ type BoardState = {
   newBoard: () => void;
   switchBoard: (id: string) => void;
   renameBoard: (id: string, name: string) => void;
-  deleteBoard: (id: string) => void;
+  /** 关闭画布 → 移入画布历史（可恢复） */
+  archiveBoard: (id: string) => void;
+  restoreBoard: (id: string) => void;
+  /** 从历史中彻底删除 */
+  purgeBoard: (id: string) => void;
 };
 
 let saveTimer: ReturnType<typeof setTimeout> | null = null;
@@ -290,13 +320,14 @@ export const useBoard = create<BoardState>((set, get) => {
   const persist = () => {
     if (saveTimer) clearTimeout(saveTimer);
     saveTimer = setTimeout(() => {
-      const { boards, order, activeId, nodes, edges, loaded } = get();
+      const { boards, order, activeId, archived, nodes, edges, loaded } = get();
       if (!loaded) return;
       const cur = boards[activeId];
       if (!cur) return;
       const next: PersistShape = {
         order,
         activeId,
+        archived,
         boards: { ...boards, [activeId]: { ...cur, meta: { ...cur.meta, updatedAt: Date.now() }, nodes, edges } },
       };
       set({ boards: next.boards });
@@ -326,6 +357,7 @@ export const useBoard = create<BoardState>((set, get) => {
     boards: {},
     order: [],
     activeId: "",
+    archived: {},
     nodes: [],
     edges: [],
     canUndo: false,
@@ -342,6 +374,7 @@ export const useBoard = create<BoardState>((set, get) => {
             boards: saved.boards,
             order: saved.order,
             activeId,
+            archived: saved.archived ?? {},
             nodes: sanitizeNodes(cur?.nodes ?? []),
             edges: cur?.edges ?? [],
             loaded: true,
@@ -470,34 +503,81 @@ export const useBoard = create<BoardState>((set, get) => {
       snapshot();
       const PAD = 26;
       const HEAD = 40;
-      const minX = Math.min(...sel.map((n) => n.position.x)) - PAD;
-      const minY = Math.min(...sel.map((n) => n.position.y)) - PAD - HEAD;
-      const maxX = Math.max(...sel.map((n) => n.position.x + (n.measured?.width ?? 260))) + PAD;
-      const maxY = Math.max(...sel.map((n) => n.position.y + (n.measured?.height ?? 140))) + PAD;
+      const GAP = 18;
+      const minX = Math.min(...sel.map((n) => n.position.x));
+      const minY = Math.min(...sel.map((n) => n.position.y));
       const gid = `n_${uid(8)}`;
+      // 按类别（输入 → 智能 → 生成）再按原位置排序，在组内纵向等距排布
+      const sorted = [...sel].sort(
+        (a, b) =>
+          kindRank(a.type as NodeKind) - kindRank(b.type as NodeKind) ||
+          a.position.y - b.position.y ||
+          a.position.x - b.position.x,
+      );
+      let y = HEAD + PAD;
+      let maxW = 0;
+      const placed = sorted.map((n) => {
+        const node = { ...n, selected: false, parentId: gid, extent: "parent" as const, position: { x: PAD, y } };
+        y += (n.measured?.height ?? 140) + GAP;
+        maxW = Math.max(maxW, n.measured?.width ?? 260);
+        return node;
+      });
       const group: AppNode = {
         id: gid,
         type: "group",
-        position: { x: minX, y: minY },
+        position: { x: minX - PAD, y: minY - PAD - HEAD },
         data: { status: "idle" },
-        style: { width: maxX - minX, height: maxY - minY },
+        style: { width: maxW + PAD * 2, height: y - GAP + PAD },
         selected: true,
       };
       const selIds = new Set(sel.map((n) => n.id));
       set({
-        nodes: [
-          ...nodes.filter((n) => !selIds.has(n.id)).map((n) => ({ ...n, selected: false })),
-          group,
-          ...sel.map((n) => ({
-            ...n,
-            selected: false,
-            parentId: gid,
-            extent: "parent" as const,
-            position: { x: n.position.x - minX, y: n.position.y - minY },
-          })),
-        ],
+        nodes: [...nodes.filter((n) => !selIds.has(n.id)).map((n) => ({ ...n, selected: false })), group, ...placed],
       });
       persist();
+    },
+
+    ungroupSelected: () => {
+      const groups = get().nodes.filter((n) => n.selected && n.type === "group");
+      for (const g of groups) get().removeNode(g.id);
+    },
+
+    altDuplicateStart: (dragId) => {
+      const { nodes, edges } = get();
+      const dragged = nodes.find((n) => n.id === dragId);
+      if (!dragged || dragged.parentId) return null;
+      const base = dragged.selected ? nodes.filter((n) => n.selected && !n.parentId) : [dragged];
+      const groupIds = new Set(base.filter((n) => n.type === "group").map((n) => n.id));
+      const members = nodes.filter((n) => n.parentId && groupIds.has(n.parentId));
+      const all = [...base, ...members];
+      snapshot();
+      const map = new Map<string, string>();
+      for (const n of all) map.set(n.id, `n_${uid(8)}`);
+      // 原地留下的完整拷贝（接管全部对外连线）；被拖走的原 id 集合成为“副本”
+      const clones: AppNode[] = all.map((n) => ({
+        ...n,
+        id: map.get(n.id)!,
+        selected: false,
+        parentId: n.parentId ? (map.get(n.parentId) ?? n.parentId) : undefined,
+        data: { ...(n.data as Record<string, unknown>) },
+      }));
+      const idSet = new Set(all.map((n) => n.id));
+      const extraEdges: Edge[] = [];
+      const remapped = edges.map((e) => {
+        const sIn = idSet.has(e.source);
+        const tIn = idSet.has(e.target);
+        if (sIn && tIn) {
+          // 内部连线：两份都要，保证工作流复制后连线不乱
+          extraEdges.push({ ...e, id: `e_${uid(8)}`, source: map.get(e.source)!, target: map.get(e.target)! });
+          return e;
+        }
+        if (sIn) return { ...e, source: map.get(e.source)! };
+        if (tIn) return { ...e, target: map.get(e.target)! };
+        return e;
+      });
+      set({ nodes: [...get().nodes, ...clones], edges: [...remapped, ...extraEdges] });
+      persist();
+      return all.map((n) => n.id);
     },
 
     groupInRect: (rect) => {
@@ -672,12 +752,21 @@ export const useBoard = create<BoardState>((set, get) => {
       persist();
     },
 
-    deleteBoard: (id) => {
-      const { boards, order, activeId } = get();
-      if (order.length <= 1) return;
-      const nextOrder = order.filter((x) => x !== id);
-      const nextBoards = { ...boards };
+    archiveBoard: (id) => {
+      const { boards, order, activeId, nodes, edges, archived } = get();
+      if (!boards[id]) return;
+      // 当前画布内容先落回记录，避免归档到旧快照
+      const stash = { ...boards, [activeId]: { ...boards[activeId], nodes, edges } };
+      const rec = { ...stash[id], meta: { ...stash[id].meta, updatedAt: Date.now() } };
+      const nextBoards = { ...stash };
       delete nextBoards[id];
+      let nextOrder = order.filter((x) => x !== id);
+      if (!nextOrder.length) {
+        const b = makeBoard("画布 1");
+        nextBoards[b.meta.id] = b;
+        nextOrder = [b.meta.id];
+      }
+      const nextArchived = { ...archived, [id]: rec };
       if (id === activeId) {
         const nid = nextOrder[0];
         const nb = nextBoards[nid];
@@ -686,12 +775,31 @@ export const useBoard = create<BoardState>((set, get) => {
           boards: nextBoards,
           order: nextOrder,
           activeId: nid,
+          archived: nextArchived,
           nodes: sanitizeNodes(nb.nodes),
           edges: nb.edges,
         });
       } else {
-        set({ boards: nextBoards, order: nextOrder });
+        set({ boards: nextBoards, order: nextOrder, archived: nextArchived });
       }
+      persist();
+    },
+
+    restoreBoard: (id) => {
+      const { archived, boards, order } = get();
+      const rec = archived[id];
+      if (!rec) return;
+      const nextArchived = { ...archived };
+      delete nextArchived[id];
+      set({ boards: { ...boards, [id]: rec }, order: [...order, id], archived: nextArchived });
+      get().switchBoard(id);
+      persist();
+    },
+
+    purgeBoard: (id) => {
+      const nextArchived = { ...get().archived };
+      delete nextArchived[id];
+      set({ archived: nextArchived });
       persist();
     },
   };

@@ -5,13 +5,15 @@
 import { memo } from "react";
 import { Handle, Position, type NodeProps } from "@xyflow/react";
 import { useBoard } from "../../../core/stores/boardStore";
+import { useUi } from "../../../core/stores/uiStore";
 import { IcGroup, IcTrash } from "../../../ui/icons";
 
 export const GroupNode = memo(function GroupNode({ id, selected }: NodeProps) {
   const count = useBoard((s) => s.nodes.filter((n) => n.parentId === id).length);
   const removeNode = useBoard((s) => s.removeNode);
+  const ghost = useUi((s) => (s.dupGhost ? s.dupGhost.includes(id) : false));
   return (
-    <div className={`group-node ${selected ? "sel" : ""}`}>
+    <div className={`group-node ${selected ? "sel" : ""} ${ghost ? "ghost" : ""}`}>
       <div className="gn-head">
         <IcGroup size={15} />
         <span>组 · {count} 个节点</span>

@@ -32,6 +32,8 @@ type UiState = {
   tool: "move" | "select";
   /** 建组模式：在画布上框画区域成组 */
   groupDraw: boolean;
+  /** Alt 拖拽复制中：被拖动的副本节点 id（虚线显示） */
+  dupGhost: string[] | null;
 
   toggleZen: () => void;
   setGalleryOpen: (v: boolean) => void;
@@ -43,6 +45,7 @@ type UiState = {
   setProxHint: (ids: string[] | null) => void;
   toggleTool: () => void;
   setGroupDraw: (v: boolean) => void;
+  setDupGhost: (ids: string[] | null) => void;
   addGallery: (item: Omit<GalleryItem, "id" | "time">) => void;
   toast: (msg: string, type?: Toast["type"]) => void;
 };
@@ -60,6 +63,7 @@ export const useUi = create<UiState>((set) => ({
   proxHint: null,
   tool: "move",
   groupDraw: false,
+  dupGhost: null,
 
   toggleZen: () => set((s) => ({ zen: !s.zen })),
   setGalleryOpen: (v) => set({ galleryOpen: v }),
@@ -78,6 +82,7 @@ export const useUi = create<UiState>((set) => ({
 
   toggleTool: () => set((s) => ({ tool: s.tool === "move" ? "select" : "move" })),
   setGroupDraw: (v) => set({ groupDraw: v }),
+  setDupGhost: (ids) => set({ dupGhost: ids }),
 
   addGallery: (item) =>
     set((s) => ({ gallery: [{ ...item, id: uid(), time: Date.now() }, ...s.gallery].slice(0, 200) })),

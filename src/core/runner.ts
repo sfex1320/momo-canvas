@@ -135,6 +135,18 @@ export function collectUpstream(nodeId: string, visited = new Set<string>()): { 
 
 const upd = (id: string, patch: Record<string, unknown>) => useBoard.getState().updateData(id, patch);
 
+/** 提示词语言处理：lang === "en" 时先译成英文（失败则用原文） */
+async function localizePrompt(prompt: string, lang?: string): Promise<string> {
+  if (lang !== "en" || !prompt.trim()) return prompt;
+  try {
+    const card = resolveModelCard("chat");
+    const en = await chatOnce(card, LLM_TEXT_SYSTEMS.zh2en, prompt);
+    return en.trim() || prompt;
+  } catch {
+    return prompt;
+  }
+}
+
 async function maybeAutoSave(images: string[], meta: { prompt?: string; model?: string }) {
   const { save } = useSettings.getState().settings;
   if (!save.autoSave) return;
@@ -170,11 +182,12 @@ export async function runImageGen(id: string) {
   try {
     const card = resolveModelCard("image", data.modelId);
     const family = imageFamily(card);
+    const finalPrompt = await localizePrompt(prompt, data.lang);
     // 自定义宽高优先；Nano Banana 走 aspect/resolution，不传 size
     const customSize = data.width && data.height ? `${data.width}x${data.height}` : undefined;
     const size = family === "banana" ? undefined : customSize ?? (data.size === "default" ? card.size : data.size);
     const results = await generateImage(card, {
-      prompt,
+      prompt: finalPrompt,
       size,
       n: data.count ?? 1,
       refImages: images.length ? images : undefined,
@@ -209,8 +222,9 @@ export async function runVideoGen(id: string) {
   upd(id, { status: "running", error: undefined, progress: "提交任务…", resultUrl: undefined });
   try {
     const card = resolveModelCard("video", data.modelId);
+    const finalPrompt = await localizePrompt(prompt, (data as { lang?: string }).lang);
     const url = await generateVideo(card, {
-      prompt,
+      prompt: finalPrompt,
       image: images[0],
       onProgress: (m) => upd(id, { progress: m }),
     });

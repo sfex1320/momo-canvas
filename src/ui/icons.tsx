@@ -371,6 +371,30 @@ export const IcCheckSquare = (p: IconProps) => (
   </I>
 );
 
+export const IcLock = (p: IconProps) => (
+  <I {...p}>
+    <rect x="5" y="10.5" width="14" height="9.5" rx="2.5" />
+    <path d="M8 10.5V8a4 4 0 0 1 8 0v2.5" />
+    <path d="M12 14.5v2" />
+  </I>
+);
+
+export const IcUnlock = (p: IconProps) => (
+  <I {...p}>
+    <rect x="5" y="10.5" width="14" height="9.5" rx="2.5" />
+    <path d="M8 10.5V8a4 4 0 0 1 7.8-1.2" />
+    <path d="M12 14.5v2" />
+  </I>
+);
+
+export const IcHistory = (p: IconProps) => (
+  <I {...p}>
+    <path d="M4 12a8 8 0 1 1 2.3 5.7" />
+    <path d="M4 13.5V9h4.5" />
+    <path d="M12 8v4.5l3 1.8" />
+  </I>
+);
+
 export const IcCursor = (p: IconProps) => (
   <I {...p} fill>
     <path d="M6.2 3.6a.8.8 0 0 1 1.3-.6l11.2 8.7a.8.8 0 0 1-.4 1.4l-4.8.6 2.7 5.4a.8.8 0 0 1-.35 1.07l-1.6.8a.8.8 0 0 1-1.07-.36l-2.7-5.4-3.5 3.4a.8.8 0 0 1-1.35-.55L6.2 3.6Z" />

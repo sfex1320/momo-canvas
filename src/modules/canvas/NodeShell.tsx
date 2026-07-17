@@ -1,12 +1,31 @@
 /**
- * 节点外壳：统一卡片、头部操作、端口
+ * 节点外壳：统一卡片、头部操作、端口、上游传入提示
  */
-import type { ReactNode } from "react";
+import { useMemo, type ReactNode } from "react";
 import { Handle, Position } from "@xyflow/react";
-import { useBoard } from "../../core/stores/boardStore";
+import { NODE_INPUTS, useBoard } from "../../core/stores/boardStore";
 import { useUi } from "../../core/stores/uiStore";
+import { collectUpstream } from "../../core/runner";
 import { IcCopy, IcEyeOff, IcTrash } from "../../ui/icons";
-import type { RunStatus } from "../../core/types";
+import type { NodeKind, RunStatus } from "../../core/types";
+
+/** 上游传入提示：几张图（圆角缩略图）/ 几段文本 */
+function UpstreamBadge({ id }: { id: string }) {
+  const nodes = useBoard((s) => s.nodes);
+  const edges = useBoard((s) => s.edges);
+  const { texts, images } = useMemo(() => collectUpstream(id), [nodes, edges, id]);
+  if (!texts.length && !images.length) return null;
+  return (
+    <div className="up-badge nodrag" title="上游已传入的内容（运行时自动使用）">
+      {images.slice(0, 4).map((s, i) => (
+        <img key={i} src={s} alt="" />
+      ))}
+      {images.length > 4 ? <span className="ub-more">+{images.length - 4}</span> : null}
+      {images.length ? <span className="ub-txt">{images.length} 张图传入</span> : null}
+      {texts.length ? <span className="ub-txt">{texts.length} 段文本传入</span> : null}
+    </div>
+  );
+}
 
 export function NodeShell({
   id,
@@ -35,9 +54,15 @@ export function NodeShell({
   const ignored = useBoard(
     (s) => !!((s.nodes.find((n) => n.id === id)?.data as Record<string, unknown> | undefined)?.ignored),
   );
+  const kind = useBoard((s) => s.nodes.find((n) => n.id === id)?.type as NodeKind | undefined);
   const hinted = useUi((s) => (s.proxHint ? s.proxHint.includes(id) : false));
+  const ghost = useUi((s) => (s.dupGhost ? s.dupGhost.includes(id) : false));
+  const hasInputs = kind ? Object.keys(NODE_INPUTS[kind] ?? {}).length > 0 : false;
   return (
-    <div className={`mnode ${status} ${selected ? "sel" : ""} ${hinted ? "prox" : ""} ${ignored ? "ign" : ""}`} style={{ width }}>
+    <div
+      className={`mnode ${status} ${selected ? "sel" : ""} ${hinted ? "prox" : ""} ${ignored ? "ign" : ""} ${ghost ? "ghost" : ""}`}
+      style={{ width }}
+    >
       <div className="mnode-head">
         <span className="kind-ic">{icon}</span>
         <span className="title">{title}</span>
@@ -58,6 +83,7 @@ export function NodeShell({
           </button>
         </span>
       </div>
+      {hasInputs ? <UpstreamBadge id={id} /> : null}
       {children}
       {status === "error" && error ? <div className="mnode-err nodrag nowheel">{error}</div> : null}
     </div>

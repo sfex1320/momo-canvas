@@ -2,9 +2,12 @@ import { memo } from "react";
 import type { NodeProps } from "@xyflow/react";
 import { NodeShell, PortOut } from "../NodeShell";
 import { IcPalette } from "../../../ui/icons";
+import { OptGrid } from "../../../ui/kit";
 import { useBoard } from "../../../core/stores/boardStore";
 import { STYLE_CATEGORIES, STYLE_PRESETS } from "../../../core/stylePresets";
 import type { StylePresetData } from "../../../core/types";
+
+const CATEGORY_OPTIONS = STYLE_CATEGORIES.map((c) => ({ value: c, label: c, icon: <IcPalette size={15} /> }));
 
 export const StylePresetNode = memo(function StylePresetNode({ id, data, selected }: NodeProps) {
   const d = data as StylePresetData;
@@ -41,18 +44,7 @@ export const StylePresetNode = memo(function StylePresetNode({ id, data, selecte
       }
     >
       <div className="mnode-body">
-        <select
-          className="select nodrag"
-          style={{ minHeight: 33 }}
-          value={d.category}
-          onChange={(e) => upd(id, { category: e.target.value })}
-        >
-          {STYLE_CATEGORIES.map((c) => (
-            <option key={c} value={c}>
-              {c}
-            </option>
-          ))}
-        </select>
+        <OptGrid options={CATEGORY_OPTIONS} value={d.category} onChange={(v) => upd(id, { category: v })} cols={3} />
         <div className="chips nodrag nowheel">
           {entries.map((e) => (
             <button

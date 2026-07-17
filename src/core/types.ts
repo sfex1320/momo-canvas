@@ -70,6 +70,8 @@ export type ImageGenData = {
   /** GPT Image / 通用：自定义宽高（同时填写才生效） */
   width?: number;
   height?: number;
+  /** 提示词语言：zh 原文直发（默认）/ en 生成前先译成英文 */
+  lang?: "zh" | "en";
 };
 
 export type VideoGenData = {
@@ -79,6 +81,8 @@ export type VideoGenData = {
   resultUrl?: string;
   progress?: string;
   modelId?: string;
+  /** 提示词语言：zh 原文直发（默认）/ en 生成前先译成英文 */
+  lang?: "zh" | "en";
 };
 
 export type ComfyData = {
@@ -133,6 +137,8 @@ export type NoteData = {
   error?: string;
   text: string;
   color: "yellow" | "blue" | "pink" | "green";
+  /** 锁定后不可拖动（默认关闭） */
+  locked?: boolean;
 };
 
 /** 组（主节点）：把区域内节点打包，按位置顺序聚合成员的文本/图片输出 */

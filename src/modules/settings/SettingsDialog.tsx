@@ -13,7 +13,6 @@ import {
   IcChat,
   IcCheck,
   IcDownload,
-  IcEdit,
   IcFlow,
   IcFolder,
   IcGallery,
@@ -58,7 +57,7 @@ export function SettingsDialog() {
   const openSettings = useUi((s) => s.openSettings);
   if (!open) return null;
   return (
-    <Modal title="设置" onClose={close} width={880}>
+    <Modal title="设置" onClose={close} width={1120}>
       <div className="settings-body">
         <div className="settings-nav">
           {TABS.map((t) => (
@@ -221,17 +220,17 @@ function ModelsTab() {
     toast(`已保存「${p.name}」`, "ok");
   };
 
+  const isExisting = !!editing && models.providers.some((p) => p.id === editing.id);
+  const savedEditing = isExisting ? models.providers.find((p) => p.id === editing!.id) : undefined;
+
   return (
     <>
       <h3>模型配置</h3>
       <p className="sec-desc">
-        一张卡片对应一个服务商（中转站）：Base URL 与 API Key 只填一次，卡内可同时配置对话、绘画、视频 3 套模型。
-        配置保存在系统用户数据目录，升级不会丢失；每次启动还会自动写一份备份，也可以手动导出成文件保管。
+        一格 = 一个服务商（中转站/官方）：Base URL 与 API Key 只填一次，格内可同时配置对话、绘画、视频 3 套模型，
+        点击方格在右侧编辑详情。配置存在系统用户数据目录并自动备份，也可手动导出保管。
       </p>
-      <Row style={{ marginBottom: 14 }}>
-        <button className="btn primary" onClick={() => setEditing(toDraft())}>
-          <IcPlus size={16} /> 添加服务商
-        </button>
+      <Row style={{ marginBottom: 12 }}>
         <span style={{ flex: 1 }} />
         <button className="btn sm" title="把全部设置导出为 JSON 文件保管" onClick={() => void exportCfg()}>
           <IcDownload size={15} /> 导出配置
@@ -241,82 +240,83 @@ function ModelsTab() {
         </button>
       </Row>
 
-      {editing && !models.providers.some((p) => p.id === editing.id) ? (
-        <ProviderEditor draft={editing} setDraft={setEditing} onSave={saveEditing} onCancel={() => setEditing(null)} />
-      ) : null}
-
-      {models.providers.length === 0 && !editing ? (
-        <div style={{ padding: "8px 2px", color: "var(--text-3)", fontSize: "var(--fs-sm)" }}>
-          还没有服务商，点上方「添加服务商」开始配置
+      <div className="prov-layout">
+        <div className="prov-grid">
+          <button className="pcard add" onClick={() => setEditing(toDraft())}>
+            <IcPlus size={22} />
+            <span>添加服务商</span>
+          </button>
+          {models.providers.map((p) => (
+            <button key={p.id} className={`pcard ${editing?.id === p.id ? "on" : ""}`} onClick={() => setEditing(toDraft(p))}>
+              <b>{p.name}</b>
+              <span className="pc-host">{p.baseUrl.replace(/^https?:\/\//, "") || "未填地址"}</span>
+              <span className="pc-roles">
+                {ROLES.map((role) => (
+                  <span
+                    key={role}
+                    className={`pc-dot ${p.models[role]?.model ? "on" : ""}`}
+                    title={`${ROLE_LABEL[role]}${p.models[role]?.model ? `：${p.models[role]!.model}` : "：未配置"}${models.defaults[role] === p.id ? "（默认）" : ""}`}
+                  >
+                    {ROLE_ICON[role]}
+                    {models.defaults[role] === p.id ? <i className="pc-def" /> : null}
+                  </span>
+                ))}
+              </span>
+            </button>
+          ))}
         </div>
-      ) : null}
 
-      {models.providers.map((p) =>
-        editing?.id === p.id ? (
-          <ProviderEditor key={p.id} draft={editing} setDraft={setEditing} onSave={saveEditing} onCancel={() => setEditing(null)} />
-        ) : (
-          <div key={p.id} className="prov-card">
-            <div className="pc-head">
-              <div className="pc-title">
-                <b>{p.name}</b>
-                <span>{p.baseUrl || "（未填 Base URL）"}</span>
-              </div>
-              {p.models.chat ? (
-                <button className="btn sm" disabled={testing === p.id} onClick={() => void testChat(p)}>
-                  {testing === p.id ? <IcLoading size={14} /> : null} 测试
-                </button>
-              ) : null}
-              <button className="icon-btn" title="编辑" onClick={() => setEditing(toDraft(p))}>
-                <IcEdit size={16} />
-              </button>
-              <button
-                className="icon-btn danger"
-                title={confirmDel === p.id ? "再点一次确认删除" : "删除"}
-                style={confirmDel === p.id ? { color: "var(--danger)", background: "rgba(242,79,106,.12)" } : undefined}
-                onClick={() => {
-                  if (confirmDel === p.id) {
-                    removeProvider(p.id);
-                    setConfirmDel(null);
-                  } else setConfirmDel(p.id);
-                }}
-              >
-                <IcTrash size={16} />
-              </button>
-            </div>
-            {ROLES.map((role) => {
-              const slot = p.models[role];
-              const isDefault = models.defaults[role] === p.id;
-              return (
-                <div key={role} className={`pc-role ${slot ? "" : "off"}`}>
-                  {slot ? (
-                    <button
-                      className={`mrow-radio ${isDefault ? "on" : ""}`}
-                      title={isDefault ? `当前是${ROLE_LABEL[role]}默认` : `设为${ROLE_LABEL[role]}默认`}
-                      onClick={() => setDefault(role, p.id)}
-                    >
-                      {isDefault ? <IcCheck size={13} /> : null}
+        <div className="prov-detail">
+          {editing ? (
+            <>
+              {isExisting && savedEditing ? (
+                <div className="pd-actions">
+                  {ROLES.filter((r) => savedEditing.models[r]?.model).map((role) => {
+                    const isDefault = models.defaults[role] === savedEditing.id;
+                    return (
+                      <button
+                        key={role}
+                        className={`btn sm ${isDefault ? "primary" : ""}`}
+                        title={isDefault ? `当前是${ROLE_LABEL[role]}默认` : `设为${ROLE_LABEL[role]}默认`}
+                        onClick={() => setDefault(role, savedEditing.id)}
+                      >
+                        {isDefault ? <IcCheck size={14} /> : null} {ROLE_LABEL[role]}默认
+                      </button>
+                    );
+                  })}
+                  <span style={{ flex: 1 }} />
+                  {savedEditing.models.chat ? (
+                    <button className="btn sm" disabled={testing === savedEditing.id} onClick={() => void testChat(savedEditing)}>
+                      {testing === savedEditing.id ? <IcLoading size={14} /> : null} 测试
                     </button>
-                  ) : (
-                    <span className="pc-radio-ph" />
-                  )}
-                  <span className="pc-role-ic">{ROLE_ICON[role]}</span>
-                  <span className="pc-role-name">{ROLE_LABEL[role]}</span>
-                  {slot ? (
-                    <>
-                      <span className="pc-model" title={slot.model}>{slot.model}</span>
-                      <span className="pc-proto">
-                        {PROTOCOLS[role].find((x) => x.value === slot.protocol)?.label ?? slot.protocol}
-                      </span>
-                    </>
-                  ) : (
-                    <span className="pc-model off">未配置</span>
-                  )}
+                  ) : null}
+                  <button
+                    className="icon-btn danger"
+                    title={confirmDel === savedEditing.id ? "再点一次确认删除" : "删除该服务商"}
+                    style={confirmDel === savedEditing.id ? { color: "var(--danger)", background: "rgba(242,79,106,.12)" } : undefined}
+                    onClick={() => {
+                      if (confirmDel === savedEditing.id) {
+                        removeProvider(savedEditing.id);
+                        setConfirmDel(null);
+                        setEditing(null);
+                      } else setConfirmDel(savedEditing.id);
+                    }}
+                  >
+                    <IcTrash size={16} />
+                  </button>
                 </div>
-              );
-            })}
-          </div>
-        ),
-      )}
+              ) : null}
+              <ProviderEditor draft={editing} setDraft={setEditing} onSave={saveEditing} onCancel={() => setEditing(null)} />
+            </>
+          ) : (
+            <div className="pd-empty">
+              点击左侧方格查看/编辑该服务商的
+              <br />
+              对话 · 绘画 · 视频 模型详情
+            </div>
+          )}
+        </div>
+      </div>
     </>
   );
 }

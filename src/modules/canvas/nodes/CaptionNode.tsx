@@ -1,11 +1,18 @@
 import { memo } from "react";
 import type { NodeProps } from "@xyflow/react";
 import { NodeShell, PortImageIn, PortOut } from "../NodeShell";
-import { IcLoading, IcScan } from "../../../ui/icons";
+import { IcFilter, IcLoading, IcScan, IcText } from "../../../ui/icons";
 import { ModelPicker } from "../../../ui/ModelPicker";
+import { OptGrid } from "../../../ui/kit";
 import { useBoard } from "../../../core/stores/boardStore";
 import { runCaption } from "../../../core/runner";
 import type { CaptionData } from "../../../core/types";
+
+const MODES = [
+  { value: "prompt", label: "绘画提示词", icon: <IcText size={16} /> },
+  { value: "detail", label: "详细描述", icon: <IcScan size={16} /> },
+  { value: "tags", label: "英文标签", icon: <IcFilter size={16} /> },
+];
 
 export const CaptionNode = memo(function CaptionNode({ id, data, selected }: NodeProps) {
   const d = data as CaptionData;
@@ -23,18 +30,7 @@ export const CaptionNode = memo(function CaptionNode({ id, data, selected }: Nod
       width={300}
     >
       <div className="mnode-body">
-        <div style={{ display: "flex", gap: 7 }}>
-          <select
-            className="select nodrag"
-            style={{ flex: 1, minHeight: 33 }}
-            value={d.mode}
-            onChange={(e) => upd(id, { mode: e.target.value })}
-          >
-            <option value="prompt">输出：绘画提示词</option>
-            <option value="detail">输出：详细描述</option>
-            <option value="tags">输出：英文标签词</option>
-          </select>
-        </div>
+        <OptGrid options={MODES} value={d.mode} onChange={(v) => upd(id, { mode: v })} cols={3} />
         <ModelPicker role="chat" value={d.modelId} onChange={(v) => upd(id, { modelId: v })} />
         <button className="btn primary nodrag" disabled={running} onClick={() => void runCaption(id)}>
           {running ? <IcLoading size={17} /> : <IcScan size={17} />}

@@ -56,36 +56,108 @@
   color: #fff;
 }
 
-/* 画板切换器 */
-.board-switch {
+/* 浏览器式画布标签 */
+.board-tabs {
   position: relative;
-  margin-left: 10px;
-}
-.board-switch > button {
   display: flex;
   align-items: center;
-  gap: 7px;
-  min-height: 33px;
-  padding: 0 12px;
-  border-radius: var(--r-md);
+  gap: 3px;
+  margin-left: 10px;
+  min-width: 0;
+  max-width: 46vw;
+}
+.board-tabs .bt-scroll {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  min-width: 0;
+}
+.board-tabs .bt-scroll::-webkit-scrollbar {
+  display: none;
+}
+.btab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 6px 0 13px;
+  border-radius: 9px;
+  font-size: 13px;
   font-weight: 600;
-  font-size: var(--fs-base);
-  color: var(--text-1);
-  background: var(--hover);
-  max-width: 240px;
-}
-.board-switch > button:hover {
-  background: var(--active);
-}
-.board-switch > button .bname {
+  color: var(--text-2);
+  background: transparent;
+  cursor: pointer;
   white-space: nowrap;
+  flex: none;
+  max-width: 168px;
+  transition: background var(--t-fast), color var(--t-fast);
+}
+.btab:hover {
+  background: var(--hover);
+}
+.btab.on {
+  background: var(--active);
+  color: var(--text-1);
+}
+.btab .bt-name {
   overflow: hidden;
   text-overflow: ellipsis;
+  min-width: 0;
+}
+.btab input {
+  width: 110px;
+  min-height: 24px;
+  padding: 1px 7px;
+  border-radius: 6px;
+  border: 1px solid var(--accent);
+  background: var(--input-bg);
+  color: var(--text-1);
+  font-size: 13px;
+  font-weight: 600;
+  outline: none;
+}
+.btab .bt-close {
+  width: 20px;
+  height: 20px;
+  border-radius: 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-3);
+  opacity: 0;
+  flex: none;
+  transition: opacity var(--t-fast), background var(--t-fast), color var(--t-fast);
+}
+.btab:hover .bt-close,
+.btab.on .bt-close {
+  opacity: 1;
+}
+.btab .bt-close:hover {
+  background: rgba(242, 79, 106, 0.16);
+  color: var(--danger);
+}
+.bt-add {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-2);
+  flex: none;
+  transition: background var(--t-fast), color var(--t-fast);
+}
+.bt-add:hover,
+.bt-add.on {
+  background: var(--hover);
+  color: var(--text-1);
 }
 .board-pop {
   position: absolute;
   top: calc(100% + 8px);
-  left: 0;
+  right: 0;
   width: 280px;
   padding: 8px;
   z-index: 150;
@@ -249,7 +321,7 @@
   display: flex;
   gap: 0;
   margin: -20px;
-  min-height: 480px;
+  min-height: 580px;
 }
 .settings-nav {
   width: 172px;
@@ -283,7 +355,7 @@
   flex: 1;
   padding: 20px 22px;
   overflow-y: auto;
-  max-height: 66vh;
+  max-height: 78vh;
 }
 .settings-content h3 {
   font-size: var(--fs-lg);
@@ -295,6 +367,133 @@
   margin-bottom: 16px;
   line-height: 1.6;
 }
+/* ---- 模型配置：方格 + 右侧详情 ---- */
+.prov-layout {
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+}
+.prov-grid {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(148px, 1fr));
+  gap: 10px;
+  align-content: start;
+}
+.pcard {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  min-height: 108px;
+  padding: 12px 13px;
+  border-radius: var(--r-lg);
+  border: 1.5px solid var(--panel-border);
+  background: var(--input-bg);
+  text-align: left;
+  transition: border-color var(--t-fast), box-shadow var(--t-fast), transform var(--t-fast);
+}
+.pcard:hover {
+  border-color: var(--accent);
+  transform: translateY(-1px);
+}
+.pcard.on {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(91, 140, 255, 0.18);
+}
+.pcard b {
+  font-size: var(--fs-base);
+  max-width: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.pcard .pc-host {
+  font-size: 11.5px;
+  color: var(--text-3);
+  max-width: 100%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.pcard .pc-roles {
+  display: flex;
+  gap: 6px;
+  margin-top: auto;
+}
+.pcard .pc-dot {
+  position: relative;
+  width: 27px;
+  height: 27px;
+  border-radius: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--hover);
+  color: var(--text-3);
+  opacity: 0.5;
+}
+.pcard .pc-dot.on {
+  background: var(--grad-brand-soft);
+  color: var(--accent);
+  opacity: 1;
+}
+.pcard .pc-dot .pc-def {
+  position: absolute;
+  top: -3px;
+  right: -3px;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--ok);
+  border: 1.5px solid var(--panel);
+}
+.pcard.add {
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border-style: dashed;
+  color: var(--text-3);
+  font-weight: 600;
+  font-size: var(--fs-sm);
+}
+.pcard.add:hover {
+  color: var(--accent);
+}
+.prov-detail {
+  width: 420px;
+  flex: none;
+  border: 1px solid var(--panel-border);
+  border-radius: var(--r-lg);
+  padding: 14px 14px 4px;
+  background: var(--panel);
+  position: sticky;
+  top: 0;
+}
+.prov-detail .pd-empty {
+  padding: 60px 10px;
+  text-align: center;
+  color: var(--text-3);
+  font-size: var(--fs-sm);
+  line-height: 1.9;
+}
+.prov-detail .pd-actions {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex-wrap: wrap;
+  padding-bottom: 11px;
+  margin-bottom: 12px;
+  border-bottom: 1px solid var(--panel-border);
+}
+.prov-detail .mrow-editor {
+  border: none;
+  background: transparent;
+  padding: 0;
+  margin-bottom: 0;
+}
+
 /* ---- 服务商卡片 ---- */
 .prov-card {
   border: 1px solid var(--panel-border);

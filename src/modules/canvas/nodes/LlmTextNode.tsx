@@ -1,11 +1,20 @@
 import { memo } from "react";
 import type { NodeProps } from "@xyflow/react";
 import { NodeShell, PortOut, PortTextIn } from "../NodeShell";
-import { IcLoading, IcWand } from "../../../ui/icons";
+import { IcEdit, IcGlobe, IcLoading, IcMin, IcPlus, IcSparkles, IcWand } from "../../../ui/icons";
 import { ModelPicker } from "../../../ui/ModelPicker";
+import { OptGrid } from "../../../ui/kit";
 import { useBoard } from "../../../core/stores/boardStore";
 import { runLlmText } from "../../../core/runner";
 import type { LlmTextData } from "../../../core/types";
+
+const OPS = [
+  { value: "optimize", label: "扩写优化", icon: <IcSparkles size={16} /> },
+  { value: "zh2en", label: "译成英文", icon: <IcGlobe size={16} /> },
+  { value: "expand", label: "扩写丰富", icon: <IcPlus size={16} /> },
+  { value: "shorten", label: "精简压缩", icon: <IcMin size={16} /> },
+  { value: "custom", label: "自定义", icon: <IcEdit size={16} /> },
+];
 
 export const LlmTextNode = memo(function LlmTextNode({ id, data, selected }: NodeProps) {
   const d = data as LlmTextData;
@@ -23,18 +32,7 @@ export const LlmTextNode = memo(function LlmTextNode({ id, data, selected }: Nod
       width={300}
     >
       <div className="mnode-body">
-        <select
-          className="select nodrag"
-          style={{ minHeight: 33 }}
-          value={d.op}
-          onChange={(e) => upd(id, { op: e.target.value })}
-        >
-          <option value="optimize">AI 扩写优化（绘画提示词）</option>
-          <option value="zh2en">中文 → 英文提示词</option>
-          <option value="expand">扩写丰富</option>
-          <option value="shorten">精简压缩</option>
-          <option value="custom">自定义指令…</option>
-        </select>
+        <OptGrid options={OPS} value={d.op} onChange={(v) => upd(id, { op: v })} cols={3} />
         {d.op === "custom" ? (
           <textarea
             className="textarea nodrag nowheel"

@@ -78,6 +78,17 @@ export function GenConfigPanel() {
           <div className="gp-lab">模型</div>
           <ModelPicker role="image" value={d.modelId} onChange={(v) => patch({ modelId: v })} />
         </div>
+        <div className="gp-sec">
+          <div className="gp-lab">提示词语言</div>
+          <div className="gp-seg">
+            <button className={(d.lang ?? "zh") === "zh" ? "on" : ""} title="中文原文直接发给模型" onClick={() => patch({ lang: "zh" })}>
+              中文
+            </button>
+            <button className={d.lang === "en" ? "on" : ""} title="生成前先用对话模型译成英文" onClick={() => patch({ lang: "en" })}>
+              译英
+            </button>
+          </div>
+        </div>
         <div className="gp-foot">
           参考图：已接入 {refCount} 路 · 最多 {familyMaxRef(family)} 张
         </div>
