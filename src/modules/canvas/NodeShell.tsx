@@ -5,7 +5,7 @@ import type { ReactNode } from "react";
 import { Handle, Position } from "@xyflow/react";
 import { useBoard } from "../../core/stores/boardStore";
 import { useUi } from "../../core/stores/uiStore";
-import { IcCopy, IcTrash } from "../../ui/icons";
+import { IcCopy, IcEyeOff, IcTrash } from "../../ui/icons";
 import type { RunStatus } from "../../core/types";
 
 export function NodeShell({
@@ -31,14 +31,25 @@ export function NodeShell({
 }) {
   const duplicateNode = useBoard((s) => s.duplicateNode);
   const removeNode = useBoard((s) => s.removeNode);
+  const updateData = useBoard((s) => s.updateData);
+  const ignored = useBoard(
+    (s) => !!((s.nodes.find((n) => n.id === id)?.data as Record<string, unknown> | undefined)?.ignored),
+  );
   const hinted = useUi((s) => (s.proxHint ? s.proxHint.includes(id) : false));
   return (
-    <div className={`mnode ${status} ${selected ? "sel" : ""} ${hinted ? "prox" : ""}`} style={{ width }}>
+    <div className={`mnode ${status} ${selected ? "sel" : ""} ${hinted ? "prox" : ""} ${ignored ? "ign" : ""}`} style={{ width }}>
       <div className="mnode-head">
         <span className="kind-ic">{icon}</span>
         <span className="title">{title}</span>
         {headExtra}
         <span className="acts nodrag">
+          <button
+            className={`icon-btn ${ignored ? "on-warn" : ""}`}
+            title={ignored ? "恢复此节点（重新向下游传递）" : "忽略此节点（半透明，不向下游传递）"}
+            onClick={() => updateData(id, { ignored: !ignored })}
+          >
+            <IcEyeOff size={16} />
+          </button>
           <button className="icon-btn" title="创建副本 (Ctrl+D)" onClick={() => duplicateNode(id)}>
             <IcCopy size={17} />
           </button>

@@ -1,8 +1,9 @@
 /**
  * 智能画布 — 单一画布范式：
- *  左键框选 · 中/右键或空格平移 · 滚轮缩放 · 双击空白添加节点
- *  拖线到空白快速建节点 · 拖入图片文件 · Ctrl+V 粘贴 · Tab 沉浸模式
- *  拖拽贴近/叠放到节点上自动连线（拖拽中高亮预告） · Ctrl+Z/Y 撤销重做
+ *  移动工具（V，默认）：左键拖空白平移 · 点击选择 · 长按节点拖动
+ *  框选模式：左键框选（Ctrl+框选可选中连线批量删）· 中/右键或空格平移
+ *  滚轮缩放 · 双击空白添加节点 · 拖线到空白快速建节点 · 拖入图片/文本 · Ctrl+V 粘贴
+ *  拖拽贴近/叠放到节点上自动连线（虚线框预告） · G 建组 · I 忽略 · Ctrl+Z/Y 撤销重做
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
@@ -12,6 +13,7 @@ import {
   MiniMap,
   SelectionMode,
   useReactFlow,
+  useStore,
   type Connection,
   type Edge,
   type FinalConnectionState,
@@ -21,13 +23,14 @@ import "@xyflow/react/dist/style.css";
 import "./canvas.css";
 
 import { useBoard, outPortType, findProximityPair, wouldCycle } from "../../core/stores/boardStore";
-import { GenConfigPanel } from "./GenConfigPanel";
 import { useUi } from "../../core/stores/uiStore";
+import { useSettings } from "../../core/stores/settingsStore";
+import { GenConfigPanel } from "./GenConfigPanel";
 import type { AppNode, NodeKind } from "../../core/types";
 import { fileToDataUrl } from "../../core/utils";
 import { NODE_CATALOG } from "./nodeCatalog";
 import { AddNodeMenu } from "./AddNodeMenu";
-import { IcFit, IcLogo, IcPlus, IcMin, IcUndo, IcRedo } from "../../ui/icons";
+import { IcCursor, IcEyeOff, IcFit, IcGroup, IcLogo, IcPlus, IcMin, IcUndo, IcRedo } from "../../ui/icons";
 
 import { ImageNode } from "./nodes/ImageNode";
 import { PromptNode } from "./nodes/PromptNode";
@@ -40,6 +43,7 @@ import { LlmTextNode } from "./nodes/LlmTextNode";
 import { CombineNode } from "./nodes/CombineNode";
 import { StylePresetNode } from "./nodes/StylePresetNode";
 import { NoteNode } from "./nodes/NoteNode";
+import { GroupNode } from "./nodes/GroupNode";
 
 const nodeTypes: NodeTypes = {
   image: ImageNode,
@@ -53,7 +57,51 @@ const nodeTypes: NodeTypes = {
   combine: CombineNode,
   stylePreset: StylePresetNode,
   note: NoteNode,
+  group: GroupNode,
 };
+
+/** Ctrl + 框选结束后，把与选框相交的连线也选中（便于批量删除连线） */
+function EdgeBoxSelect() {
+  const rect = useStore((s) => s.userSelectionRect);
+  const domNode = useStore((s) => s.domNode);
+  const { screenToFlowPosition } = useReactFlow();
+  const lastRect = useRef(rect);
+  const ctrlHeld = useRef(false);
+
+  useEffect(() => {
+    const kd = (e: KeyboardEvent) => {
+      if (e.key === "Control") ctrlHeld.current = true;
+    };
+    const ku = (e: KeyboardEvent) => {
+      if (e.key === "Control") ctrlHeld.current = false;
+    };
+    window.addEventListener("keydown", kd);
+    window.addEventListener("keyup", ku);
+    window.addEventListener("blur", () => (ctrlHeld.current = false));
+    return () => {
+      window.removeEventListener("keydown", kd);
+      window.removeEventListener("keyup", ku);
+    };
+  }, []);
+
+  useEffect(() => {
+    const prev = lastRect.current;
+    lastRect.current = rect;
+    if (!prev || rect || !ctrlHeld.current) return; // 选框刚结束且按着 Ctrl
+    if (prev.width < 4 || prev.height < 4) return;
+    const b = domNode?.getBoundingClientRect();
+    if (!b) return;
+    const p1 = screenToFlowPosition({ x: b.left + prev.x, y: b.top + prev.y });
+    const p2 = screenToFlowPosition({ x: b.left + prev.x + prev.width, y: b.top + prev.y + prev.height });
+    useBoard.getState().selectEdgesInRect({
+      x: Math.min(p1.x, p2.x),
+      y: Math.min(p1.y, p2.y),
+      w: Math.abs(p2.x - p1.x),
+      h: Math.abs(p2.y - p1.y),
+    });
+  }, [rect, domNode, screenToFlowPosition]);
+  return null;
+}
 
 export function SmartCanvas() {
   const nodes = useBoard((s) => s.nodes);
@@ -64,6 +112,9 @@ export function SmartCanvas() {
   const addNode = useBoard((s) => s.addNode);
   const duplicateNode = useBoard((s) => s.duplicateNode);
   const proximityConnect = useBoard((s) => s.proximityConnect);
+  const groupSelected = useBoard((s) => s.groupSelected);
+  const groupInRect = useBoard((s) => s.groupInRect);
+  const toggleIgnoreSelected = useBoard((s) => s.toggleIgnoreSelected);
   const snapshot = useBoard((s) => s.snapshot);
   const undo = useBoard((s) => s.undo);
   const redo = useBoard((s) => s.redo);
@@ -74,10 +125,16 @@ export function SmartCanvas() {
   const galleryOpen = useUi((s) => s.galleryOpen);
   const toggleZen = useUi((s) => s.toggleZen);
   const setAddMenu = useUi((s) => s.setAddMenu);
+  const tool = useUi((s) => s.tool);
+  const toggleTool = useUi((s) => s.toggleTool);
+  const groupDraw = useUi((s) => s.groupDraw);
+  const setGroupDraw = useUi((s) => s.setGroupDraw);
+  const hotkeys = useSettings((s) => s.settings.hotkeys);
   const dockShift = galleryOpen && !zen ? 304 : 0;
 
   const { screenToFlowPosition, zoomIn, zoomOut, fitView } = useReactFlow();
   const [zoomPct, setZoomPct] = useState(100);
+  const [drawRect, setDrawRect] = useState<{ x1: number; y1: number; x2: number; y2: number } | null>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
 
   /* ---- 连线校验 ---- */
@@ -86,7 +143,14 @@ export function SmartCanvas() {
     if (!conn.source || !conn.target || conn.source === conn.target) return false;
     const src = s.nodes.find((n) => n.id === conn.source);
     if (!src) return false;
-    const pt = outPortType(src.type as NodeKind);
+    const pt =
+      src.type === "group"
+        ? conn.sourceHandle === "out-image"
+          ? "image"
+          : conn.sourceHandle === "out-text"
+            ? "text"
+            : null
+        : outPortType(src.type as NodeKind);
     if (!pt) return false;
     const want = conn.targetHandle === "in-text" ? "text" : conn.targetHandle === "in-image" ? "image" : null;
     if (want !== pt) return false;
@@ -101,7 +165,12 @@ export function SmartCanvas() {
   const onConnectEnd = useCallback(
     (event: MouseEvent | TouchEvent, state: FinalConnectionState) => {
       if (state.isValid || !state.fromNode || state.fromHandle?.type !== "source") return;
-      const pt = outPortType(state.fromNode.type as NodeKind);
+      const pt =
+        state.fromNode.type === "group"
+          ? state.fromHandle.id === "out-image"
+            ? ("image" as const)
+            : ("text" as const)
+          : outPortType(state.fromNode.type as NodeKind);
       if (!pt || pt === "video") return;
       const client =
         "clientX" in event
@@ -133,21 +202,46 @@ export function SmartCanvas() {
     [screenToFlowPosition, setAddMenu],
   );
 
-  /* ---- 拖放：图片文件 / 坞上的节点 ---- */
+  /* ---- 拖放：图片文件 / 文本 / 坞上的节点；落点贴近已有节点时自动连线 ---- */
   const onDrop = useCallback(
     async (e: React.DragEvent) => {
       e.preventDefault();
       const pos = screenToFlowPosition({ x: e.clientX, y: e.clientY });
+      const autoLink = (nid: string) => window.setTimeout(() => useBoard.getState().proximityConnect(nid), 220);
+
       const kind = e.dataTransfer.getData("momo/node-kind") as NodeKind | "";
       if (kind) {
-        addNode(kind, pos);
+        autoLink(addNode(kind, pos));
         return;
       }
+
       const files = Array.from(e.dataTransfer.files ?? []).filter((f) => f.type.startsWith("image/"));
-      for (let i = 0; i < files.length; i++) {
-        const src = await fileToDataUrl(files[i]);
-        addNode("image", { x: pos.x + i * 36, y: pos.y + i * 36 }, { src, name: files[i].name, status: "done" });
+      if (files.length) {
+        // 落点在一个空的图片节点上 → 直接放进该节点，而不是新建
+        const s = useBoard.getState();
+        const hit = s.nodes.find((n) => {
+          if (n.type !== "image" || (n.data as Record<string, unknown>).src || !n.measured?.width) return false;
+          const parent = n.parentId ? s.nodes.find((x) => x.id === n.parentId) : undefined;
+          const ax = n.position.x + (parent?.position.x ?? 0);
+          const ay = n.position.y + (parent?.position.y ?? 0);
+          return pos.x >= ax && pos.x <= ax + (n.measured.width ?? 0) && pos.y >= ay && pos.y <= ay + (n.measured.height ?? 0);
+        });
+        let i = 0;
+        if (hit) {
+          const src = await fileToDataUrl(files[0]);
+          s.updateData(hit.id, { src, name: files[0].name, status: "done" });
+          i = 1;
+        }
+        for (; i < files.length; i++) {
+          const src = await fileToDataUrl(files[i]);
+          autoLink(addNode("image", { x: pos.x + i * 36, y: pos.y + i * 36 }, { src, name: files[i].name, status: "done" }));
+        }
+        return;
       }
+
+      // 外部拖入文字素材 → 提示词节点
+      const text = e.dataTransfer.getData("text/plain")?.trim();
+      if (text) autoLink(addNode("prompt", pos, { text }));
     },
     [screenToFlowPosition, addNode],
   );
@@ -178,40 +272,59 @@ export function SmartCanvas() {
     return () => window.removeEventListener("paste", onPaste);
   }, [screenToFlowPosition, addNode]);
 
-  /* ---- 快捷键 ---- */
+  /* ---- 建组：多选打包 / 进入框画模式 ---- */
+  const groupAction = useCallback(() => {
+    const sel = useBoard.getState().nodes.filter((n) => n.selected && n.type !== "group" && !n.parentId);
+    if (sel.length >= 2) groupSelected();
+    else useUi.getState().setGroupDraw(true);
+  }, [groupSelected]);
+
+  /* ---- 快捷键（可在设置 → 快捷键 自定义） ---- */
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const el = document.activeElement as HTMLElement | null;
       if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT" || el.isContentEditable))
         return;
       const mod = e.ctrlKey || e.metaKey;
-      if (e.key === "Tab") {
+      const hk = useSettings.getState().settings.hotkeys;
+      const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+      if (e.key === "Escape" && useUi.getState().groupDraw) {
+        useUi.getState().setGroupDraw(false);
+        setDrawRect(null);
+        return;
+      }
+      if (!mod && key === hk.zen) {
         e.preventDefault();
         toggleZen();
-      } else if (mod && e.key.toLowerCase() === "z" && !e.shiftKey) {
+      } else if (mod && key === "z" && !e.shiftKey) {
         e.preventDefault();
         undo();
-      } else if ((mod && e.key.toLowerCase() === "y") || (mod && e.shiftKey && e.key.toLowerCase() === "z")) {
+      } else if ((mod && key === "y") || (mod && e.shiftKey && key === "z")) {
         e.preventDefault();
         redo();
-      } else if (mod && e.key.toLowerCase() === "d") {
+      } else if (mod && key === "d") {
         e.preventDefault();
         for (const n of useBoard.getState().nodes.filter((n) => n.selected)) duplicateNode(n.id);
-      } else if (e.key.toLowerCase() === "f" && !mod) {
+      } else if (!mod && key === hk.fitView) {
         void fitView({ duration: 300, padding: 0.15, maxZoom: 1 });
+      } else if (!mod && key === hk.moveTool) {
+        toggleTool();
+      } else if (!mod && key === hk.group) {
+        groupAction();
+      } else if (!mod && key === hk.ignore) {
+        toggleIgnoreSelected();
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [toggleZen, duplicateNode, fitView, undo, redo]);
+  }, [toggleZen, duplicateNode, fitView, undo, redo, toggleTool, groupAction, toggleIgnoreSelected]);
 
-  /* ---- 坞点击添加（画布中心偏移） ---- */
+  /* ---- 坞点击添加（当前视图正中心） ---- */
   const addAtCenter = (kind: NodeKind) => {
     const rect = wrapRef.current?.getBoundingClientRect();
     const cx = (rect?.left ?? 0) + (rect?.width ?? window.innerWidth) / 2;
     const cy = (rect?.top ?? 0) + (rect?.height ?? window.innerHeight) / 2;
-    const pos = screenToFlowPosition({ x: cx + (Math.random() - 0.5) * 80, y: cy + (Math.random() - 0.5) * 60 });
-    addNode(kind, pos);
+    addNode(kind, screenToFlowPosition({ x: cx, y: cy }));
   };
 
   /* ---- 拖拽中：预告将要自动连线的两个节点 ---- */
@@ -229,6 +342,22 @@ export function SmartCanvas() {
     },
     [proximityConnect],
   );
+
+  /* ---- 建组框画 ---- */
+  const finishGroupDraw = () => {
+    if (!drawRect) {
+      setGroupDraw(false);
+      return;
+    }
+    const w = Math.abs(drawRect.x2 - drawRect.x1);
+    const h = Math.abs(drawRect.y2 - drawRect.y1);
+    setDrawRect(null);
+    setGroupDraw(false);
+    if (w < 24 || h < 24) return;
+    const p1 = screenToFlowPosition({ x: Math.min(drawRect.x1, drawRect.x2), y: Math.min(drawRect.y1, drawRect.y2) });
+    const p2 = screenToFlowPosition({ x: Math.max(drawRect.x1, drawRect.x2), y: Math.max(drawRect.y1, drawRect.y2) });
+    groupInRect({ x: p1.x, y: p1.y, w: p2.x - p1.x, h: p2.y - p1.y });
+  };
 
   let lastGroup = "";
   return (
@@ -252,8 +381,9 @@ export function SmartCanvas() {
         maxZoom={2.5}
         fitView
         fitViewOptions={{ maxZoom: 1, padding: 0.2 }}
-        panOnDrag={[1, 2]}
-        selectionOnDrag
+        panOnDrag={tool === "move" ? [0, 1, 2] : [1, 2]}
+        selectionOnDrag={tool !== "move"}
+        selectionKeyCode={["Shift", "Control"]}
         selectionMode={SelectionMode.Partial}
         panActivationKeyCode="Space"
         zoomOnDoubleClick={false}
@@ -263,6 +393,7 @@ export function SmartCanvas() {
         onMoveEnd={(_, vp) => setZoomPct(Math.round(vp.zoom * 100))}
       >
         <Background variant={BackgroundVariant.Dots} gap={24} size={1.6} color="var(--dot)" />
+        <EdgeBoxSelect />
         {!zen && nodes.length > 3 ? (
           <MiniMap pannable zoomable position="bottom-right" style={{ marginBottom: 74, marginRight: 10 + dockShift }} />
         ) : null}
@@ -277,10 +408,36 @@ export function SmartCanvas() {
           <p>
             双击空白处 或 从下方工具坞添加节点开始创作
             <br />
-            <kbd>拖入图片</kbd> <kbd>Ctrl+V 粘贴</kbd> <kbd>中/右键 平移</kbd> <kbd>滚轮 缩放</kbd> <kbd>Tab 沉浸</kbd>
+            <kbd>拖入图片</kbd> <kbd>Ctrl+V 粘贴</kbd> <kbd>V 移动工具</kbd> <kbd>滚轮 缩放</kbd> <kbd>Tab 沉浸</kbd>
             <br />
             把节点拖到另一个节点旁边（或直接叠上去）松手，会自动连线
           </p>
+        </div>
+      ) : null}
+
+      {!zen ? (
+        <div className="tool-bar glass">
+          <button
+            className={`tb-btn ${tool === "move" ? "on" : ""}`}
+            title={`移动工具（${hotkeys.moveTool.toUpperCase()}）：左键拖空白平移 · 点击选择 · 再点一次回到框选模式`}
+            onClick={toggleTool}
+          >
+            <IcCursor size={18} />
+          </button>
+          <button
+            className={`tb-btn ${groupDraw ? "on" : ""}`}
+            title={`建组（${hotkeys.group.toUpperCase()}）：已多选节点时直接打包成组；否则框画一个区域建组`}
+            onClick={groupAction}
+          >
+            <IcGroup size={18} />
+          </button>
+          <button
+            className="tb-btn"
+            title={`忽略/恢复所选节点（${hotkeys.ignore.toUpperCase()}）：忽略的节点半透明且不向下游传递`}
+            onClick={toggleIgnoreSelected}
+          >
+            <IcEyeOff size={18} />
+          </button>
         </div>
       ) : null}
 
@@ -294,7 +451,7 @@ export function SmartCanvas() {
                 {sep ? <div className="dock-sep" /> : null}
                 <div
                   className="dock-item"
-                  title={`${i.desc}（点击添加，或拖到画布任意位置）`}
+                  title={`${i.desc}（点击添加到视图中心，或拖到画布任意位置）`}
                   draggable
                   onDragStart={(e) => {
                     e.dataTransfer.setData("momo/node-kind", i.kind);
@@ -329,11 +486,38 @@ export function SmartCanvas() {
           </button>
           <button
             className="icon-btn"
-            title="适应全部 (F)"
+            title={`适应全部 (${hotkeys.fitView.toUpperCase()})`}
             onClick={() => void fitView({ duration: 300, padding: 0.15, maxZoom: 1 })}
           >
             <IcFit size={17} />
           </button>
+        </div>
+      ) : null}
+
+      {groupDraw ? (
+        <div
+          className="group-draw"
+          onMouseDown={(e) => {
+            if (e.button !== 0) return;
+            setDrawRect({ x1: e.clientX, y1: e.clientY, x2: e.clientX, y2: e.clientY });
+          }}
+          onMouseMove={(e) => {
+            if (drawRect) setDrawRect({ ...drawRect, x2: e.clientX, y2: e.clientY });
+          }}
+          onMouseUp={finishGroupDraw}
+        >
+          <div className="gd-hint">拖动框画一个区域建立组（区域内节点自动入组并排布）· Esc 取消</div>
+          {drawRect ? (
+            <div
+              className="gd-rect"
+              style={{
+                left: Math.min(drawRect.x1, drawRect.x2),
+                top: Math.min(drawRect.y1, drawRect.y2),
+                width: Math.abs(drawRect.x2 - drawRect.x1),
+                height: Math.abs(drawRect.y2 - drawRect.y1),
+              }}
+            />
+          ) : null}
         </div>
       ) : null}
 

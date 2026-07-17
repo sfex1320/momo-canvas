@@ -12,7 +12,8 @@ export type NodeKind =
   | "llmText"
   | "combine"
   | "stylePreset"
-  | "note";
+  | "note"
+  | "group";
 
 export type RunStatus = "idle" | "running" | "done" | "error";
 
@@ -134,6 +135,13 @@ export type NoteData = {
   color: "yellow" | "blue" | "pink" | "green";
 };
 
+/** 组（主节点）：把区域内节点打包，按位置顺序聚合成员的文本/图片输出 */
+export type GroupData = {
+  status: RunStatus;
+  error?: string;
+  title?: string;
+};
+
 export type AppNode = Node<Record<string, unknown>, NodeKind>;
 
 /* 端口数据类型 */
@@ -220,12 +228,32 @@ export type SaveCfg = { dir: string; format: ImgFormat; pattern: string; autoSav
 export type ComfyCfg = { host: string };
 export type ThemeName = "light" | "dark";
 
+/* ---------------- 快捷键 ---------------- */
+export type HotkeyAction = "moveTool" | "group" | "ignore" | "fitView" | "zen";
+
+export const HOTKEY_LABEL: Record<HotkeyAction, string> = {
+  moveTool: "移动工具（激活/取消）",
+  group: "建组（框画区域 / 打包所选）",
+  ignore: "忽略/恢复所选节点",
+  fitView: "视图适应全部节点",
+  zen: "沉浸模式",
+};
+
+export const DEFAULT_HOTKEYS: Record<HotkeyAction, string> = {
+  moveTool: "v",
+  group: "g",
+  ignore: "i",
+  fitView: "f",
+  zen: "Tab",
+};
+
 export type Settings = {
   models: ModelsCfg;
   search: SearchCfg;
   save: SaveCfg;
   comfy: ComfyCfg;
   theme: ThemeName;
+  hotkeys: Record<HotkeyAction, string>;
 };
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -234,6 +262,7 @@ export const DEFAULT_SETTINGS: Settings = {
   save: { dir: "", format: "png", pattern: "{date}_{time}_{model}", autoSave: false },
   comfy: { host: "http://127.0.0.1:8188" },
   theme: "dark",
+  hotkeys: DEFAULT_HOTKEYS,
 };
 
 /** v1（单套配置）旧结构，用于迁移 */

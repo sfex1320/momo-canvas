@@ -36,7 +36,72 @@ const SEPARATORS: Record<CombineData["separator"], string> = {
 };
 
 /* ---------- 上游收集 ----------
-   直接前驱取值；纯文本节点（拼接/风格预设）会向上递归物化自己的输出 */
+   直接前驱取值；纯文本节点（拼接/风格预设）会向上递归物化自己的输出；
+   组节点按成员位置顺序聚合；「忽略」的节点不向下游传递 */
+
+/** 单个节点自身的输出（文本 / 图片） */
+function nodeOutput(src: { id: string; type?: string; data: unknown }, visited: Set<string>): { texts: string[]; images: string[] } {
+  const texts: string[] = [];
+  const images: string[] = [];
+  const kind = src.type as NodeKind;
+  const d = src.data as Record<string, unknown>;
+  switch (kind) {
+    case "prompt": {
+      const t = ((d as PromptData).text ?? "").trim();
+      if (t) texts.push(t);
+      break;
+    }
+    case "chat": {
+      const msgs = (d as ChatData).messages ?? [];
+      const last = [...msgs].reverse().find((m) => m.role === "assistant");
+      if (last?.text) texts.push(last.text.trim());
+      break;
+    }
+    case "caption": {
+      const t = ((d as CaptionData).result ?? "").trim();
+      if (t) texts.push(t);
+      break;
+    }
+    case "llmText": {
+      const t = ((d as LlmTextData).result ?? "").trim();
+      if (t) texts.push(t);
+      break;
+    }
+    case "combine": {
+      const cd = d as CombineData;
+      const up = collectUpstream(src.id, visited);
+      const parts = [...up.texts, (cd.extra ?? "").trim()].filter(Boolean);
+      if (parts.length) texts.push(parts.join(SEPARATORS[cd.separator] ?? ", "));
+      break;
+    }
+    case "stylePreset": {
+      const sel = (d as StylePresetData).selected ?? [];
+      if (sel.length) texts.push(sel.join(", "));
+      break;
+    }
+    case "image": {
+      const s = (d as ImageData).src;
+      if (s) images.push(s);
+      break;
+    }
+    case "imageGen": {
+      const g = d as ImageGenData;
+      const s = g.results?.[g.picked ?? 0];
+      if (s) images.push(s);
+      break;
+    }
+    case "comfy": {
+      const g = d as ComfyData;
+      const s = g.results?.[g.picked ?? 0];
+      if (s) images.push(s);
+      break;
+    }
+    default:
+      break;
+  }
+  return { texts, images };
+}
+
 export function collectUpstream(nodeId: string, visited = new Set<string>()): { texts: string[]; images: string[] } {
   const { nodes, edges } = useBoard.getState();
   const texts: string[] = [];
@@ -48,62 +113,22 @@ export function collectUpstream(nodeId: string, visited = new Set<string>()): { 
     if (e.target !== nodeId) continue;
     const src = nodes.find((n) => n.id === e.source);
     if (!src) continue;
-    const kind = src.type as NodeKind;
-    const d = src.data as Record<string, unknown>;
-    switch (kind) {
-      case "prompt": {
-        const t = ((d as PromptData).text ?? "").trim();
-        if (t) texts.push(t);
-        break;
+    if ((src.data as Record<string, unknown>).ignored) continue;
+    if (src.type === "group") {
+      // 组：成员按位置（上→下、左→右）依次输出；按出口类型分流
+      const members = nodes
+        .filter((n) => n.parentId === src.id && !(n.data as Record<string, unknown>).ignored)
+        .sort((a, b) => a.position.y - b.position.y || a.position.x - b.position.x);
+      for (const m of members) {
+        const o = nodeOutput(m, visited);
+        if (e.sourceHandle === "out-image") images.push(...o.images);
+        else texts.push(...o.texts);
       }
-      case "chat": {
-        const msgs = (d as ChatData).messages ?? [];
-        const last = [...msgs].reverse().find((m) => m.role === "assistant");
-        if (last?.text) texts.push(last.text.trim());
-        break;
-      }
-      case "caption": {
-        const t = ((d as CaptionData).result ?? "").trim();
-        if (t) texts.push(t);
-        break;
-      }
-      case "llmText": {
-        const t = ((d as LlmTextData).result ?? "").trim();
-        if (t) texts.push(t);
-        break;
-      }
-      case "combine": {
-        const cd = d as CombineData;
-        const up = collectUpstream(src.id, visited);
-        const parts = [...up.texts, (cd.extra ?? "").trim()].filter(Boolean);
-        if (parts.length) texts.push(parts.join(SEPARATORS[cd.separator] ?? ", "));
-        break;
-      }
-      case "stylePreset": {
-        const sel = (d as StylePresetData).selected ?? [];
-        if (sel.length) texts.push(sel.join(", "));
-        break;
-      }
-      case "image": {
-        const s = (d as ImageData).src;
-        if (s) images.push(s);
-        break;
-      }
-      case "imageGen": {
-        const g = d as ImageGenData;
-        const s = g.results?.[g.picked ?? 0];
-        if (s) images.push(s);
-        break;
-      }
-      case "comfy": {
-        const g = d as ComfyData;
-        const s = g.results?.[g.picked ?? 0];
-        if (s) images.push(s);
-        break;
-      }
-      default:
-        break;
+      continue;
     }
+    const o = nodeOutput(src, visited);
+    texts.push(...o.texts);
+    images.push(...o.images);
   }
   return { texts, images };
 }

@@ -68,37 +68,101 @@ export function GenConfigPanel() {
 
   return (
     <div className="gen-panel glass">
-      <div className="gp-head">
-        <IcGear size={15} />
-        生成设置
+      <div className="gp-col gp-col-info">
+        <div className="gp-head">
+          <IcGear size={15} />
+          生成设置
+        </div>
         <span className="gp-fam">{FAMILY_LABEL[family]}</span>
-      </div>
-
-      <div className="gp-sec">
-        <div className="gp-lab">模型</div>
-        <ModelPicker role="image" value={d.modelId} onChange={(v) => patch({ modelId: v })} />
+        <div className="gp-sec">
+          <div className="gp-lab">模型</div>
+          <ModelPicker role="image" value={d.modelId} onChange={(v) => patch({ modelId: v })} />
+        </div>
+        <div className="gp-foot">
+          参考图：已接入 {refCount} 路 · 最多 {familyMaxRef(family)} 张
+        </div>
       </div>
 
       {family === "banana" ? (
-        <>
-          <div className="gp-sec">
-            <div className="gp-lab">宽高比</div>
-            <div className="gp-grid">
-              {BANANA_ASPECTS.map((a) => (
-                <button
-                  key={a}
-                  className={`gp-cell ${(d.aspect ?? "auto") === a ? "on" : ""}`}
-                  onClick={() => patch({ aspect: a })}
-                >
-                  <ArIcon ratio={a} />
-                  {a}
-                </button>
-              ))}
-            </div>
+        <div className="gp-col gp-col-main">
+          <div className="gp-lab">宽高比</div>
+          <div className="gp-grid">
+            {BANANA_ASPECTS.map((a) => (
+              <button
+                key={a}
+                className={`gp-cell ${(d.aspect ?? "auto") === a ? "on" : ""}`}
+                onClick={() => patch({ aspect: a })}
+              >
+                <ArIcon ratio={a} />
+                {a}
+              </button>
+            ))}
           </div>
-          <div className="gp-sec">
+        </div>
+      ) : (
+        <div className="gp-col gp-col-main">
+          <div className="gp-lab">
+            尺寸
+            <span className="gp-hint">{family === "gpt" ? "16 的倍数 · 比例 1:3~3:1 · 最大 3840x2160" : "自定义宽高或选预设"}</span>
+          </div>
+          <div className="gp-wh">
+            <label>
+              W
+              <input
+                className="input nodrag"
+                type="number"
+                step={16}
+                min={256}
+                max={3840}
+                value={d.width ?? ""}
+                placeholder="宽"
+                onChange={(e) => patch({ width: e.target.value ? Number(e.target.value) : undefined, size: "default" })}
+              />
+            </label>
+            <label>
+              H
+              <input
+                className="input nodrag"
+                type="number"
+                step={16}
+                min={256}
+                max={3840}
+                value={d.height ?? ""}
+                placeholder="高"
+                onChange={(e) => patch({ height: e.target.value ? Number(e.target.value) : undefined, size: "default" })}
+              />
+            </label>
+          </div>
+          <div className="gp-grid">
+            {(family === "gpt" ? GPT_PRESETS : GENERIC_PRESETS).map((p) => {
+              const tag = "tag" in p ? (p as { tag?: string }).tag : undefined;
+              const on = d.width === p.w && d.height === p.h;
+              return (
+                <button key={`${p.w}x${p.h}`} className={`gp-cell ${on ? "on" : ""}`} title={`${p.w} × ${p.h}`}
+                  onClick={() => setWH(p.w, p.h, p.ratio)}>
+                  <ArIcon ratio={p.ratio} />
+                  {p.ratio}
+                  {tag ? <em>{tag}</em> : null}
+                </button>
+              );
+            })}
+            <button
+              className={`gp-cell ${!d.width && !d.height ? "on" : ""}`}
+              title="自动 / 跟随服务商默认"
+              onClick={() => patch({ width: undefined, height: undefined, aspect: undefined, size: "default" })}
+            >
+              <ArIcon ratio="auto" />
+              auto
+            </button>
+          </div>
+        </div>
+      )}
+
+      <div className="gp-col gp-col-side">
+        {family === "banana" ? (
+          <>
             <div className="gp-lab">分辨率</div>
-            <div className="gp-seg">
+            <div className="gp-seg col">
               {BANANA_SIZES.map((r) => (
                 <button
                   key={r}
@@ -109,86 +173,26 @@ export function GenConfigPanel() {
                 </button>
               ))}
             </div>
-          </div>
-        </>
-      ) : (
-        <>
-          {family === "gpt" ? (
-            <div className="gp-sec">
-              <div className="gp-lab">质量</div>
-              <div className="gp-seg">
-                {GPT_QUALITIES.map((q) => (
-                  <button
-                    key={q.value}
-                    className={(d.quality ?? "auto") === q.value ? "on" : ""}
-                    onClick={() => patch({ quality: q.value })}
-                  >
-                    {q.label}
-                  </button>
-                ))}
-              </div>
+          </>
+        ) : family === "gpt" ? (
+          <>
+            <div className="gp-lab">质量</div>
+            <div className="gp-seg col">
+              {GPT_QUALITIES.map((q) => (
+                <button
+                  key={q.value}
+                  className={(d.quality ?? "auto") === q.value ? "on" : ""}
+                  onClick={() => patch({ quality: q.value })}
+                >
+                  {q.label}
+                </button>
+              ))}
             </div>
-          ) : null}
-          <div className="gp-sec">
-            <div className="gp-lab">
-              尺寸
-              <span className="gp-hint">{family === "gpt" ? "16 的倍数 · 比例 1:3~3:1 · 最大 3840x2160" : "自定义宽高或选预设"}</span>
-            </div>
-            <div className="gp-wh">
-              <label>
-                W
-                <input
-                  className="input nodrag"
-                  type="number"
-                  step={16}
-                  min={256}
-                  max={3840}
-                  value={d.width ?? ""}
-                  placeholder="宽"
-                  onChange={(e) => patch({ width: e.target.value ? Number(e.target.value) : undefined, size: "default" })}
-                />
-              </label>
-              <label>
-                H
-                <input
-                  className="input nodrag"
-                  type="number"
-                  step={16}
-                  min={256}
-                  max={3840}
-                  value={d.height ?? ""}
-                  placeholder="高"
-                  onChange={(e) => patch({ height: e.target.value ? Number(e.target.value) : undefined, size: "default" })}
-                />
-              </label>
-            </div>
-            <div className="gp-grid">
-              {(family === "gpt" ? GPT_PRESETS : GENERIC_PRESETS).map((p) => {
-                const tag = "tag" in p ? (p as { tag?: string }).tag : undefined;
-                const on = d.width === p.w && d.height === p.h;
-                return (
-                  <button key={`${p.w}x${p.h}`} className={`gp-cell ${on ? "on" : ""}`} title={`${p.w} × ${p.h}`}
-                    onClick={() => setWH(p.w, p.h, p.ratio)}>
-                    <ArIcon ratio={p.ratio} />
-                    {p.ratio}
-                    {tag ? <em>{tag}</em> : null}
-                  </button>
-                );
-              })}
-              <button
-                className={`gp-cell ${!d.width && !d.height ? "on" : ""}`}
-                title="自动 / 跟随服务商默认"
-                onClick={() => patch({ width: undefined, height: undefined, aspect: undefined, size: "default" })}
-              >
-                <ArIcon ratio="auto" />
-                auto
-              </button>
-            </div>
-          </div>
-        </>
-      )}
+          </>
+        ) : null}
+      </div>
 
-      <div className="gp-sec">
+      <div className="gp-col gp-col-count">
         <div className="gp-lab">数量</div>
         <div className="gp-grid n">
           {Array.from({ length: maxN }, (_, i) => i + 1).map((n) => (
@@ -197,10 +201,6 @@ export function GenConfigPanel() {
             </button>
           ))}
         </div>
-      </div>
-
-      <div className="gp-foot">
-        参考图：已接入 {refCount} 路{refCount ? "" : "（可连上游图片节点）"} · 该模型最多 {familyMaxRef(family)} 张
       </div>
     </div>
   );

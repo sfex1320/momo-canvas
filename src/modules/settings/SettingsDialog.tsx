@@ -1,7 +1,7 @@
 /**
  * 设置面板 — 模型配置（多套卡片） / 联网搜索 / 图片保存 / ComfyUI / 外观
  */
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Modal, Field, Switch, Row } from "../../ui/kit";
 import { flattenCard, useSettings } from "../../core/stores/settingsStore";
 import { useComfy } from "../../core/stores/comfyStore";
@@ -18,18 +18,23 @@ import {
   IcFolder,
   IcGallery,
   IcGlobe,
+  IcKeyboard,
   IcLoading,
   IcMoon,
   IcPlus,
   IcSparkles,
   IcSun,
   IcTrash,
+  IcUpload,
   IcVideo,
 } from "../../ui/icons";
 import {
+  DEFAULT_HOTKEYS,
+  HOTKEY_LABEL,
   PROTOCOLS,
   ROLE_LABEL,
   type AnyProtocol,
+  type HotkeyAction,
   type ModelRole,
   type ProviderCard,
   type RoleSlot,
@@ -42,6 +47,7 @@ const TABS = [
   { key: "search", label: "联网搜索", icon: <IcGlobe size={17} /> },
   { key: "save", label: "图片保存", icon: <IcGallery size={17} /> },
   { key: "comfy", label: "ComfyUI", icon: <IcFlow size={17} /> },
+  { key: "hotkeys", label: "快捷键", icon: <IcKeyboard size={17} /> },
   { key: "appearance", label: "外观主题", icon: <IcSun size={17} /> },
 ];
 
@@ -67,11 +73,66 @@ export function SettingsDialog() {
           {tab === "search" && <SearchTab />}
           {tab === "save" && <SaveTab />}
           {tab === "comfy" && <ComfyTab />}
+          {tab === "hotkeys" && <HotkeysTab />}
           {tab === "appearance" && <AppearanceTab />}
         </div>
       </div>
     </Modal>
   );
+}
+
+/* ================= 配置导出 / 导入 ================= */
+
+async function exportCfg() {
+  try {
+    const json = JSON.stringify(useSettings.getState().settings, null, 2);
+    if (isTauri) {
+      const { save } = await import("@tauri-apps/plugin-dialog");
+      const path = await save({ defaultPath: "momo-settings.json", filters: [{ name: "JSON", extensions: ["json"] }] });
+      if (!path) return;
+      const { writeTextFile } = await import("@tauri-apps/plugin-fs");
+      await writeTextFile(path, json);
+      toast(`配置已导出 → ${path}`, "ok");
+    } else {
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(new Blob([json], { type: "application/json" }));
+      a.download = "momo-settings.json";
+      a.click();
+      URL.revokeObjectURL(a.href);
+      toast("配置已导出", "ok");
+    }
+  } catch (e) {
+    toast(errMsg(e), "err");
+  }
+}
+
+async function importCfg() {
+  try {
+    let text = "";
+    if (isTauri) {
+      const { open } = await import("@tauri-apps/plugin-dialog");
+      const path = await open({ filters: [{ name: "JSON", extensions: ["json"] }], multiple: false });
+      if (typeof path !== "string") return;
+      const { readTextFile } = await import("@tauri-apps/plugin-fs");
+      text = await readTextFile(path);
+    } else {
+      text = await new Promise<string>((resolve, reject) => {
+        const inp = document.createElement("input");
+        inp.type = "file";
+        inp.accept = ".json";
+        inp.onchange = () => {
+          const f = inp.files?.[0];
+          if (!f) return reject(new Error("未选择文件"));
+          f.text().then(resolve, reject);
+        };
+        inp.click();
+      });
+    }
+    useSettings.getState().importSettings(JSON.parse(text));
+    toast("配置已导入 ✓", "ok");
+  } catch (e) {
+    toast(errMsg(e), "err");
+  }
 }
 
 /* ================= 模型配置（服务商卡片） ================= */
@@ -165,11 +226,18 @@ function ModelsTab() {
       <h3>模型配置</h3>
       <p className="sec-desc">
         一张卡片对应一个服务商（中转站）：Base URL 与 API Key 只填一次，卡内可同时配置对话、绘画、视频 3 套模型。
-        每行前面的单选点用于把该服务商设为对应用途的默认。
+        配置保存在系统用户数据目录，升级不会丢失；每次启动还会自动写一份备份，也可以手动导出成文件保管。
       </p>
       <Row style={{ marginBottom: 14 }}>
         <button className="btn primary" onClick={() => setEditing(toDraft())}>
           <IcPlus size={16} /> 添加服务商
+        </button>
+        <span style={{ flex: 1 }} />
+        <button className="btn sm" title="把全部设置导出为 JSON 文件保管" onClick={() => void exportCfg()}>
+          <IcDownload size={15} /> 导出配置
+        </button>
+        <button className="btn sm" title="从导出的 JSON 文件恢复全部设置" onClick={() => void importCfg()}>
+          <IcUpload size={15} /> 导入配置
         </button>
       </Row>
 
@@ -552,6 +620,102 @@ function ComfyTab() {
       <p className="sec-desc" style={{ marginTop: 12 }}>
         模板管理器可导入 ComfyUI「API 格式」工作流 JSON，自由勾选要暴露的输入/参数/输出节点并保存为模板。
       </p>
+    </>
+  );
+}
+
+/* ================= 快捷键 ================= */
+
+/** 键名 → 键帽显示（方向键用箭头，精致些） */
+function keyLabel(key: string): string {
+  const map: Record<string, string> = {
+    ArrowUp: "↑",
+    ArrowDown: "↓",
+    ArrowLeft: "←",
+    ArrowRight: "→",
+    " ": "Space",
+    Escape: "Esc",
+    Delete: "Del",
+    Backspace: "⌫",
+    Enter: "⏎",
+    Tab: "⇥ Tab",
+  };
+  return map[key] ?? (key.length === 1 ? key.toUpperCase() : key);
+}
+
+const FIXED_KEYS: { label: string; keys: string[] }[] = [
+  { label: "撤销", keys: ["Ctrl", "Z"] },
+  { label: "重做", keys: ["Ctrl", "Y"] },
+  { label: "创建副本", keys: ["Ctrl", "D"] },
+  { label: "删除所选（节点/连线）", keys: ["Del"] },
+  { label: "临时平移画布", keys: ["Space", "拖动"] },
+  { label: "多选 / 框选连线", keys: ["Ctrl", "点击或框选"] },
+  { label: "粘贴图片/文字", keys: ["Ctrl", "V"] },
+];
+
+function HotkeysTab() {
+  const hotkeys = useSettings((s) => s.settings.hotkeys);
+  const update = useSettings((s) => s.update);
+  const [capturing, setCapturing] = useState<HotkeyAction | null>(null);
+
+  useEffect(() => {
+    if (!capturing) return;
+    const onKey = (e: KeyboardEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.key === "Escape") {
+        setCapturing(null);
+        return;
+      }
+      if (["Control", "Shift", "Alt", "Meta"].includes(e.key)) return;
+      const key = e.key.length === 1 ? e.key.toLowerCase() : e.key;
+      const clash = (Object.entries(hotkeys) as [HotkeyAction, string][]).find(([a, k]) => k === key && a !== capturing);
+      if (clash) {
+        toast(`「${keyLabel(key)}」已分配给：${HOTKEY_LABEL[clash[0]]}`, "err");
+        return;
+      }
+      update("hotkeys", { ...hotkeys, [capturing]: key });
+      setCapturing(null);
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [capturing, hotkeys, update]);
+
+  return (
+    <>
+      <h3>快捷键</h3>
+      <p className="sec-desc">点击键帽后按下新按键即可重新绑定（Esc 取消）。下方为固定组合键，仅作速查。</p>
+      {(Object.keys(HOTKEY_LABEL) as HotkeyAction[]).map((action) => (
+        <div className="hk-row" key={action}>
+          <span className="hk-name">{HOTKEY_LABEL[action]}</span>
+          <button
+            className={`keycap ${capturing === action ? "cap" : ""}`}
+            title="点击后按下新按键"
+            onClick={() => setCapturing(capturing === action ? null : action)}
+          >
+            {capturing === action ? "按键…" : keyLabel(hotkeys[action])}
+          </button>
+        </div>
+      ))}
+      <Row style={{ margin: "6px 0 18px" }}>
+        <button className="btn sm" onClick={() => update("hotkeys", { ...DEFAULT_HOTKEYS })}>
+          恢复默认
+        </button>
+      </Row>
+      <h3 style={{ fontSize: "var(--fs-base)" }}>固定快捷键</h3>
+      {FIXED_KEYS.map((f) => (
+        <div className="hk-row dim" key={f.label}>
+          <span className="hk-name">{f.label}</span>
+          <span className="hk-combo">
+            {f.keys.map((k, i) => (
+              <span key={i}>
+                {i > 0 ? <i className="hk-plus">+</i> : null}
+                <kbd className="keycap sm">{k}</kbd>
+              </span>
+            ))}
+          </span>
+        </div>
+      ))}
     </>
   );
 }

@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import {
+  DEFAULT_HOTKEYS,
   DEFAULT_SETTINGS,
   PROTOCOLS,
   ROLE_LABEL,
@@ -22,7 +23,21 @@ type SettingsState = {
   upsertProvider: (p: ProviderCard) => void;
   removeProvider: (id: string) => void;
   setDefault: (role: ModelRole, id: string) => void;
+  /** 从导出的 JSON 恢复整套配置 */
+  importSettings: (raw: unknown) => void;
 };
+
+/** 任意来源的部分配置 → 规整为完整 Settings（缺项补默认） */
+function normalize(v: Partial<Settings>): Settings {
+  return {
+    models: fixDefaults({ providers: v.models?.providers ?? [], defaults: v.models?.defaults ?? {} }),
+    search: { ...DEFAULT_SETTINGS.search, ...(v.search ?? {}) },
+    save: { ...DEFAULT_SETTINGS.save, ...(v.save ?? {}) },
+    comfy: { ...DEFAULT_SETTINGS.comfy, ...(v.comfy ?? {}) },
+    theme: v.theme ?? "dark",
+    hotkeys: { ...DEFAULT_HOTKEYS, ...(v.hotkeys ?? {}) },
+  };
+}
 
 function applyTheme(theme: Settings["theme"]) {
   document.documentElement.setAttribute("data-theme", theme);
@@ -66,7 +81,7 @@ function migrateModelsV2(old: LegacyModelsV2): ModelsCfg {
 }
 
 /** v1 单套配置 → v3 */
-function migrateV1(old: LegacySettingsV1): Settings {
+function migrateV1(old: LegacySettingsV1): Partial<Settings> {
   const cards: ModelCard[] = [];
   if (old.chat?.baseUrl || old.chat?.model)
     cards.push({ id: uid(8), role: "chat", name: "中转站 A", protocol: "openai", baseUrl: old.chat.baseUrl ?? "", apiKey: old.chat.apiKey ?? "", model: old.chat.model ?? "" });
@@ -100,33 +115,36 @@ export const useSettings = create<SettingsState>((set, get) => {
         let merged: Settings | null = null;
         const v3 = await loadJSON<Partial<Settings>>("settings.json", "v3");
         if (v3) {
-          merged = {
-            models: fixDefaults({ providers: v3.models?.providers ?? [], defaults: v3.models?.defaults ?? {} }),
-            search: { ...DEFAULT_SETTINGS.search, ...(v3.search ?? {}) },
-            save: { ...DEFAULT_SETTINGS.save, ...(v3.save ?? {}) },
-            comfy: { ...DEFAULT_SETTINGS.comfy, ...(v3.comfy ?? {}) },
-            theme: v3.theme ?? "dark",
-          };
+          merged = normalize(v3);
         } else {
+          // v3 不存在时依次回退：v2 → v1 → 上次自动备份（升级/异常后的兜底恢复）
           const v2 = await loadJSON<{ models?: LegacyModelsV2 } & Partial<Omit<Settings, "models">>>("settings.json", "v2");
           if (v2) {
-            merged = {
-              models: migrateModelsV2(v2.models ?? { cards: [], defaults: {} }),
-              search: { ...DEFAULT_SETTINGS.search, ...(v2.search ?? {}) },
-              save: { ...DEFAULT_SETTINGS.save, ...(v2.save ?? {}) },
-              comfy: { ...DEFAULT_SETTINGS.comfy, ...(v2.comfy ?? {}) },
-              theme: v2.theme ?? "dark",
-            };
+            merged = normalize({ ...v2, models: undefined });
+            merged = { ...merged, models: migrateModelsV2(v2.models ?? { cards: [], defaults: {} }) };
           } else {
             const v1 = await loadJSON<LegacySettingsV1>("settings.json", "v1");
-            if (v1) merged = migrateV1(v1);
+            if (v1) merged = normalize(migrateV1(v1));
+            else {
+              const bak = await loadJSON<Partial<Settings>>("settings.backup.json", "v3");
+              if (bak) merged = normalize(bak);
+            }
           }
           if (merged) void saveJSON("settings.json", "v3", merged);
         }
         const final = merged ?? DEFAULT_SETTINGS;
         applyTheme(final.theme);
         set({ settings: final, loaded: true });
+        // 每次启动写一份备份，任何升级/迁移出问题都能从备份找回
+        if (merged) void saveJSON("settings.backup.json", "v3", final);
       })()),
+
+    importSettings: (raw) => {
+      if (!raw || typeof raw !== "object") throw new Error("配置文件格式不正确");
+      const next = normalize(raw as Partial<Settings>);
+      applyTheme(next.theme);
+      commit(next);
+    },
 
     update: (key, value) => {
       const next = { ...get().settings, [key]: value };

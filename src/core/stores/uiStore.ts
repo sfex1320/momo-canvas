@@ -28,6 +28,10 @@ type UiState = {
   toasts: Toast[];
   /** 拖拽中将要自动连线的两个节点 id（高亮提示） */
   proxHint: string[] | null;
+  /** 当前工具：move = 移动工具（左键拖空白平移）；select = 框选模式 */
+  tool: "move" | "select";
+  /** 建组模式：在画布上框画区域成组 */
+  groupDraw: boolean;
 
   toggleZen: () => void;
   setGalleryOpen: (v: boolean) => void;
@@ -37,6 +41,8 @@ type UiState = {
   setLightbox: (src: string | null) => void;
   setAddMenu: (v: AddMenuState) => void;
   setProxHint: (ids: string[] | null) => void;
+  toggleTool: () => void;
+  setGroupDraw: (v: boolean) => void;
   addGallery: (item: Omit<GalleryItem, "id" | "time">) => void;
   toast: (msg: string, type?: Toast["type"]) => void;
 };
@@ -52,6 +58,8 @@ export const useUi = create<UiState>((set) => ({
   gallery: [],
   toasts: [],
   proxHint: null,
+  tool: "move",
+  groupDraw: false,
 
   toggleZen: () => set((s) => ({ zen: !s.zen })),
   setGalleryOpen: (v) => set({ galleryOpen: v }),
@@ -67,6 +75,9 @@ export const useUi = create<UiState>((set) => ({
       if (s.proxHint === ids || (s.proxHint && ids && s.proxHint.join() === ids.join())) return s;
       return { proxHint: ids };
     }),
+
+  toggleTool: () => set((s) => ({ tool: s.tool === "move" ? "select" : "move" })),
+  setGroupDraw: (v) => set({ groupDraw: v }),
 
   addGallery: (item) =>
     set((s) => ({ gallery: [{ ...item, id: uid(), time: Date.now() }, ...s.gallery].slice(0, 200) })),

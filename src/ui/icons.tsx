@@ -371,6 +371,35 @@ export const IcCheckSquare = (p: IconProps) => (
   </I>
 );
 
+export const IcCursor = (p: IconProps) => (
+  <I {...p} fill>
+    <path d="M6.2 3.6a.8.8 0 0 1 1.3-.6l11.2 8.7a.8.8 0 0 1-.4 1.4l-4.8.6 2.7 5.4a.8.8 0 0 1-.35 1.07l-1.6.8a.8.8 0 0 1-1.07-.36l-2.7-5.4-3.5 3.4a.8.8 0 0 1-1.35-.55L6.2 3.6Z" />
+  </I>
+);
+
+export const IcEyeOff = (p: IconProps) => (
+  <I {...p}>
+    <path d="M4 4.5 20 19.5" />
+    <path d="M9.6 6.2A9.8 9.8 0 0 1 12 5.9c4.4 0 7.6 3 9 6.1a11 11 0 0 1-3.2 4M6.4 7.6A11.4 11.4 0 0 0 3 12c1.4 3.1 4.6 6.1 9 6.1 1.2 0 2.3-.2 3.3-.6" />
+    <path d="M9.9 9.9a3 3 0 0 0 4.2 4.2" />
+  </I>
+);
+
+export const IcGroup = (p: IconProps) => (
+  <I {...p}>
+    <path d="M4 7V5.5A1.5 1.5 0 0 1 5.5 4H7M17 4h1.5A1.5 1.5 0 0 1 20 5.5V7M20 17v1.5a1.5 1.5 0 0 1-1.5 1.5H17M7 20H5.5A1.5 1.5 0 0 1 4 18.5V17M4 11.5v1M11.5 4h1M20 11.5v1M11.5 20h1" />
+    <rect x="7.5" y="7.5" width="4" height="4" rx="1.2" />
+    <rect x="12.5" y="12.5" width="4" height="4" rx="1.2" />
+  </I>
+);
+
+export const IcKeyboard = (p: IconProps) => (
+  <I {...p}>
+    <rect x="3" y="6" width="18" height="12" rx="2.5" />
+    <path d="M6.5 9.5h.01M10 9.5h.01M13.5 9.5h.01M17 9.5h.01M6.5 12.5h.01M10 12.5h.01M13.5 12.5h.01M17 12.5h.01M8 15.5h8" />
+  </I>
+);
+
 export const IcUndo = (p: IconProps) => (
   <I {...p}>
     <path d="M8.5 6 4 10.5 8.5 15" />
