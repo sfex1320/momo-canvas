@@ -156,6 +156,57 @@ export function edgeClassFor(port: PortType | null): string {
   return port ? `edge-${port}` : "";
 }
 
+/* ---------- 贴近/覆盖 自动连线 ---------- */
+const PROX_GAP_MAX = 130; // 左右贴近的最大间距
+const PROX_V_OVERLAP = 24; // 需要的最小纵向重叠
+const PROX_SNAP_GAP = 48; // 覆盖放置后自动摆开的间距
+
+type ProxPair = { up: AppNode; down: AppNode; handle: string; overlap: boolean; dist: number };
+
+/** up→down 是否可连（端口类型匹配且尚无同款边），可连则返回目标端口 */
+function linkHandle(up: AppNode, down: AppNode, edges: Edge[]): string | null {
+  const pt = outPortType(up.type as NodeKind);
+  if (!pt || pt === "video") return null;
+  const ins = NODE_INPUTS[down.type as NodeKind];
+  const handle = pt === "image" ? (ins.image ? "in-image" : null) : ins.text ? "in-text" : null;
+  if (!handle) return null;
+  if (edges.some((e) => e.source === up.id && e.target === down.id && e.targetHandle === handle)) return null;
+  return handle;
+}
+
+/** 找到被拖节点最合适的连线对象：贴近左右两侧，或直接拖到节点上方（按中心决定方向） */
+export function findProximityPair(nodes: AppNode[], edges: Edge[], id: string): ProxPair | null {
+  const moved = nodes.find((n) => n.id === id);
+  if (!moved?.measured?.width) return null;
+  const mb = { x: moved.position.x, y: moved.position.y, w: moved.measured.width ?? 0, h: moved.measured.height ?? 0 };
+  let best: ProxPair | null = null;
+  const consider = (up: AppNode, down: AppNode, overlap: boolean, dist: number) => {
+    if (best && dist >= best.dist) return;
+    const handle = linkHandle(up, down, edges);
+    if (handle) best = { up, down, handle, overlap, dist };
+  };
+  for (const other of nodes) {
+    if (other.id === id || !other.measured?.width) continue;
+    const ob = { x: other.position.x, y: other.position.y, w: other.measured.width ?? 0, h: other.measured.height ?? 0 };
+    const vOverlap = Math.min(mb.y + mb.h, ob.y + ob.h) - Math.max(mb.y, ob.y);
+    if (vOverlap < PROX_V_OVERLAP) continue;
+    const hOverlap = Math.min(mb.x + mb.w, ob.x + ob.w) - Math.max(mb.x, ob.x);
+    if (hOverlap > 16) {
+      // 直接拖到节点上方：中心偏左 → 被拖节点作上游，反之作下游；首选方向不可连则试反向
+      const movedLeft = mb.x + mb.w / 2 <= ob.x + ob.w / 2;
+      const dist = Math.abs(mb.x + mb.w / 2 - (ob.x + ob.w / 2));
+      consider(movedLeft ? moved : other, movedLeft ? other : moved, true, dist);
+      consider(movedLeft ? other : moved, movedLeft ? moved : other, true, dist + 0.1);
+    } else {
+      const gapFromLeft = mb.x - (ob.x + ob.w); // other 在左侧 → other 为上游
+      if (gapFromLeft >= -16 && gapFromLeft <= PROX_GAP_MAX) consider(other, moved, false, Math.abs(gapFromLeft));
+      const gapFromRight = ob.x - (mb.x + mb.w); // other 在右侧 → moved 为上游
+      if (gapFromRight >= -16 && gapFromRight <= PROX_GAP_MAX) consider(moved, other, false, Math.abs(gapFromRight));
+    }
+  }
+  return best;
+}
+
 export const useBoard = create<BoardState>((set, get) => {
   const persist = () => {
     if (saveTimer) clearTimeout(saveTimer);
@@ -276,33 +327,23 @@ export const useBoard = create<BoardState>((set, get) => {
 
     proximityConnect: (id) => {
       const { nodes, edges, connectNodes } = get();
-      const moved = nodes.find((n) => n.id === id);
-      if (!moved?.measured?.width) return;
-      const mb = { x: moved.position.x, y: moved.position.y, w: moved.measured.width ?? 0, h: moved.measured.height ?? 0 };
-      let best: { up: AppNode; down: AppNode; dist: number } | null = null;
-      for (const other of nodes) {
-        if (other.id === id || !other.measured?.width) continue;
-        const ob = { x: other.position.x, y: other.position.y, w: other.measured.width ?? 0, h: other.measured.height ?? 0 };
-        const vOverlap = Math.min(mb.y + mb.h, ob.y + ob.h) - Math.max(mb.y, ob.y);
-        if (vOverlap < 30) continue;
-        const gapFromLeft = mb.x - (ob.x + ob.w); // other 在左侧 → other 为上游
-        if (gapFromLeft >= -14 && gapFromLeft <= 90 && (!best || gapFromLeft < best.dist)) {
-          best = { up: other, down: moved, dist: Math.abs(gapFromLeft) };
-        }
-        const gapFromRight = ob.x - (mb.x + mb.w); // other 在右侧 → moved 为上游
-        if (gapFromRight >= -14 && gapFromRight <= 90 && (!best || gapFromRight < best.dist)) {
-          best = { up: moved, down: other, dist: Math.abs(gapFromRight) };
-        }
-      }
+      const best = findProximityPair(nodes, edges, id);
       if (!best) return;
-      const pt = outPortType(best.up.type as NodeKind);
-      if (!pt || pt === "video") return;
-      const ins = NODE_INPUTS[best.down.type as NodeKind];
-      const handle = pt === "image" ? (ins.image ? "in-image" : null) : ins.text ? "in-text" : null;
-      if (!handle) return;
-      if (edges.some((e) => e.source === best!.up.id && e.target === best!.down.id && e.targetHandle === handle)) return;
       snapshot();
-      connectNodes(best.up.id, best.down.id, handle);
+      if (best.overlap) {
+        // 直接拖到节点上方松手：把被拖节点自动摆到上游/下游一侧再连线
+        const moved = nodes.find((n) => n.id === id)!;
+        const isDown = best.down.id === id;
+        const anchor = isDown ? best.up : best.down;
+        const newX = isDown
+          ? anchor.position.x + (anchor.measured?.width ?? 0) + PROX_SNAP_GAP
+          : anchor.position.x - (moved.measured?.width ?? 0) - PROX_SNAP_GAP;
+        const newY = Math.abs(moved.position.y - anchor.position.y) < 24 ? anchor.position.y : moved.position.y;
+        set({
+          nodes: get().nodes.map((n) => (n.id === id ? { ...n, position: { x: newX, y: newY } } : n)),
+        });
+      }
+      connectNodes(best.up.id, best.down.id, best.handle);
     },
 
     addNode: (kind, pos, init) => {

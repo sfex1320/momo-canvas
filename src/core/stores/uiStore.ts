@@ -26,6 +26,8 @@ type UiState = {
   addMenu: AddMenuState;
   gallery: GalleryItem[];
   toasts: Toast[];
+  /** 拖拽中将要自动连线的两个节点 id（高亮提示） */
+  proxHint: string[] | null;
 
   toggleZen: () => void;
   setGalleryOpen: (v: boolean) => void;
@@ -34,6 +36,7 @@ type UiState = {
   setTemplateMgr: (v: boolean) => void;
   setLightbox: (src: string | null) => void;
   setAddMenu: (v: AddMenuState) => void;
+  setProxHint: (ids: string[] | null) => void;
   addGallery: (item: Omit<GalleryItem, "id" | "time">) => void;
   toast: (msg: string, type?: Toast["type"]) => void;
 };
@@ -48,6 +51,7 @@ export const useUi = create<UiState>((set) => ({
   addMenu: null,
   gallery: [],
   toasts: [],
+  proxHint: null,
 
   toggleZen: () => set((s) => ({ zen: !s.zen })),
   setGalleryOpen: (v) => set({ galleryOpen: v }),
@@ -56,6 +60,13 @@ export const useUi = create<UiState>((set) => ({
   setTemplateMgr: (v) => set({ templateMgrOpen: v }),
   setLightbox: (src) => set({ lightbox: src }),
   setAddMenu: (v) => set({ addMenu: v }),
+
+  setProxHint: (ids) =>
+    set((s) => {
+      // 拖拽中每帧都会算一次，内容没变就不触发渲染
+      if (s.proxHint === ids || (s.proxHint && ids && s.proxHint.join() === ids.join())) return s;
+      return { proxHint: ids };
+    }),
 
   addGallery: (item) =>
     set((s) => ({ gallery: [{ ...item, id: uid(), time: Date.now() }, ...s.gallery].slice(0, 200) })),

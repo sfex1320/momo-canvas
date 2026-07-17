@@ -2,7 +2,7 @@
  * 智能画布 — 单一画布范式：
  *  左键框选 · 中/右键或空格平移 · 滚轮缩放 · 双击空白添加节点
  *  拖线到空白快速建节点 · 拖入图片文件 · Ctrl+V 粘贴 · Tab 沉浸模式
- *  拖拽贴近节点左右两侧自动连线 · Ctrl+Z/Y 撤销重做
+ *  拖拽贴近/叠放到节点上自动连线（拖拽中高亮预告） · Ctrl+Z/Y 撤销重做
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
@@ -20,7 +20,7 @@ import {
 import "@xyflow/react/dist/style.css";
 import "./canvas.css";
 
-import { useBoard, outPortType, NODE_INPUTS } from "../../core/stores/boardStore";
+import { useBoard, outPortType, findProximityPair } from "../../core/stores/boardStore";
 import { useUi } from "../../core/stores/uiStore";
 import type { AppNode, NodeKind } from "../../core/types";
 import { fileToDataUrl } from "../../core/utils";
@@ -211,10 +211,18 @@ export function SmartCanvas() {
     addNode(kind, pos);
   };
 
-  /* ---- 拖拽结束：贴近自动连线 ---- */
+  /* ---- 拖拽中：预告将要自动连线的两个节点 ---- */
+  const onNodeDrag = useCallback((_: unknown, node: AppNode) => {
+    const s = useBoard.getState();
+    const pair = findProximityPair(s.nodes, s.edges, node.id);
+    useUi.getState().setProxHint(pair ? [pair.up.id, pair.down.id] : null);
+  }, []);
+
+  /* ---- 拖拽结束：贴近/覆盖 自动连线 ---- */
   const onNodeDragStop = useCallback(
     (_: unknown, node: AppNode) => {
-      if (NODE_INPUTS[node.type as NodeKind] || outPortType(node.type as NodeKind)) proximityConnect(node.id);
+      proximityConnect(node.id);
+      useUi.getState().setProxHint(null);
     },
     [proximityConnect],
   );
@@ -232,8 +240,10 @@ export function SmartCanvas() {
         onConnectEnd={onConnectEnd}
         onPaneClick={onPaneClick}
         onNodeDragStart={() => snapshot()}
+        onNodeDrag={onNodeDrag}
         onNodeDragStop={onNodeDragStop}
         isValidConnection={isValidConnection}
+        connectionRadius={36}
         proOptions={{ hideAttribution: true }}
         minZoom={0.15}
         maxZoom={2.5}
@@ -251,7 +261,7 @@ export function SmartCanvas() {
       >
         <Background variant={BackgroundVariant.Dots} gap={24} size={1.6} color="var(--dot)" />
         {!zen && nodes.length > 3 ? (
-          <MiniMap pannable zoomable position="bottom-right" style={{ marginBottom: 120, marginRight: 8 + dockShift }} />
+          <MiniMap pannable zoomable position="bottom-right" style={{ marginBottom: 74, marginRight: 10 + dockShift }} />
         ) : null}
       </ReactFlow>
 
@@ -266,7 +276,7 @@ export function SmartCanvas() {
             <br />
             <kbd>拖入图片</kbd> <kbd>Ctrl+V 粘贴</kbd> <kbd>中/右键 平移</kbd> <kbd>滚轮 缩放</kbd> <kbd>Tab 沉浸</kbd>
             <br />
-            把节点拖到另一个节点的左/右侧贴近松手，会自动连线
+            把节点拖到另一个节点旁边（或直接叠上去）松手，会自动连线
           </p>
         </div>
       ) : null}
@@ -306,7 +316,7 @@ export function SmartCanvas() {
           <button className="icon-btn" title="重做 (Ctrl+Y)" disabled={!canRedo} style={{ opacity: canRedo ? 1 : 0.35 }} onClick={redo}>
             <IcRedo size={17} />
           </button>
-          <div style={{ height: 1, background: "var(--panel-border)", margin: "3px 4px" }} />
+          <div style={{ width: 1, alignSelf: "stretch", background: "var(--panel-border)", margin: "5px 3px" }} />
           <button className="icon-btn" title="放大" onClick={() => void zoomIn({ duration: 150 })}>
             <IcPlus size={17} />
           </button>

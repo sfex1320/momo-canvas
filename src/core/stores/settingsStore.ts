@@ -1,10 +1,14 @@
 import { create } from "zustand";
 import {
   DEFAULT_SETTINGS,
+  PROTOCOLS,
   ROLE_LABEL,
+  type LegacyModelsV2,
   type LegacySettingsV1,
   type ModelCard,
   type ModelRole,
+  type ModelsCfg,
+  type ProviderCard,
   type Settings,
 } from "../types";
 import { loadJSON, saveJSON } from "../persist";
@@ -15,8 +19,8 @@ type SettingsState = {
   loaded: boolean;
   init: () => Promise<void>;
   update: <K extends keyof Settings>(key: K, value: Settings[K]) => void;
-  upsertCard: (card: ModelCard) => void;
-  removeCard: (id: string) => void;
+  upsertProvider: (p: ProviderCard) => void;
+  removeProvider: (id: string) => void;
   setDefault: (role: ModelRole, id: string) => void;
 };
 
@@ -24,27 +28,54 @@ function applyTheme(theme: Settings["theme"]) {
   document.documentElement.setAttribute("data-theme", theme);
 }
 
-/** v1 单套配置 → v2 多卡片迁移 */
+const ROLES: ModelRole[] = ["chat", "image", "video"];
+
+/** 修补 defaults：指向不存在/未配置该角色的服务商时，退回第一家可用的 */
+function fixDefaults(cfg: ModelsCfg): ModelsCfg {
+  const defaults = { ...cfg.defaults };
+  for (const role of ROLES) {
+    const ok = cfg.providers.find((p) => p.id === defaults[role] && p.models[role]?.model);
+    if (!ok) defaults[role] = cfg.providers.find((p) => p.models[role]?.model)?.id;
+  }
+  return { ...cfg, defaults };
+}
+
+/** v2 平铺卡片 → v3 服务商卡片：同 baseUrl+apiKey 的卡合并为一家，角色冲突则另立一家 */
+function migrateModelsV2(old: LegacyModelsV2): ModelsCfg {
+  const providers: ProviderCard[] = [];
+  const cardToProvider = new Map<string, string>();
+  for (const c of old.cards ?? []) {
+    const slot = { protocol: c.protocol, model: c.model, ...(c.size ? { size: c.size } : {}) };
+    const home = providers.find(
+      (p) => p.baseUrl === c.baseUrl && p.apiKey === c.apiKey && !p.models[c.role],
+    );
+    if (home) {
+      home.models[c.role] = slot;
+      cardToProvider.set(c.id, home.id);
+    } else {
+      providers.push({ id: c.id, name: c.name, baseUrl: c.baseUrl, apiKey: c.apiKey, models: { [c.role]: slot } });
+      cardToProvider.set(c.id, c.id);
+    }
+  }
+  const defaults: ModelsCfg["defaults"] = {};
+  for (const role of ROLES) {
+    const d = old.defaults?.[role];
+    if (d && cardToProvider.has(d)) defaults[role] = cardToProvider.get(d);
+  }
+  return fixDefaults({ providers, defaults });
+}
+
+/** v1 单套配置 → v3 */
 function migrateV1(old: LegacySettingsV1): Settings {
   const cards: ModelCard[] = [];
-  const defaults: Settings["models"]["defaults"] = {};
-  if (old.chat?.baseUrl || old.chat?.model) {
-    const c: ModelCard = { id: uid(8), role: "chat", name: "对话 · 默认", protocol: "openai", baseUrl: old.chat.baseUrl ?? "", apiKey: old.chat.apiKey ?? "", model: old.chat.model ?? "" };
-    cards.push(c);
-    defaults.chat = c.id;
-  }
-  if (old.image?.baseUrl || old.image?.model) {
-    const c: ModelCard = { id: uid(8), role: "image", name: "绘画 · 默认", protocol: "openai", baseUrl: old.image.baseUrl ?? "", apiKey: old.image.apiKey ?? "", model: old.image.model ?? "", size: old.image.size ?? "1024x1024" };
-    cards.push(c);
-    defaults.image = c.id;
-  }
-  if (old.video?.baseUrl || old.video?.model) {
-    const c: ModelCard = { id: uid(8), role: "video", name: "视频 · 默认", protocol: (old.video.style as ModelCard["protocol"]) ?? "zhipu", baseUrl: old.video.baseUrl ?? "", apiKey: old.video.apiKey ?? "", model: old.video.model ?? "" };
-    cards.push(c);
-    defaults.video = c.id;
-  }
+  if (old.chat?.baseUrl || old.chat?.model)
+    cards.push({ id: uid(8), role: "chat", name: "中转站 A", protocol: "openai", baseUrl: old.chat.baseUrl ?? "", apiKey: old.chat.apiKey ?? "", model: old.chat.model ?? "" });
+  if (old.image?.baseUrl || old.image?.model)
+    cards.push({ id: uid(8), role: "image", name: "中转站 A", protocol: "openai", baseUrl: old.image.baseUrl ?? "", apiKey: old.image.apiKey ?? "", model: old.image.model ?? "", size: old.image.size ?? "1024x1024" });
+  if (old.video?.baseUrl || old.video?.model)
+    cards.push({ id: uid(8), role: "video", name: "中转站 A", protocol: (old.video.style as ModelCard["protocol"]) ?? "zhipu", baseUrl: old.video.baseUrl ?? "", apiKey: old.video.apiKey ?? "", model: old.video.model ?? "" });
   return {
-    models: { cards, defaults },
+    models: migrateModelsV2({ cards, defaults: {} }),
     search: { ...DEFAULT_SETTINGS.search, ...(old.search ?? {}) },
     save: { ...DEFAULT_SETTINGS.save, ...(old.save ?? {}) },
     comfy: { ...DEFAULT_SETTINGS.comfy, ...(old.comfy ?? {}) },
@@ -57,7 +88,7 @@ let initOnce: Promise<void> | null = null;
 export const useSettings = create<SettingsState>((set, get) => {
   const commit = (next: Settings) => {
     set({ settings: next });
-    void saveJSON("settings.json", "v2", next);
+    void saveJSON("settings.json", "v3", next);
   };
 
   return {
@@ -67,21 +98,30 @@ export const useSettings = create<SettingsState>((set, get) => {
     init: () =>
       (initOnce ??= (async () => {
         let merged: Settings | null = null;
-        const v2 = await loadJSON<Partial<Settings>>("settings.json", "v2");
-        if (v2) {
+        const v3 = await loadJSON<Partial<Settings>>("settings.json", "v3");
+        if (v3) {
           merged = {
-            models: { cards: v2.models?.cards ?? [], defaults: v2.models?.defaults ?? {} },
-            search: { ...DEFAULT_SETTINGS.search, ...(v2.search ?? {}) },
-            save: { ...DEFAULT_SETTINGS.save, ...(v2.save ?? {}) },
-            comfy: { ...DEFAULT_SETTINGS.comfy, ...(v2.comfy ?? {}) },
-            theme: v2.theme ?? "dark",
+            models: fixDefaults({ providers: v3.models?.providers ?? [], defaults: v3.models?.defaults ?? {} }),
+            search: { ...DEFAULT_SETTINGS.search, ...(v3.search ?? {}) },
+            save: { ...DEFAULT_SETTINGS.save, ...(v3.save ?? {}) },
+            comfy: { ...DEFAULT_SETTINGS.comfy, ...(v3.comfy ?? {}) },
+            theme: v3.theme ?? "dark",
           };
         } else {
-          const v1 = await loadJSON<LegacySettingsV1>("settings.json", "v1");
-          if (v1) {
-            merged = migrateV1(v1);
-            void saveJSON("settings.json", "v2", merged);
+          const v2 = await loadJSON<{ models?: LegacyModelsV2 } & Partial<Omit<Settings, "models">>>("settings.json", "v2");
+          if (v2) {
+            merged = {
+              models: migrateModelsV2(v2.models ?? { cards: [], defaults: {} }),
+              search: { ...DEFAULT_SETTINGS.search, ...(v2.search ?? {}) },
+              save: { ...DEFAULT_SETTINGS.save, ...(v2.save ?? {}) },
+              comfy: { ...DEFAULT_SETTINGS.comfy, ...(v2.comfy ?? {}) },
+              theme: v2.theme ?? "dark",
+            };
+          } else {
+            const v1 = await loadJSON<LegacySettingsV1>("settings.json", "v1");
+            if (v1) merged = migrateV1(v1);
           }
+          if (merged) void saveJSON("settings.json", "v3", merged);
         }
         const final = merged ?? DEFAULT_SETTINGS;
         applyTheme(final.theme);
@@ -94,22 +134,17 @@ export const useSettings = create<SettingsState>((set, get) => {
       commit(next);
     },
 
-    upsertCard: (card) => {
+    upsertProvider: (p) => {
       const s = get().settings;
-      const cards = [...s.models.cards.filter((c) => c.id !== card.id), card];
-      const defaults = { ...s.models.defaults };
-      if (!defaults[card.role]) defaults[card.role] = card.id; // 该角色第一张卡自动设为默认
-      commit({ ...s, models: { cards, defaults } });
+      const exists = s.models.providers.some((x) => x.id === p.id);
+      const providers = exists ? s.models.providers.map((x) => (x.id === p.id ? p : x)) : [...s.models.providers, p];
+      commit({ ...s, models: fixDefaults({ providers, defaults: s.models.defaults }) });
     },
 
-    removeCard: (id) => {
+    removeProvider: (id) => {
       const s = get().settings;
-      const cards = s.models.cards.filter((c) => c.id !== id);
-      const defaults = { ...s.models.defaults };
-      for (const role of Object.keys(defaults) as ModelRole[]) {
-        if (defaults[role] === id) defaults[role] = cards.find((c) => c.role === role)?.id;
-      }
-      commit({ ...s, models: { cards, defaults } });
+      const providers = s.models.providers.filter((p) => p.id !== id);
+      commit({ ...s, models: fixDefaults({ providers, defaults: s.models.defaults }) });
     },
 
     setDefault: (role, id) => {
@@ -119,18 +154,40 @@ export const useSettings = create<SettingsState>((set, get) => {
   };
 });
 
-/** 解析节点应使用的模型卡片：节点指定 > 角色默认 > 该角色第一张 */
-export function resolveModelCard(role: ModelRole, modelId?: string): ModelCard {
-  const { cards, defaults } = useSettings.getState().settings.models;
-  const card =
-    (modelId ? cards.find((c) => c.id === modelId && c.role === role) : undefined) ??
-    cards.find((c) => c.id === defaults[role] && c.role === role) ??
-    cards.find((c) => c.role === role);
-  if (!card) throw new Error(`还没有可用的${ROLE_LABEL[role]}：请到「设置 → 模型配置」添加一张配置卡`);
+/** 服务商卡片 + 角色 → 扁平化模型配置（服务层消费） */
+export function flattenCard(p: ProviderCard, role: ModelRole): ModelCard | null {
+  const slot = p.models[role];
+  if (!slot?.model) return null;
+  return {
+    id: p.id,
+    role,
+    name: p.name,
+    protocol: slot.protocol,
+    baseUrl: p.baseUrl,
+    apiKey: p.apiKey,
+    model: slot.model,
+    size: slot.size,
+  };
+}
+
+/** 解析节点应使用的模型：节点指定的服务商 > 角色默认 > 第一家配了该角色的 */
+export function resolveModelCard(role: ModelRole, providerId?: string): ModelCard {
+  const { providers, defaults } = useSettings.getState().settings.models;
+  const p =
+    (providerId ? providers.find((x) => x.id === providerId && x.models[role]?.model) : undefined) ??
+    providers.find((x) => x.id === defaults[role] && x.models[role]?.model) ??
+    providers.find((x) => x.models[role]?.model);
+  const card = p ? flattenCard(p, role) : null;
+  if (!card) throw new Error(`还没有可用的${ROLE_LABEL[role]}：请到「设置 → 模型配置」添加服务商并配置模型`);
   return card;
 }
 
-/** 某角色的全部卡片（供节点模型选择器使用） */
-export function cardsOfRole(role: ModelRole): ModelCard[] {
-  return useSettings.getState().settings.models.cards.filter((c) => c.role === role);
+/** 配置了某角色模型的全部服务商（供节点模型选择器使用） */
+export function providersOfRole(role: ModelRole): ProviderCard[] {
+  return useSettings.getState().settings.models.providers.filter((p) => p.models[role]?.model);
+}
+
+/** 该角色的默认协议（新建槽位时用） */
+export function defaultProtocol(role: ModelRole) {
+  return PROTOCOLS[role][0].value as ModelCard["protocol"];
 }

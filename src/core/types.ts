@@ -129,27 +129,52 @@ export type AppNode = Node<Record<string, unknown>, NodeKind>;
 /* 端口数据类型 */
 export type PortType = "text" | "image" | "video";
 
-/* ---------------- 模型配置（多套卡片） ---------------- */
+/* ---------------- 模型配置（服务商卡片） ---------------- */
 export type ModelRole = "chat" | "image" | "video";
 
 export type ChatProtocol = "openai" | "anthropic" | "gemini";
 export type ImageProtocol = "openai" | "gemini";
 export type VideoProtocol = "zhipu" | "siliconflow" | "openai";
+export type AnyProtocol = ChatProtocol | ImageProtocol | VideoProtocol;
 
+/** 服务商卡片里某一角色的模型槽位（模型名留空 = 该角色未启用） */
+export type RoleSlot = {
+  protocol: AnyProtocol;
+  model: string;
+  /** 绘画槽位：默认尺寸 */
+  size?: string;
+};
+
+/** 一张服务商（中转站）卡片：共用 Base URL / API Key，可同时配置 对话 / 绘画 / 视频 3 套模型 */
+export type ProviderCard = {
+  id: string;
+  /** 显示名，例如「中转A」「智谱官方」 */
+  name: string;
+  baseUrl: string;
+  apiKey: string;
+  models: Partial<Record<ModelRole, RoleSlot>>;
+};
+
+/** 运行期扁平化的模型配置（由服务商卡片 + 角色解析而来，服务层直接消费） */
 export type ModelCard = {
   id: string;
   role: ModelRole;
-  /** 显示名，例如「中转A · GPT-4o」 */
   name: string;
-  protocol: ChatProtocol | ImageProtocol | VideoProtocol;
+  protocol: AnyProtocol;
   baseUrl: string;
   apiKey: string;
   model: string;
-  /** 绘图卡片：默认尺寸 */
   size?: string;
 };
 
 export type ModelsCfg = {
+  providers: ProviderCard[];
+  /** 各角色默认使用哪家服务商（provider id） */
+  defaults: Partial<Record<ModelRole, string>>;
+};
+
+/** v2（按角色平铺多卡片）旧结构，用于迁移 */
+export type LegacyModelsV2 = {
   cards: ModelCard[];
   defaults: Partial<Record<ModelRole, string>>;
 };
@@ -194,7 +219,7 @@ export type Settings = {
 };
 
 export const DEFAULT_SETTINGS: Settings = {
-  models: { cards: [], defaults: {} },
+  models: { providers: [], defaults: {} },
   search: { provider: "tavily", apiKey: "", baseUrl: "", maxResults: 5 },
   save: { dir: "", format: "png", pattern: "{date}_{time}_{model}", autoSave: false },
   comfy: { host: "http://127.0.0.1:8188" },

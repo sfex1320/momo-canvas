@@ -3,14 +3,16 @@
  */
 import { useState } from "react";
 import { Modal, Field, Switch, Row } from "../../ui/kit";
-import { useSettings } from "../../core/stores/settingsStore";
+import { flattenCard, useSettings } from "../../core/stores/settingsStore";
 import { useComfy } from "../../core/stores/comfyStore";
 import { toast, useUi } from "../../core/stores/uiStore";
 import { chatOnce } from "../../core/services/llm";
+import { fetchModelList } from "../../core/services/modelList";
 import { errMsg, isTauri, uid } from "../../core/utils";
 import {
   IcChat,
   IcCheck,
+  IcDownload,
   IcEdit,
   IcFlow,
   IcFolder,
@@ -27,8 +29,10 @@ import {
 import {
   PROTOCOLS,
   ROLE_LABEL,
-  type ModelCard,
+  type AnyProtocol,
   type ModelRole,
+  type ProviderCard,
+  type RoleSlot,
   type SearchProvider,
   type Settings,
 } from "../../core/types";
@@ -70,7 +74,7 @@ export function SettingsDialog() {
   );
 }
 
-/* ================= 模型配置（多套卡片） ================= */
+/* ================= 模型配置（服务商卡片） ================= */
 
 const ROLE_ICON: Record<ModelRole, React.ReactNode> = {
   chat: <IcChat size={16} />,
@@ -78,47 +82,65 @@ const ROLE_ICON: Record<ModelRole, React.ReactNode> = {
   video: <IcVideo size={16} />,
 };
 
-const ROLE_HINT: Record<ModelRole, string> = {
-  chat: "多模态 · 思考 · 联网 — 供对话/反推/文本处理节点使用",
-  image: "供「生成图像」节点使用，同一中转站可添加多套不同模型",
-  video: "供「生成视频」节点使用",
+const ROLES: ModelRole[] = ["chat", "image", "video"];
+
+const MODEL_PLACEHOLDER: Record<ModelRole, string> = {
+  chat: "deepseek-chat / glm-4.6v …",
+  image: "gpt-image-1 / seedream-4.5 …",
+  video: "cogvideox-3 / Wan2.2-T2V …",
 };
 
-const BASE_PLACEHOLDER: Record<string, string> = {
-  openai: "https://api.xxx.com/v1",
-  anthropic: "https://api.anthropic.com",
-  gemini: "https://generativelanguage.googleapis.com（官方可留空默认）",
-  zhipu: "https://open.bigmodel.cn/api/paas/v4",
-  siliconflow: "https://api.siliconflow.cn/v1",
+/** 编辑草稿：三个角色槽位全部实体化，模型名留空表示未启用 */
+type ProviderDraft = {
+  id: string;
+  name: string;
+  baseUrl: string;
+  apiKey: string;
+  slots: Record<ModelRole, RoleSlot>;
 };
 
-function emptyCard(role: ModelRole): ModelCard {
+function toDraft(p?: ProviderCard): ProviderDraft {
+  const slot = (role: ModelRole): RoleSlot =>
+    p?.models[role] ?? {
+      protocol: PROTOCOLS[role][0].value as AnyProtocol,
+      model: "",
+      ...(role === "image" ? { size: "1024x1024" } : {}),
+    };
   return {
-    id: uid(8),
-    role,
-    name: "",
-    protocol: PROTOCOLS[role][0].value as ModelCard["protocol"],
-    baseUrl: "",
-    apiKey: "",
-    model: "",
-    ...(role === "image" ? { size: "1024x1024" } : {}),
+    id: p?.id ?? uid(8),
+    name: p?.name ?? "",
+    baseUrl: p?.baseUrl ?? "",
+    apiKey: p?.apiKey ?? "",
+    slots: { chat: slot("chat"), image: slot("image"), video: slot("video") },
   };
+}
+
+function fromDraft(d: ProviderDraft): ProviderCard {
+  const models: ProviderCard["models"] = {};
+  for (const role of ROLES) {
+    const s = d.slots[role];
+    if (s.model.trim()) models[role] = { ...s, model: s.model.trim() };
+  }
+  const fallback = d.baseUrl.replace(/^https?:\/\//, "").split("/")[0] || "未命名服务商";
+  return { id: d.id, name: d.name.trim() || fallback, baseUrl: d.baseUrl, apiKey: d.apiKey, models };
 }
 
 function ModelsTab() {
   const models = useSettings((s) => s.settings.models);
-  const upsertCard = useSettings((s) => s.upsertCard);
-  const removeCard = useSettings((s) => s.removeCard);
+  const upsertProvider = useSettings((s) => s.upsertProvider);
+  const removeProvider = useSettings((s) => s.removeProvider);
   const setDefault = useSettings((s) => s.setDefault);
-  const [editing, setEditing] = useState<ModelCard | null>(null);
+  const [editing, setEditing] = useState<ProviderDraft | null>(null);
   const [confirmDel, setConfirmDel] = useState<string | null>(null);
   const [testing, setTesting] = useState<string | null>(null);
 
-  const testChat = async (card: ModelCard) => {
-    setTesting(card.id);
+  const testChat = async (p: ProviderCard) => {
+    const card = flattenCard(p, "chat");
+    if (!card) return;
+    setTesting(p.id);
     try {
       const r = await chatOnce(card, "你是一个连通性测试助手。", "请只回复两个字：正常");
-      toast(`「${card.name}」连通 ✓ 回复：${r.slice(0, 40)}`, "ok");
+      toast(`「${p.name}」对话模型连通 ✓ 回复：${r.slice(0, 40)}`, "ok");
     } catch (e) {
       toast(errMsg(e), "err");
     } finally {
@@ -128,187 +150,262 @@ function ModelsTab() {
 
   const saveEditing = () => {
     if (!editing) return;
-    if (!editing.model.trim()) {
-      toast("请填写模型名称", "err");
+    const p = fromDraft(editing);
+    if (!Object.keys(p.models).length) {
+      toast("请至少为一种用途填写模型名称（可用「拉取模型」快速选择）", "err");
       return;
     }
-    const name = editing.name.trim() || editing.model.trim();
-    upsertCard({ ...editing, name });
+    upsertProvider(p);
     setEditing(null);
-    toast(`已保存「${name}」`, "ok");
+    toast(`已保存「${p.name}」`, "ok");
   };
 
   return (
     <>
       <h3>模型配置</h3>
       <p className="sec-desc">
-        每类可添加多套配置（同一中转站也可配多个模型），节点上可单独选用；单选点为该类的默认模型。
+        一张卡片对应一个服务商（中转站）：Base URL 与 API Key 只填一次，卡内可同时配置对话、绘画、视频 3 套模型。
+        每行前面的单选点用于把该服务商设为对应用途的默认。
       </p>
-      {(Object.keys(ROLE_LABEL) as ModelRole[]).map((role) => {
-        const cards = models.cards.filter((c) => c.role === role);
-        return (
-          <div className="model-card" key={role}>
-            <div className="mc-head">
-              <span className="kind-ic">{ROLE_ICON[role]}</span>
-              {ROLE_LABEL[role]}
-              <span style={{ fontSize: 12.5, color: "var(--text-3)", fontWeight: 500 }}>{ROLE_HINT[role]}</span>
-              <span style={{ flex: 1 }} />
-              <button className="btn sm" onClick={() => setEditing(emptyCard(role))}>
-                <IcPlus size={15} /> 添加配置
+      <Row style={{ marginBottom: 14 }}>
+        <button className="btn primary" onClick={() => setEditing(toDraft())}>
+          <IcPlus size={16} /> 添加服务商
+        </button>
+      </Row>
+
+      {editing && !models.providers.some((p) => p.id === editing.id) ? (
+        <ProviderEditor draft={editing} setDraft={setEditing} onSave={saveEditing} onCancel={() => setEditing(null)} />
+      ) : null}
+
+      {models.providers.length === 0 && !editing ? (
+        <div style={{ padding: "8px 2px", color: "var(--text-3)", fontSize: "var(--fs-sm)" }}>
+          还没有服务商，点上方「添加服务商」开始配置
+        </div>
+      ) : null}
+
+      {models.providers.map((p) =>
+        editing?.id === p.id ? (
+          <ProviderEditor key={p.id} draft={editing} setDraft={setEditing} onSave={saveEditing} onCancel={() => setEditing(null)} />
+        ) : (
+          <div key={p.id} className="prov-card">
+            <div className="pc-head">
+              <div className="pc-title">
+                <b>{p.name}</b>
+                <span>{p.baseUrl || "（未填 Base URL）"}</span>
+              </div>
+              {p.models.chat ? (
+                <button className="btn sm" disabled={testing === p.id} onClick={() => void testChat(p)}>
+                  {testing === p.id ? <IcLoading size={14} /> : null} 测试
+                </button>
+              ) : null}
+              <button className="icon-btn" title="编辑" onClick={() => setEditing(toDraft(p))}>
+                <IcEdit size={16} />
+              </button>
+              <button
+                className="icon-btn danger"
+                title={confirmDel === p.id ? "再点一次确认删除" : "删除"}
+                style={confirmDel === p.id ? { color: "var(--danger)", background: "rgba(242,79,106,.12)" } : undefined}
+                onClick={() => {
+                  if (confirmDel === p.id) {
+                    removeProvider(p.id);
+                    setConfirmDel(null);
+                  } else setConfirmDel(p.id);
+                }}
+              >
+                <IcTrash size={16} />
               </button>
             </div>
-
-            {cards.length === 0 && (!editing || editing.role !== role) ? (
-              <div style={{ padding: "4px 2px 12px", color: "var(--text-3)", fontSize: "var(--fs-sm)" }}>
-                还没有配置，点右上「添加配置」
-              </div>
-            ) : null}
-
-            {cards.map((c) =>
-              editing?.id === c.id ? (
-                <CardEditor key={c.id} card={editing} setCard={setEditing} onSave={saveEditing} onCancel={() => setEditing(null)} />
-              ) : (
-                <div key={c.id} className="mrow">
-                  <button
-                    className={`mrow-radio ${models.defaults[role] === c.id ? "on" : ""}`}
-                    title="设为默认"
-                    onClick={() => setDefault(role, c.id)}
-                  >
-                    {models.defaults[role] === c.id ? <IcCheck size={13} /> : null}
-                  </button>
-                  <div className="mrow-name">
-                    <b>{c.name}</b>
-                    <span>
-                      {PROTOCOLS[role].find((p) => p.value === c.protocol)?.label ?? c.protocol} · {c.model || "未填模型"}
-                    </span>
-                  </div>
-                  {role === "chat" ? (
-                    <button className="btn sm" disabled={testing === c.id} onClick={() => void testChat(c)}>
-                      {testing === c.id ? <IcLoading size={14} /> : null} 测试
+            {ROLES.map((role) => {
+              const slot = p.models[role];
+              const isDefault = models.defaults[role] === p.id;
+              return (
+                <div key={role} className={`pc-role ${slot ? "" : "off"}`}>
+                  {slot ? (
+                    <button
+                      className={`mrow-radio ${isDefault ? "on" : ""}`}
+                      title={isDefault ? `当前是${ROLE_LABEL[role]}默认` : `设为${ROLE_LABEL[role]}默认`}
+                      onClick={() => setDefault(role, p.id)}
+                    >
+                      {isDefault ? <IcCheck size={13} /> : null}
                     </button>
-                  ) : null}
-                  <button className="icon-btn" title="编辑" onClick={() => setEditing({ ...c })}>
-                    <IcEdit size={16} />
-                  </button>
-                  <button
-                    className="icon-btn danger"
-                    title={confirmDel === c.id ? "再点一次确认删除" : "删除"}
-                    style={confirmDel === c.id ? { color: "var(--danger)", background: "rgba(242,79,106,.12)" } : undefined}
-                    onClick={() => {
-                      if (confirmDel === c.id) {
-                        removeCard(c.id);
-                        setConfirmDel(null);
-                      } else setConfirmDel(c.id);
-                    }}
-                  >
-                    <IcTrash size={16} />
-                  </button>
+                  ) : (
+                    <span className="pc-radio-ph" />
+                  )}
+                  <span className="pc-role-ic">{ROLE_ICON[role]}</span>
+                  <span className="pc-role-name">{ROLE_LABEL[role]}</span>
+                  {slot ? (
+                    <>
+                      <span className="pc-model" title={slot.model}>{slot.model}</span>
+                      <span className="pc-proto">
+                        {PROTOCOLS[role].find((x) => x.value === slot.protocol)?.label ?? slot.protocol}
+                      </span>
+                    </>
+                  ) : (
+                    <span className="pc-model off">未配置</span>
+                  )}
                 </div>
-              ),
-            )}
-
-            {editing && editing.role === role && !cards.some((c) => c.id === editing.id) ? (
-              <CardEditor card={editing} setCard={setEditing} onSave={saveEditing} onCancel={() => setEditing(null)} />
-            ) : null}
+              );
+            })}
           </div>
-        );
-      })}
+        ),
+      )}
     </>
   );
 }
 
-function CardEditor({
-  card,
-  setCard,
+function ProviderEditor({
+  draft,
+  setDraft,
   onSave,
   onCancel,
 }: {
-  card: ModelCard;
-  setCard: (c: ModelCard) => void;
+  draft: ProviderDraft;
+  setDraft: (d: ProviderDraft) => void;
   onSave: () => void;
   onCancel: () => void;
 }) {
-  const role = card.role;
+  // 拉取到的模型列表按协议缓存（同一中转站三个槽位通常协议相同，可复用）
+  const [lists, setLists] = useState<Record<string, string[]>>({});
+  const [pulling, setPulling] = useState<ModelRole | null>(null);
+
+  const patchSlot = (role: ModelRole, part: Partial<RoleSlot>) =>
+    setDraft({ ...draft, slots: { ...draft.slots, [role]: { ...draft.slots[role], ...part } } });
+
+  const pull = async (role: ModelRole) => {
+    const proto = draft.slots[role].protocol;
+    setPulling(role);
+    try {
+      const ids = await fetchModelList(proto, draft.baseUrl, draft.apiKey);
+      setLists((s) => ({ ...s, [proto]: ids }));
+      toast(`拉取到 ${ids.length} 个模型，请在下拉框中选择`, "ok");
+    } catch (e) {
+      toast(errMsg(e), "err");
+    } finally {
+      setPulling(null);
+    }
+  };
+
   return (
     <div className="mrow-editor">
       <Row gap={12}>
-        <div style={{ flex: 1.2 }}>
-          <Field label="显示名称">
+        <div style={{ flex: 1 }}>
+          <Field label="服务商名称">
             <input
               className="input"
-              placeholder="例如：中转A · GPT-Image"
-              value={card.name}
-              onChange={(e) => setCard({ ...card, name: e.target.value })}
+              placeholder="例如：中转A / 智谱官方"
+              value={draft.name}
+              onChange={(e) => setDraft({ ...draft, name: e.target.value })}
             />
           </Field>
         </div>
-        <div style={{ flex: 1 }}>
-          <Field label="协议">
-            <select
-              className="select"
-              value={card.protocol}
-              onChange={(e) => setCard({ ...card, protocol: e.target.value as ModelCard["protocol"] })}
-            >
-              {PROTOCOLS[role].map((p) => (
-                <option key={p.value} value={p.value}>
-                  {p.label}
-                </option>
-              ))}
-            </select>
+        <div style={{ flex: 1.6 }}>
+          <Field label="Base URL">
+            <input
+              className="input"
+              placeholder="https://api.xxx.com/v1（Gemini 官方可留空）"
+              value={draft.baseUrl}
+              onChange={(e) => setDraft({ ...draft, baseUrl: e.target.value.trim() })}
+            />
           </Field>
         </div>
       </Row>
-      <Field label="Base URL">
-        <input
-          className="input"
-          placeholder={BASE_PLACEHOLDER[card.protocol] ?? "https://…"}
-          value={card.baseUrl}
-          onChange={(e) => setCard({ ...card, baseUrl: e.target.value.trim() })}
-        />
-      </Field>
       <Field label="API Key">
         <input
           className="input"
           type="password"
-          value={card.apiKey}
-          onChange={(e) => setCard({ ...card, apiKey: e.target.value.trim() })}
+          value={draft.apiKey}
+          onChange={(e) => setDraft({ ...draft, apiKey: e.target.value.trim() })}
         />
       </Field>
-      <Row gap={12}>
-        <div style={{ flex: 1.4 }}>
-          <Field label="模型名称">
-            <input
-              className="input"
-              placeholder={role === "chat" ? "deepseek-chat / glm-4.6v …" : role === "image" ? "gpt-image-1 / seedream-4.5 …" : "cogvideox-3 / Wan2.2-T2V …"}
-              value={card.model}
-              onChange={(e) => setCard({ ...card, model: e.target.value.trim() })}
-            />
-          </Field>
-        </div>
-        {role === "image" ? (
-          <div style={{ flex: 1 }}>
-            <Field label="默认尺寸">
+
+      {ROLES.map((role) => {
+        const slot = draft.slots[role];
+        const list = lists[slot.protocol] ?? [];
+        return (
+          <div key={role} className="pe-slot">
+            <div className="pe-slot-head">
+              <span className="pc-role-ic">{ROLE_ICON[role]}</span>
+              {ROLE_LABEL[role]}
+              <span className="pe-slot-hint">留空 = 该服务商不提供此用途</span>
+            </div>
+            <Row gap={10}>
               <select
                 className="select"
-                value={card.size ?? "1024x1024"}
-                onChange={(e) => setCard({ ...card, size: e.target.value })}
+                style={{ flex: 1 }}
+                title="协议"
+                value={slot.protocol}
+                onChange={(e) => patchSlot(role, { protocol: e.target.value as AnyProtocol })}
               >
-                {["1024x1024", "768x1024", "1024x768", "1024x1536", "1536x1024", "auto"].map((s) => (
-                  <option key={s} value={s}>
-                    {s}
+                {PROTOCOLS[role].map((x) => (
+                  <option key={x.value} value={x.value}>
+                    {x.label}
                   </option>
                 ))}
               </select>
-            </Field>
+              <input
+                className="input"
+                style={{ flex: 1.5 }}
+                placeholder={MODEL_PLACEHOLDER[role]}
+                list={`ml-${draft.id}-${slot.protocol}`}
+                value={slot.model}
+                onChange={(e) => patchSlot(role, { model: e.target.value })}
+              />
+              {role === "image" ? (
+                <select
+                  className="select"
+                  style={{ width: 118, flex: "none" }}
+                  title="默认尺寸"
+                  value={slot.size ?? "1024x1024"}
+                  onChange={(e) => patchSlot(role, { size: e.target.value })}
+                >
+                  {["1024x1024", "768x1024", "1024x768", "1024x1536", "1536x1024", "auto"].map((s) => (
+                    <option key={s} value={s}>
+                      {s}
+                    </option>
+                  ))}
+                </select>
+              ) : null}
+              <button
+                className="btn sm"
+                style={{ flex: "none" }}
+                title="从该服务商拉取可用模型列表"
+                disabled={pulling !== null}
+                onClick={() => void pull(role)}
+              >
+                {pulling === role ? <IcLoading size={14} /> : <IcDownload size={14} />} 拉取模型
+              </button>
+            </Row>
+            {list.length ? (
+              <select
+                className="select pe-pick"
+                value=""
+                onChange={(e) => {
+                  if (e.target.value) patchSlot(role, { model: e.target.value });
+                }}
+              >
+                <option value="">从拉取到的 {list.length} 个模型中选择…</option>
+                {list.map((m) => (
+                  <option key={m} value={m}>
+                    {m}
+                  </option>
+                ))}
+              </select>
+            ) : null}
+            <datalist id={`ml-${draft.id}-${slot.protocol}`}>
+              {list.map((m) => (
+                <option key={m} value={m} />
+              ))}
+            </datalist>
           </div>
-        ) : null}
-      </Row>
-      <Row style={{ justifyContent: "flex-end", marginBottom: 10 }}>
+        );
+      })}
+
+      <Row style={{ justifyContent: "flex-end", margin: "12px 0 10px" }}>
         <button className="btn sm" onClick={onCancel}>
           取消
         </button>
         <button className="btn sm primary" onClick={onSave}>
-          保存配置
+          保存服务商
         </button>
       </Row>
     </div>

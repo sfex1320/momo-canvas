@@ -295,40 +295,117 @@
   margin-bottom: 16px;
   line-height: 1.6;
 }
-.model-card {
+/* ---- 服务商卡片 ---- */
+.prov-card {
   border: 1px solid var(--panel-border);
   border-radius: var(--r-lg);
-  padding: 16px 16px 6px;
-  margin-bottom: 14px;
+  padding: 12px 14px 10px;
+  margin-bottom: 12px;
+  background: var(--input-bg);
 }
-.model-card .mc-head {
+.prov-card .pc-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding-bottom: 9px;
+  margin-bottom: 6px;
+  border-bottom: 1px solid var(--panel-border);
+}
+.prov-card .pc-title {
+  flex: 1;
+  min-width: 0;
+}
+.prov-card .pc-title b {
+  display: block;
+  font-size: var(--fs-base);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.prov-card .pc-title span {
+  font-size: 12px;
+  color: var(--text-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: block;
+}
+.pc-role {
   display: flex;
   align-items: center;
   gap: 9px;
-  font-weight: 700;
-  margin-bottom: 12px;
+  padding: 6px 0;
 }
-.model-card .mc-head .kind-ic {
-  width: 30px;
-  height: 30px;
-  border-radius: 9px;
+.pc-role.off {
+  opacity: 0.55;
+}
+.pc-radio-ph {
+  width: 21px;
+  height: 21px;
+  flex: none;
+}
+.pc-role-ic {
+  width: 26px;
+  height: 26px;
+  border-radius: 8px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   background: var(--grad-brand-soft);
   color: var(--accent);
+  flex: none;
+}
+.pc-role-name {
+  font-weight: 600;
+  font-size: var(--fs-sm);
+  width: 64px;
+  flex: none;
+}
+.pc-model {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--fs-sm);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.pc-model.off {
+  color: var(--text-3);
+}
+.pc-proto {
+  font-size: 11.5px;
+  color: var(--text-3);
+  background: var(--hover);
+  border-radius: 99px;
+  padding: 2px 9px;
+  flex: none;
 }
 
-/* 模型配置卡片行 */
-.mrow {
-  display: flex;
-  align-items: center;
-  gap: 11px;
-  padding: 9px 10px;
+/* 服务商编辑器里的角色槽位 */
+.pe-slot {
   border: 1px solid var(--panel-border);
   border-radius: var(--r-md);
-  margin-bottom: 8px;
+  padding: 10px 12px 12px;
+  margin-bottom: 10px;
+  background: var(--panel);
 }
+.pe-slot-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+  font-size: var(--fs-sm);
+  margin-bottom: 9px;
+}
+.pe-slot-hint {
+  font-size: 11.5px;
+  color: var(--text-3);
+  font-weight: 500;
+}
+.pe-pick {
+  margin-top: 8px;
+}
+
 .mrow-radio {
   width: 21px;
   height: 21px;
@@ -347,20 +424,6 @@
 .mrow-radio.on {
   background: var(--grad-brand);
   border-color: transparent;
-}
-.mrow-name {
-  flex: 1;
-  min-width: 0;
-}
-.mrow-name b {
-  display: block;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.mrow-name span {
-  font-size: 12.5px;
-  color: var(--text-3);
 }
 .mrow-editor {
   border: 1.5px dashed var(--accent);

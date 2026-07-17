@@ -76,6 +76,11 @@
 .mnode.error {
   border-color: var(--danger);
 }
+/* 拖拽贴近时的自动连线预告 */
+.mnode.prox {
+  border-color: var(--accent-2);
+  box-shadow: 0 0 0 4px rgba(154, 107, 255, 0.28), var(--node-shadow);
+}
 
 .mnode-head {
   display: flex;
@@ -146,21 +151,40 @@
   gap: 7px;
 }
 
-/* 端口 */
+/* 端口：外层是 28px 的透明拾取区（好点中），可见的圆点画在 ::before 上。
+   注意不要覆盖 xyflow 自带的 translate 定位 transform，否则圆点会在悬停时跳位 */
 .react-flow__handle.port {
+  width: 28px;
+  height: 28px;
+  background: transparent;
+  border: none;
+  border-radius: 50%;
+  min-width: 0;
+  min-height: 0;
+}
+.react-flow__handle.port::before {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
   width: 13px;
   height: 13px;
+  margin: -6.5px 0 0 -6.5px;
+  border-radius: 50%;
   border: 2.5px solid var(--node-bg);
   box-shadow: 0 0 0 1.5px var(--node-border);
+  transition: transform var(--t-fast);
 }
-.react-flow__handle.port-text {
+.react-flow__handle.port-text::before {
   background: var(--port-text);
 }
-.react-flow__handle.port-image {
+.react-flow__handle.port-image::before {
   background: var(--port-image);
 }
-.react-flow__handle.port:hover {
-  transform: scale(1.35);
+.react-flow__handle.port:hover::before,
+.react-flow__handle.port.connectingto::before,
+.react-flow__handle.port.connectingfrom::before {
+  transform: scale(1.45);
 }
 .port-tag {
   position: absolute;
@@ -402,13 +426,14 @@
   background: var(--panel-border);
 }
 
-/* 画布右下控制簇 */
+/* 画布右下控制簇（横排，MiniMap 叠放其上方，互不遮挡） */
 .view-ctrl {
   position: absolute;
   right: 16px;
   bottom: 18px;
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
+  align-items: center;
   gap: 2px;
   padding: 5px;
   z-index: 60;
@@ -417,7 +442,8 @@
   font-size: 12px;
   color: var(--text-3);
   text-align: center;
-  padding: 3px 0;
+  min-width: 42px;
+  padding: 0 2px;
   user-select: none;
 }
 
