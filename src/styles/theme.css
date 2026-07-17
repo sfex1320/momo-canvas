@@ -1,0 +1,103 @@
+/* ============================================================
+   MOMO 智能画布 — 设计令牌（双主题）
+   主题挂载：<html data-theme="light" | "dark">
+   ============================================================ */
+
+:root {
+  /* 形状 */
+  --r-lg: 18px;
+  --r-md: 12px;
+  --r-sm: 9px;
+  --r-full: 999px;
+
+  /* 字体（整体偏大一档，精致但直观） */
+  --fs-base: 15px;
+  --fs-sm: 13px;
+  --fs-lg: 16.5px;
+  --fs-title: 18px;
+  --font-ui: "Segoe UI Variable Display", "Segoe UI", "PingFang SC",
+    "HarmonyOS Sans SC", "Microsoft YaHei UI", system-ui, sans-serif;
+  --font-mono: "Cascadia Code", "JetBrains Mono", Consolas, monospace;
+
+  /* 动效 */
+  --ease: cubic-bezier(0.22, 1, 0.36, 1);
+  --t-fast: 140ms var(--ease);
+  --t-mid: 240ms var(--ease);
+
+  /* 品牌色（两主题共用） */
+  --accent: #5b8cff;
+  --accent-2: #9a6bff;
+  --accent-3: #47d7ff;
+  --grad-brand: linear-gradient(135deg, #5b8cff 0%, #9a6bff 60%, #c86bff 100%);
+  --grad-brand-soft: linear-gradient(135deg, rgba(91, 140, 255, 0.16), rgba(154, 107, 255, 0.16));
+  --ok: #2fbf8f;
+  --warn: #f5a524;
+  --danger: #f24f6a;
+
+  /* 端口类型色 */
+  --port-text: #9a6bff;
+  --port-image: #37b6ff;
+  --port-video: #ff6fae;
+
+  --tb-h: 46px; /* 标题栏高度 */
+}
+
+/* ---------------- 白色主题 ---------------- */
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bg-app: #eef1f8;
+  --bg-canvas: #f4f6fb;
+  --dot: #c9d2e6;
+
+  --panel: rgba(255, 255, 255, 0.86);
+  --panel-solid: #ffffff;
+  --panel-border: rgba(30, 45, 90, 0.1);
+  --panel-shadow: 0 12px 40px rgba(28, 42, 84, 0.12);
+
+  --node-bg: rgba(255, 255, 255, 0.94);
+  --node-border: rgba(30, 45, 90, 0.12);
+  --node-shadow: 0 6px 24px rgba(28, 42, 84, 0.1);
+
+  --text-1: #1b2438;
+  --text-2: #556181;
+  --text-3: #97a1bd;
+
+  --hover: rgba(30, 60, 140, 0.06);
+  --active: rgba(30, 60, 140, 0.1);
+  --input-bg: rgba(20, 40, 90, 0.045);
+  --input-border: rgba(30, 45, 90, 0.14);
+
+  --edge: #a9b6d6;
+  --selection: rgba(91, 140, 255, 0.1);
+  --titlebar: rgba(255, 255, 255, 0.75);
+}
+
+/* ------------- 深空蓝黑主题（偏蓝、不过黑） ------------- */
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg-app: #161f36;
+  --bg-canvas: #121a2e;
+  --dot: #2a3554;
+
+  --panel: rgba(26, 36, 62, 0.88);
+  --panel-solid: #1c2644;
+  --panel-border: rgba(126, 156, 255, 0.14);
+  --panel-shadow: 0 14px 44px rgba(5, 10, 26, 0.5);
+
+  --node-bg: rgba(27, 37, 66, 0.95);
+  --node-border: rgba(126, 156, 255, 0.16);
+  --node-shadow: 0 8px 28px rgba(5, 10, 26, 0.42);
+
+  --text-1: #e9eefc;
+  --text-2: #a6b2d6;
+  --text-3: #6d7a9f;
+
+  --hover: rgba(140, 165, 255, 0.09);
+  --active: rgba(140, 165, 255, 0.14);
+  --input-bg: rgba(8, 14, 32, 0.4);
+  --input-border: rgba(126, 156, 255, 0.18);
+
+  --edge: #3d4c78;
+  --selection: rgba(91, 140, 255, 0.14);
+  --titlebar: rgba(20, 28, 50, 0.78);
+}

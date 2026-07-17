@@ -1,0 +1,39 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- MOMO 智能画布 应用图标 -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1024" y2="1024" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#5B8CFF"/>
+      <stop offset="0.58" stop-color="#9A6BFF"/>
+      <stop offset="1" stop-color="#C86BFF"/>
+    </linearGradient>
+    <radialGradient id="hl" cx="0.28" cy="0.18" r="0.9">
+      <stop stop-color="#FFFFFF" stop-opacity="0.22"/>
+      <stop offset="0.55" stop-color="#FFFFFF" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <rect width="1024" height="1024" rx="232" fill="url(#bg)"/>
+  <rect width="1024" height="1024" rx="232" fill="url(#hl)"/>
+
+  <!-- 背景细点阵：画布隐喻 -->
+  <g fill="#FFFFFF" opacity="0.16">
+    <circle cx="200" cy="240" r="10"/>
+    <circle cx="360" cy="200" r="10"/>
+    <circle cx="200" cy="820" r="10"/>
+    <circle cx="828" cy="796" r="10"/>
+    <circle cx="856" cy="560" r="10"/>
+  </g>
+
+  <!-- M：连续笔触，端点即节点 -->
+  <path
+    d="M300 700 V 392 c0 -24 28 -36 45 -19 l 135 129 c 18 17 47 17 65 0 l 135 -129 c 17 -17 45 -5 45 19 V 700"
+    stroke="#FFFFFF" stroke-width="76" stroke-linecap="round" stroke-linejoin="round"/>
+
+  <!-- 端口节点 -->
+  <circle cx="300" cy="700" r="30" fill="#FFFFFF"/>
+  <circle cx="725" cy="700" r="30" fill="#FFFFFF"/>
+
+  <!-- AI 火花 -->
+  <path d="M782 172 l26 62 62 26 -62 26 -26 62 -26 -62 -62 -26 62 -26 26 -62Z" fill="#FFFFFF"/>
+  <circle cx="878" cy="352" r="16" fill="#FFFFFF" opacity="0.9"/>
+</svg>
