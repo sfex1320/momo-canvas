@@ -14,16 +14,19 @@ type ComfyState = {
   test: (host: string) => Promise<boolean>;
 };
 
+let initOnce: Promise<void> | null = null;
+
 export const useComfy = create<ComfyState>((set, get) => ({
   templates: [],
   online: "unknown",
   onlineInfo: "",
   loaded: false,
 
-  init: async () => {
-    const saved = await loadJSON<ComfyTemplate[]>("comfy-templates.json", "v1");
-    set({ templates: saved ?? [], loaded: true });
-  },
+  init: () =>
+    (initOnce ??= (async () => {
+      const saved = await loadJSON<ComfyTemplate[]>("comfy-templates.json", "v1");
+      set({ templates: saved ?? [], loaded: true });
+    })()),
 
   upsert: (tpl) => {
     const list = get().templates.filter((t) => t.id !== tpl.id);

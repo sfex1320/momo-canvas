@@ -13,11 +13,14 @@ function applyTheme(theme: Settings["theme"]) {
   document.documentElement.setAttribute("data-theme", theme);
 }
 
+let initOnce: Promise<void> | null = null;
+
 export const useSettings = create<SettingsState>((set, get) => ({
   settings: DEFAULT_SETTINGS,
   loaded: false,
 
-  init: async () => {
+  init: () =>
+    (initOnce ??= (async () => {
     const saved = await loadJSON<Partial<Settings>>("settings.json", "v1");
     const merged: Settings = { ...DEFAULT_SETTINGS };
     if (saved) {
@@ -30,7 +33,7 @@ export const useSettings = create<SettingsState>((set, get) => ({
     }
     applyTheme(merged.theme);
     set({ settings: merged, loaded: true });
-  },
+    })()),
 
   update: (key, value) => {
     const next = { ...get().settings, [key]: value };

@@ -31,7 +31,7 @@ export function GalleryDock() {
 
   const locate = (nodeId?: string) => {
     if (!nodeId) return;
-    void fitView({ nodes: [{ id: nodeId }], duration: 400, padding: 0.5 });
+    void fitView({ nodes: [{ id: nodeId }], duration: 400, padding: 0.5, maxZoom: 1 });
   };
 
   return (

@@ -87,6 +87,7 @@ type BoardState = {
 };
 
 let saveTimer: ReturnType<typeof setTimeout> | null = null;
+let initOnce: Promise<void> | null = null;
 
 function makeBoard(name: string): BoardRecord {
   return { meta: { id: uid(8), name, updatedAt: Date.now() }, nodes: [], edges: [] };
@@ -133,7 +134,9 @@ export const useBoard = create<BoardState>((set, get) => {
     nodes: [],
     edges: [],
 
-    init: async () => {
+    // StrictMode 下 App 会挂载两次：init 必须单例，否则并发创建两个画布互相覆盖
+    init: () =>
+      (initOnce ??= (async () => {
       const saved = await loadJSON<PersistShape>("boards.json", "v1");
       if (saved && saved.order?.length && saved.boards) {
         const activeId = saved.boards[saved.activeId] ? saved.activeId : saved.order[0];
@@ -150,7 +153,7 @@ export const useBoard = create<BoardState>((set, get) => {
       }
       const b = makeBoard("画布 1");
       set({ boards: { [b.meta.id]: b }, order: [b.meta.id], activeId: b.meta.id, nodes: [], edges: [], loaded: true });
-    },
+      })()),
 
     onNodesChange: (changes) => {
       set({ nodes: applyNodeChanges(changes, get().nodes) });

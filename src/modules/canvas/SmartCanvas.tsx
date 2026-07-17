@@ -53,8 +53,10 @@ export function SmartCanvas() {
   const duplicateNode = useBoard((s) => s.duplicateNode);
 
   const zen = useUi((s) => s.zen);
+  const galleryOpen = useUi((s) => s.galleryOpen);
   const toggleZen = useUi((s) => s.toggleZen);
   const setAddMenu = useUi((s) => s.setAddMenu);
+  const dockShift = galleryOpen && !zen ? 304 : 0;
 
   const { screenToFlowPosition, zoomIn, zoomOut, fitView } = useReactFlow();
   const [zoomPct, setZoomPct] = useState(100);
@@ -167,7 +169,7 @@ export function SmartCanvas() {
         e.preventDefault();
         for (const n of useBoard.getState().nodes.filter((n) => n.selected)) duplicateNode(n.id);
       } else if (e.key.toLowerCase() === "f" && !e.ctrlKey && !e.metaKey) {
-        void fitView({ duration: 300, padding: 0.15 });
+        void fitView({ duration: 300, padding: 0.15, maxZoom: 1 });
       }
     };
     window.addEventListener("keydown", onKey);
@@ -199,6 +201,7 @@ export function SmartCanvas() {
         minZoom={0.15}
         maxZoom={2.5}
         fitView
+        fitViewOptions={{ maxZoom: 1, padding: 0.2 }}
         panOnDrag={[1, 2]}
         selectionOnDrag
         selectionMode={SelectionMode.Partial}
@@ -210,7 +213,9 @@ export function SmartCanvas() {
         onMoveEnd={(_, vp) => setZoomPct(Math.round(vp.zoom * 100))}
       >
         <Background variant={BackgroundVariant.Dots} gap={24} size={1.6} color="var(--dot)" />
-        {!zen && nodes.length > 3 ? <MiniMap pannable zoomable position="bottom-right" style={{ marginBottom: 120 }} /> : null}
+        {!zen && nodes.length > 3 ? (
+          <MiniMap pannable zoomable position="bottom-right" style={{ marginBottom: 120, marginRight: 8 + dockShift }} />
+        ) : null}
       </ReactFlow>
 
       {nodes.length === 0 ? (
@@ -249,7 +254,7 @@ export function SmartCanvas() {
       ) : null}
 
       {!zen ? (
-        <div className="view-ctrl glass">
+        <div className="view-ctrl glass" style={{ right: 16 + dockShift }}>
           <button className="icon-btn" title="放大" onClick={() => void zoomIn({ duration: 150 })}>
             <IcPlus size={17} />
           </button>
@@ -257,7 +262,11 @@ export function SmartCanvas() {
           <button className="icon-btn" title="缩小" onClick={() => void zoomOut({ duration: 150 })}>
             <IcMin size={17} />
           </button>
-          <button className="icon-btn" title="适应全部 (F)" onClick={() => void fitView({ duration: 300, padding: 0.15 })}>
+          <button
+            className="icon-btn"
+            title="适应全部 (F)"
+            onClick={() => void fitView({ duration: 300, padding: 0.15, maxZoom: 1 })}
+          >
             <IcFit size={17} />
           </button>
         </div>

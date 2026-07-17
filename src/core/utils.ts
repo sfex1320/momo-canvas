@@ -42,7 +42,7 @@ export function dataUrlToBlob(dataUrl: string): Blob {
 }
 
 /** 任意图片源（url / dataURL）→ dataURL */
-export async function toDataUrl(src: string, fetcher: typeof fetch = fetch): Promise<string> {
+export async function toDataUrl(src: string, fetcher: typeof fetch = (...args) => fetch(...args)): Promise<string> {
   if (src.startsWith("data:")) return src;
   const resp = await fetcher(src);
   const blob = await resp.blob();
