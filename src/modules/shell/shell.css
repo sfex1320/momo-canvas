@@ -319,6 +319,57 @@
   color: var(--accent);
 }
 
+/* 模型配置卡片行 */
+.mrow {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 9px 10px;
+  border: 1px solid var(--panel-border);
+  border-radius: var(--r-md);
+  margin-bottom: 8px;
+}
+.mrow-radio {
+  width: 21px;
+  height: 21px;
+  border-radius: 50%;
+  border: 2px solid var(--input-border);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  flex: none;
+  transition: background var(--t-fast), border-color var(--t-fast);
+}
+.mrow-radio:hover {
+  border-color: var(--accent);
+}
+.mrow-radio.on {
+  background: var(--grad-brand);
+  border-color: transparent;
+}
+.mrow-name {
+  flex: 1;
+  min-width: 0;
+}
+.mrow-name b {
+  display: block;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.mrow-name span {
+  font-size: 12.5px;
+  color: var(--text-3);
+}
+.mrow-editor {
+  border: 1.5px dashed var(--accent);
+  border-radius: var(--r-md);
+  padding: 14px 14px 4px;
+  margin-bottom: 10px;
+  background: var(--grad-brand-soft);
+}
+
 /* 主题预览卡 */
 .theme-cards {
   display: flex;

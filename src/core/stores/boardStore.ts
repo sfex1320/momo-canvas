@@ -11,6 +11,7 @@ import {
 import type { AppNode, BoardMeta, NodeKind, PortType } from "../types";
 import { uid } from "../utils";
 import { loadJSON, saveJSON } from "../persist";
+import { STYLE_CATEGORIES } from "../stylePresets";
 
 /* ---------- 节点默认数据 ---------- */
 export function defaultData(kind: NodeKind): Record<string, unknown> {
@@ -27,10 +28,20 @@ export function defaultData(kind: NodeKind): Record<string, unknown> {
       return { status: "idle", prompt: "" };
     case "comfy":
       return { status: "idle", params: {}, results: [], picked: 0 };
+    case "caption":
+      return { status: "idle", mode: "prompt", result: "" };
+    case "llmText":
+      return { status: "idle", op: "optimize", custom: "", result: "" };
+    case "combine":
+      return { status: "idle", separator: "comma", extra: "" };
+    case "stylePreset":
+      return { status: "idle", category: STYLE_CATEGORIES[0], selected: [] };
+    case "note":
+      return { status: "idle", text: "", color: "yellow" };
   }
 }
 
-/* ---------- 端口类型 ---------- */
+/* ---------- 端口能力 ---------- */
 export function outPortType(kind: NodeKind): PortType | null {
   switch (kind) {
     case "image":
@@ -39,11 +50,31 @@ export function outPortType(kind: NodeKind): PortType | null {
       return "image";
     case "prompt":
     case "chat":
+    case "caption":
+    case "llmText":
+    case "combine":
+    case "stylePreset":
       return "text";
     case "videoGen":
+    case "note":
       return null;
   }
 }
+
+/** 各节点的输入端口能力（自动连线 / 快速添加过滤共用） */
+export const NODE_INPUTS: Record<NodeKind, { text?: boolean; image?: boolean }> = {
+  image: {},
+  prompt: {},
+  stylePreset: {},
+  note: {},
+  chat: { text: true, image: true },
+  imageGen: { text: true, image: true },
+  videoGen: { text: true, image: true },
+  comfy: { text: true, image: true },
+  caption: { image: true },
+  llmText: { text: true },
+  combine: { text: true },
+};
 
 export const NODE_LABEL: Record<NodeKind, string> = {
   image: "图片",
@@ -52,6 +83,11 @@ export const NODE_LABEL: Record<NodeKind, string> = {
   imageGen: "生成图像",
   videoGen: "生成视频",
   comfy: "ComfyUI",
+  caption: "反推描述",
+  llmText: "文本处理",
+  combine: "拼接文本",
+  stylePreset: "风格预设",
+  note: "备注",
 };
 
 type BoardRecord = { meta: BoardMeta; nodes: AppNode[]; edges: Edge[] };
@@ -62,6 +98,8 @@ type PersistShape = {
   boards: Record<string, BoardRecord>;
 };
 
+type Snapshot = { nodes: AppNode[]; edges: Edge[] };
+
 type BoardState = {
   loaded: boolean;
   boards: Record<string, BoardRecord>;
@@ -69,6 +107,8 @@ type BoardState = {
   activeId: string;
   nodes: AppNode[];
   edges: Edge[];
+  canUndo: boolean;
+  canRedo: boolean;
 
   init: () => Promise<void>;
   onNodesChange: (changes: NodeChange<AppNode>[]) => void;
@@ -79,6 +119,11 @@ type BoardState = {
   removeNode: (id: string) => void;
   duplicateNode: (id: string) => void;
   connectNodes: (source: string, target: string, targetHandle: string) => void;
+  /** 拖拽结束后：贴近左右两侧的节点自动连线 */
+  proximityConnect: (id: string) => void;
+  snapshot: () => void;
+  undo: () => void;
+  redo: () => void;
 
   newBoard: () => void;
   switchBoard: (id: string) => void;
@@ -88,6 +133,9 @@ type BoardState = {
 
 let saveTimer: ReturnType<typeof setTimeout> | null = null;
 let initOnce: Promise<void> | null = null;
+let past: Snapshot[] = [];
+let future: Snapshot[] = [];
+let lastSnapAt = 0;
 
 function makeBoard(name: string): BoardRecord {
   return { meta: { id: uid(8), name, updatedAt: Date.now() }, nodes: [], edges: [] };
@@ -126,6 +174,23 @@ export const useBoard = create<BoardState>((set, get) => {
     }, 700);
   };
 
+  const clearHistory = () => {
+    past = [];
+    future = [];
+    set({ canUndo: false, canRedo: false });
+  };
+
+  const snapshot = () => {
+    // 同一动作可能触发多个变更回调（如删节点连带删边），300ms 内合并为一步
+    const now = Date.now();
+    if (now - lastSnapAt < 300) return;
+    lastSnapAt = now;
+    past.push({ nodes: get().nodes, edges: get().edges });
+    if (past.length > 60) past.shift();
+    future = [];
+    set({ canUndo: true, canRedo: false });
+  };
+
   return {
     loaded: false,
     boards: {},
@@ -133,46 +198,66 @@ export const useBoard = create<BoardState>((set, get) => {
     activeId: "",
     nodes: [],
     edges: [],
+    canUndo: false,
+    canRedo: false,
 
     // StrictMode 下 App 会挂载两次：init 必须单例，否则并发创建两个画布互相覆盖
     init: () =>
       (initOnce ??= (async () => {
-      const saved = await loadJSON<PersistShape>("boards.json", "v1");
-      if (saved && saved.order?.length && saved.boards) {
-        const activeId = saved.boards[saved.activeId] ? saved.activeId : saved.order[0];
-        const cur = saved.boards[activeId];
-        set({
-          boards: saved.boards,
-          order: saved.order,
-          activeId,
-          nodes: sanitizeNodes(cur?.nodes ?? []),
-          edges: cur?.edges ?? [],
-          loaded: true,
-        });
-        return;
-      }
-      const b = makeBoard("画布 1");
-      set({ boards: { [b.meta.id]: b }, order: [b.meta.id], activeId: b.meta.id, nodes: [], edges: [], loaded: true });
+        const saved = await loadJSON<PersistShape>("boards.json", "v1");
+        if (saved && saved.order?.length && saved.boards) {
+          const activeId = saved.boards[saved.activeId] ? saved.activeId : saved.order[0];
+          const cur = saved.boards[activeId];
+          set({
+            boards: saved.boards,
+            order: saved.order,
+            activeId,
+            nodes: sanitizeNodes(cur?.nodes ?? []),
+            edges: cur?.edges ?? [],
+            loaded: true,
+          });
+          return;
+        }
+        const b = makeBoard("画布 1");
+        set({ boards: { [b.meta.id]: b }, order: [b.meta.id], activeId: b.meta.id, nodes: [], edges: [], loaded: true });
       })()),
 
+    snapshot,
+
+    undo: () => {
+      const snap = past.pop();
+      if (!snap) return;
+      future.push({ nodes: get().nodes, edges: get().edges });
+      set({ nodes: snap.nodes, edges: snap.edges, canUndo: past.length > 0, canRedo: true });
+      persist();
+    },
+
+    redo: () => {
+      const snap = future.pop();
+      if (!snap) return;
+      past.push({ nodes: get().nodes, edges: get().edges });
+      set({ nodes: snap.nodes, edges: snap.edges, canUndo: true, canRedo: future.length > 0 });
+      persist();
+    },
+
     onNodesChange: (changes) => {
+      if (changes.some((c) => c.type === "remove")) snapshot();
       set({ nodes: applyNodeChanges(changes, get().nodes) });
       persist();
     },
 
     onEdgesChange: (changes) => {
+      if (changes.some((c) => c.type === "remove")) snapshot();
       set({ edges: applyEdgeChanges(changes, get().edges) });
       persist();
     },
 
     onConnect: (conn) => {
+      snapshot();
       const src = get().nodes.find((n) => n.id === conn.source);
       const port = src ? outPortType(src.type as NodeKind) : null;
       set({
-        edges: addEdge(
-          { ...conn, id: `e_${uid(8)}`, className: edgeClassFor(port) },
-          get().edges,
-        ),
+        edges: addEdge({ ...conn, id: `e_${uid(8)}`, className: edgeClassFor(port) }, get().edges),
       });
       persist();
     },
@@ -189,7 +274,39 @@ export const useBoard = create<BoardState>((set, get) => {
       persist();
     },
 
+    proximityConnect: (id) => {
+      const { nodes, edges, connectNodes } = get();
+      const moved = nodes.find((n) => n.id === id);
+      if (!moved?.measured?.width) return;
+      const mb = { x: moved.position.x, y: moved.position.y, w: moved.measured.width ?? 0, h: moved.measured.height ?? 0 };
+      let best: { up: AppNode; down: AppNode; dist: number } | null = null;
+      for (const other of nodes) {
+        if (other.id === id || !other.measured?.width) continue;
+        const ob = { x: other.position.x, y: other.position.y, w: other.measured.width ?? 0, h: other.measured.height ?? 0 };
+        const vOverlap = Math.min(mb.y + mb.h, ob.y + ob.h) - Math.max(mb.y, ob.y);
+        if (vOverlap < 30) continue;
+        const gapFromLeft = mb.x - (ob.x + ob.w); // other 在左侧 → other 为上游
+        if (gapFromLeft >= -14 && gapFromLeft <= 90 && (!best || gapFromLeft < best.dist)) {
+          best = { up: other, down: moved, dist: Math.abs(gapFromLeft) };
+        }
+        const gapFromRight = ob.x - (mb.x + mb.w); // other 在右侧 → moved 为上游
+        if (gapFromRight >= -14 && gapFromRight <= 90 && (!best || gapFromRight < best.dist)) {
+          best = { up: moved, down: other, dist: Math.abs(gapFromRight) };
+        }
+      }
+      if (!best) return;
+      const pt = outPortType(best.up.type as NodeKind);
+      if (!pt || pt === "video") return;
+      const ins = NODE_INPUTS[best.down.type as NodeKind];
+      const handle = pt === "image" ? (ins.image ? "in-image" : null) : ins.text ? "in-text" : null;
+      if (!handle) return;
+      if (edges.some((e) => e.source === best!.up.id && e.target === best!.down.id && e.targetHandle === handle)) return;
+      snapshot();
+      connectNodes(best.up.id, best.down.id, handle);
+    },
+
     addNode: (kind, pos, init) => {
+      snapshot();
       const id = `n_${uid(8)}`;
       const node: AppNode = {
         id,
@@ -211,6 +328,7 @@ export const useBoard = create<BoardState>((set, get) => {
     },
 
     removeNode: (id) => {
+      snapshot();
       set({
         nodes: get().nodes.filter((n) => n.id !== id),
         edges: get().edges.filter((e) => e.source !== id && e.target !== id),
@@ -221,6 +339,7 @@ export const useBoard = create<BoardState>((set, get) => {
     duplicateNode: (id) => {
       const src = get().nodes.find((n) => n.id === id);
       if (!src) return;
+      snapshot();
       const d = { ...(src.data as Record<string, unknown>) };
       if (d.status === "running") d.status = "idle";
       const copy: AppNode = {
@@ -238,6 +357,7 @@ export const useBoard = create<BoardState>((set, get) => {
       const { boards, order, activeId, nodes, edges } = get();
       const stash = { ...boards, [activeId]: { ...boards[activeId], nodes, edges } };
       const b = makeBoard(`画布 ${order.length + 1}`);
+      clearHistory();
       set({
         boards: { ...stash, [b.meta.id]: b },
         order: [...order, b.meta.id],
@@ -253,6 +373,7 @@ export const useBoard = create<BoardState>((set, get) => {
       if (id === activeId || !boards[id]) return;
       const stash = { ...boards, [activeId]: { ...boards[activeId], nodes, edges } };
       const next = stash[id];
+      clearHistory();
       set({ boards: stash, activeId: id, nodes: sanitizeNodes(next.nodes), edges: next.edges });
       persist();
     },
@@ -273,6 +394,7 @@ export const useBoard = create<BoardState>((set, get) => {
       if (id === activeId) {
         const nid = nextOrder[0];
         const nb = nextBoards[nid];
+        clearHistory();
         set({
           boards: nextBoards,
           order: nextOrder,

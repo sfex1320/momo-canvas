@@ -2,6 +2,7 @@
  * 智能画布 — 单一画布范式：
  *  左键框选 · 中/右键或空格平移 · 滚轮缩放 · 双击空白添加节点
  *  拖线到空白快速建节点 · 拖入图片文件 · Ctrl+V 粘贴 · Tab 沉浸模式
+ *  拖拽贴近节点左右两侧自动连线 · Ctrl+Z/Y 撤销重做
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
@@ -19,13 +20,13 @@ import {
 import "@xyflow/react/dist/style.css";
 import "./canvas.css";
 
-import { useBoard, outPortType } from "../../core/stores/boardStore";
+import { useBoard, outPortType, NODE_INPUTS } from "../../core/stores/boardStore";
 import { useUi } from "../../core/stores/uiStore";
-import type { NodeKind } from "../../core/types";
+import type { AppNode, NodeKind } from "../../core/types";
 import { fileToDataUrl } from "../../core/utils";
 import { NODE_CATALOG } from "./nodeCatalog";
 import { AddNodeMenu } from "./AddNodeMenu";
-import { IcFit, IcLogo, IcPlus, IcMin } from "../../ui/icons";
+import { IcFit, IcLogo, IcPlus, IcMin, IcUndo, IcRedo } from "../../ui/icons";
 
 import { ImageNode } from "./nodes/ImageNode";
 import { PromptNode } from "./nodes/PromptNode";
@@ -33,6 +34,11 @@ import { ChatNode } from "./nodes/ChatNode";
 import { ImageGenNode } from "./nodes/ImageGenNode";
 import { VideoGenNode } from "./nodes/VideoGenNode";
 import { ComfyNode } from "./nodes/ComfyNode";
+import { CaptionNode } from "./nodes/CaptionNode";
+import { LlmTextNode } from "./nodes/LlmTextNode";
+import { CombineNode } from "./nodes/CombineNode";
+import { StylePresetNode } from "./nodes/StylePresetNode";
+import { NoteNode } from "./nodes/NoteNode";
 
 const nodeTypes: NodeTypes = {
   image: ImageNode,
@@ -41,6 +47,11 @@ const nodeTypes: NodeTypes = {
   imageGen: ImageGenNode,
   videoGen: VideoGenNode,
   comfy: ComfyNode,
+  caption: CaptionNode,
+  llmText: LlmTextNode,
+  combine: CombineNode,
+  stylePreset: StylePresetNode,
+  note: NoteNode,
 };
 
 export function SmartCanvas() {
@@ -51,6 +62,12 @@ export function SmartCanvas() {
   const onConnect = useBoard((s) => s.onConnect);
   const addNode = useBoard((s) => s.addNode);
   const duplicateNode = useBoard((s) => s.duplicateNode);
+  const proximityConnect = useBoard((s) => s.proximityConnect);
+  const snapshot = useBoard((s) => s.snapshot);
+  const undo = useBoard((s) => s.undo);
+  const redo = useBoard((s) => s.redo);
+  const canUndo = useBoard((s) => s.canUndo);
+  const canRedo = useBoard((s) => s.canRedo);
 
   const zen = useUi((s) => s.zen);
   const galleryOpen = useUi((s) => s.galleryOpen);
@@ -137,6 +154,8 @@ export function SmartCanvas() {
     const onPaste = async (e: ClipboardEvent) => {
       const el = document.activeElement as HTMLElement | null;
       if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable)) return;
+      // 资产库等弹层打开时不劫持粘贴
+      if (useUi.getState().settingsOpen || useUi.getState().templateMgrOpen) return;
       const center = screenToFlowPosition({ x: window.innerWidth / 2, y: window.innerHeight / 2 });
       const items = Array.from(e.clipboardData?.items ?? []);
       for (const it of items) {
@@ -162,19 +181,26 @@ export function SmartCanvas() {
       const el = document.activeElement as HTMLElement | null;
       if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT" || el.isContentEditable))
         return;
+      const mod = e.ctrlKey || e.metaKey;
       if (e.key === "Tab") {
         e.preventDefault();
         toggleZen();
-      } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "d") {
+      } else if (mod && e.key.toLowerCase() === "z" && !e.shiftKey) {
+        e.preventDefault();
+        undo();
+      } else if ((mod && e.key.toLowerCase() === "y") || (mod && e.shiftKey && e.key.toLowerCase() === "z")) {
+        e.preventDefault();
+        redo();
+      } else if (mod && e.key.toLowerCase() === "d") {
         e.preventDefault();
         for (const n of useBoard.getState().nodes.filter((n) => n.selected)) duplicateNode(n.id);
-      } else if (e.key.toLowerCase() === "f" && !e.ctrlKey && !e.metaKey) {
+      } else if (e.key.toLowerCase() === "f" && !mod) {
         void fitView({ duration: 300, padding: 0.15, maxZoom: 1 });
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [toggleZen, duplicateNode, fitView]);
+  }, [toggleZen, duplicateNode, fitView, undo, redo]);
 
   /* ---- 坞点击添加（画布中心偏移） ---- */
   const addAtCenter = (kind: NodeKind) => {
@@ -185,6 +211,15 @@ export function SmartCanvas() {
     addNode(kind, pos);
   };
 
+  /* ---- 拖拽结束：贴近自动连线 ---- */
+  const onNodeDragStop = useCallback(
+    (_: unknown, node: AppNode) => {
+      if (NODE_INPUTS[node.type as NodeKind] || outPortType(node.type as NodeKind)) proximityConnect(node.id);
+    },
+    [proximityConnect],
+  );
+
+  let lastGroup = "";
   return (
     <div className="canvas-wrap" ref={wrapRef} onDrop={(e) => void onDrop(e)} onDragOver={(e) => e.preventDefault()}>
       <ReactFlow
@@ -196,6 +231,8 @@ export function SmartCanvas() {
         onConnect={onConnect}
         onConnectEnd={onConnectEnd}
         onPaneClick={onPaneClick}
+        onNodeDragStart={() => snapshot()}
+        onNodeDragStop={onNodeDragStop}
         isValidConnection={isValidConnection}
         proOptions={{ hideAttribution: true }}
         minZoom={0.15}
@@ -228,33 +265,48 @@ export function SmartCanvas() {
             双击空白处 或 从下方工具坞添加节点开始创作
             <br />
             <kbd>拖入图片</kbd> <kbd>Ctrl+V 粘贴</kbd> <kbd>中/右键 平移</kbd> <kbd>滚轮 缩放</kbd> <kbd>Tab 沉浸</kbd>
+            <br />
+            把节点拖到另一个节点的左/右侧贴近松手，会自动连线
           </p>
         </div>
       ) : null}
 
       {!zen ? (
         <div className="dock glass">
-          {NODE_CATALOG.map((i) => (
-            <div
-              key={i.kind}
-              className="dock-item"
-              title={`${i.desc}（点击添加，或拖到画布任意位置）`}
-              draggable
-              onDragStart={(e) => {
-                e.dataTransfer.setData("momo/node-kind", i.kind);
-                e.dataTransfer.effectAllowed = "copy";
-              }}
-              onClick={() => addAtCenter(i.kind)}
-            >
-              <span className="di-ic">{i.icon}</span>
-              {i.label}
-            </div>
-          ))}
+          {NODE_CATALOG.map((i) => {
+            const sep = i.group !== lastGroup && lastGroup !== "";
+            lastGroup = i.group;
+            return (
+              <div key={i.kind} style={{ display: "contents" }}>
+                {sep ? <div className="dock-sep" /> : null}
+                <div
+                  className="dock-item"
+                  title={`${i.desc}（点击添加，或拖到画布任意位置）`}
+                  draggable
+                  onDragStart={(e) => {
+                    e.dataTransfer.setData("momo/node-kind", i.kind);
+                    e.dataTransfer.effectAllowed = "copy";
+                  }}
+                  onClick={() => addAtCenter(i.kind)}
+                >
+                  <span className="di-ic">{i.icon}</span>
+                  {i.label}
+                </div>
+              </div>
+            );
+          })}
         </div>
       ) : null}
 
       {!zen ? (
         <div className="view-ctrl glass" style={{ right: 16 + dockShift }}>
+          <button className="icon-btn" title="撤销 (Ctrl+Z)" disabled={!canUndo} style={{ opacity: canUndo ? 1 : 0.35 }} onClick={undo}>
+            <IcUndo size={17} />
+          </button>
+          <button className="icon-btn" title="重做 (Ctrl+Y)" disabled={!canRedo} style={{ opacity: canRedo ? 1 : 0.35 }} onClick={redo}>
+            <IcRedo size={17} />
+          </button>
+          <div style={{ height: 1, background: "var(--panel-border)", margin: "3px 4px" }} />
           <button className="icon-btn" title="放大" onClick={() => void zoomIn({ duration: 150 })}>
             <IcPlus size={17} />
           </button>

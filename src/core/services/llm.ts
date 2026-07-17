@@ -1,8 +1,10 @@
 /**
- * 对话模型服务 — OpenAI 兼容 /chat/completions
- * 支持：流式输出、多模态图片输入、思考内容（reasoning_content / reasoning）
+ * 对话模型服务 — 多协议适配（流式 + 多模态 + 思考内容）
+ *  - openai     OpenAI 兼容 /chat/completions（DeepSeek/GLM/Qwen/中转站等）
+ *  - anthropic  Claude /v1/messages
+ *  - gemini     Google /v1beta/models/{model}:streamGenerateContent
  */
-import type { ChatModelCfg, ChatMsg } from "../types";
+import type { ChatMsg, ModelCard } from "../types";
 import { xfetch, trimBase, readErrorBody } from "./http";
 
 export type StreamCallbacks = {
@@ -11,61 +13,69 @@ export type StreamCallbacks = {
   signal?: AbortSignal;
 };
 
-type ApiMsgPart =
-  | { type: "text"; text: string }
-  | { type: "image_url"; image_url: { url: string } };
+type StreamOpts = StreamCallbacks & { system?: string };
+type StreamResult = { text: string; reasoning: string };
 
-type ApiMsg = { role: string; content: string | ApiMsgPart[] };
-
-function toApiMessages(system: string | undefined, msgs: ChatMsg[]): ApiMsg[] {
-  const out: ApiMsg[] = [];
-  if (system) out.push({ role: "system", content: system });
-  for (const m of msgs) {
-    if (m.images?.length) {
-      const parts: ApiMsgPart[] = m.images.map((url) => ({ type: "image_url", image_url: { url } }));
-      parts.push({ type: "text", text: m.text });
-      out.push({ role: m.role, content: parts });
-    } else {
-      out.push({ role: m.role, content: m.text });
-    }
-  }
-  return out;
-}
-
-export async function chatStream(
-  cfg: ChatModelCfg,
-  msgs: ChatMsg[],
-  opts: StreamCallbacks & { system?: string } = {},
-): Promise<{ text: string; reasoning: string }> {
-  if (!cfg.baseUrl || !cfg.model) throw new Error("请先在「设置 → 模型配置」中填写对话模型");
-  const url = `${trimBase(cfg.baseUrl)}/chat/completions`;
-  const resp = await xfetch(url, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      ...(cfg.apiKey ? { Authorization: `Bearer ${cfg.apiKey}` } : {}),
-    },
-    body: JSON.stringify({
-      model: cfg.model,
-      messages: toApiMessages(opts.system, msgs),
-      stream: true,
-    }),
-    signal: opts.signal,
-  });
-  if (!resp.ok) throw new Error(`对话模型请求失败 ${resp.status}: ${await readErrorBody(resp)}`);
-  if (!resp.body) throw new Error("对话模型未返回流式响应");
-
-  let text = "";
-  let reasoning = "";
+/* ---------------- SSE 流读取 ---------------- */
+async function readSse(resp: Response, onData: (payload: string) => void) {
+  if (!resp.body) throw new Error("模型未返回流式响应");
   const reader = resp.body.getReader();
   const decoder = new TextDecoder();
   let buf = "";
-
   const handleLine = (line: string) => {
     const s = line.trim();
     if (!s.startsWith("data:")) return;
     const payload = s.slice(5).trim();
     if (!payload || payload === "[DONE]") return;
+    onData(payload);
+  };
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    const lines = buf.split("\n");
+    buf = lines.pop() ?? "";
+    for (const line of lines) handleLine(line);
+  }
+  if (buf) handleLine(buf);
+}
+
+function splitDataUrl(dataUrl: string): { mime: string; b64: string } {
+  const mime = dataUrl.match(/^data:([^;]+)/)?.[1] ?? "image/png";
+  return { mime, b64: dataUrl.split(",")[1] ?? "" };
+}
+
+/* ---------------- OpenAI 兼容 ---------------- */
+async function streamOpenAI(card: ModelCard, msgs: ChatMsg[], opts: StreamOpts): Promise<StreamResult> {
+  const apiMsgs: { role: string; content: unknown }[] = [];
+  if (opts.system) apiMsgs.push({ role: "system", content: opts.system });
+  for (const m of msgs) {
+    if (m.images?.length) {
+      apiMsgs.push({
+        role: m.role,
+        content: [
+          ...m.images.map((url) => ({ type: "image_url", image_url: { url } })),
+          { type: "text", text: m.text },
+        ],
+      });
+    } else {
+      apiMsgs.push({ role: m.role, content: m.text });
+    }
+  }
+  const resp = await xfetch(`${trimBase(card.baseUrl)}/chat/completions`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...(card.apiKey ? { Authorization: `Bearer ${card.apiKey}` } : {}),
+    },
+    body: JSON.stringify({ model: card.model, messages: apiMsgs, stream: true }),
+    signal: opts.signal,
+  });
+  if (!resp.ok) throw new Error(`对话请求失败 ${resp.status}: ${await readErrorBody(resp)}`);
+
+  let text = "";
+  let reasoning = "";
+  await readSse(resp, (payload) => {
     try {
       const j = JSON.parse(payload);
       const delta = j.choices?.[0]?.delta ?? {};
@@ -82,25 +92,130 @@ export async function chatStream(
     } catch {
       /* 忽略无法解析的行 */
     }
-  };
-
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buf += decoder.decode(value, { stream: true });
-    const lines = buf.split("\n");
-    buf = lines.pop() ?? "";
-    for (const line of lines) handleLine(line);
-  }
-  if (buf) handleLine(buf);
-
-  if (!text && !reasoning) throw new Error("对话模型没有返回内容（请检查 baseUrl / model 是否正确）");
+  });
   return { text, reasoning };
 }
 
-/** 一句话工具调用（非流式语义，内部仍走流式） */
-export async function chatOnce(cfg: ChatModelCfg, system: string, user: string): Promise<string> {
-  const { text } = await chatStream(cfg, [{ role: "user", text: user }], { system });
+/* ---------------- Anthropic Claude ---------------- */
+async function streamAnthropic(card: ModelCard, msgs: ChatMsg[], opts: StreamOpts): Promise<StreamResult> {
+  const base = trimBase(card.baseUrl);
+  const url = base.endsWith("/v1") ? `${base}/messages` : `${base}/v1/messages`;
+  const apiMsgs = msgs.map((m) => ({
+    role: m.role,
+    content: m.images?.length
+      ? [
+          ...m.images.map((img) => {
+            const { mime, b64 } = splitDataUrl(img);
+            return { type: "image", source: { type: "base64", media_type: mime, data: b64 } };
+          }),
+          { type: "text", text: m.text || "。" },
+        ]
+      : m.text,
+  }));
+  const resp = await xfetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "anthropic-version": "2023-06-01",
+      ...(card.apiKey ? { "x-api-key": card.apiKey, Authorization: `Bearer ${card.apiKey}` } : {}),
+    },
+    body: JSON.stringify({
+      model: card.model,
+      max_tokens: 8192,
+      ...(opts.system ? { system: opts.system } : {}),
+      messages: apiMsgs,
+      stream: true,
+    }),
+    signal: opts.signal,
+  });
+  if (!resp.ok) throw new Error(`对话请求失败 ${resp.status}: ${await readErrorBody(resp)}`);
+
+  let text = "";
+  let reasoning = "";
+  await readSse(resp, (payload) => {
+    try {
+      const j = JSON.parse(payload);
+      if (j.type !== "content_block_delta") return;
+      const d = j.delta ?? {};
+      if (d.type === "thinking_delta" && d.thinking) {
+        reasoning += d.thinking;
+        opts.onReasoning?.(reasoning, d.thinking);
+      } else if (d.type === "text_delta" && d.text) {
+        text += d.text;
+        opts.onText?.(text, d.text);
+      }
+    } catch {
+      /* 忽略 */
+    }
+  });
+  return { text, reasoning };
+}
+
+/* ---------------- Google Gemini ---------------- */
+function geminiBase(baseUrl: string): string {
+  const base = trimBase(baseUrl || "https://generativelanguage.googleapis.com");
+  return base.includes("/v1beta") ? base : `${base}/v1beta`;
+}
+
+async function streamGemini(card: ModelCard, msgs: ChatMsg[], opts: StreamOpts): Promise<StreamResult> {
+  const url = `${geminiBase(card.baseUrl)}/models/${card.model}:streamGenerateContent?alt=sse&key=${encodeURIComponent(card.apiKey)}`;
+  const contents = msgs.map((m) => ({
+    role: m.role === "assistant" ? "model" : "user",
+    parts: [
+      ...(m.images ?? []).map((img) => {
+        const { mime, b64 } = splitDataUrl(img);
+        return { inline_data: { mime_type: mime, data: b64 } };
+      }),
+      { text: m.text },
+    ],
+  }));
+  const resp = await xfetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      contents,
+      ...(opts.system ? { systemInstruction: { parts: [{ text: opts.system }] } } : {}),
+    }),
+    signal: opts.signal,
+  });
+  if (!resp.ok) throw new Error(`对话请求失败 ${resp.status}: ${await readErrorBody(resp)}`);
+
+  let text = "";
+  let reasoning = "";
+  await readSse(resp, (payload) => {
+    try {
+      const j = JSON.parse(payload);
+      for (const part of j.candidates?.[0]?.content?.parts ?? []) {
+        if (!part.text) continue;
+        if (part.thought) {
+          reasoning += part.text;
+          opts.onReasoning?.(reasoning, part.text);
+        } else {
+          text += part.text;
+          opts.onText?.(text, part.text);
+        }
+      }
+    } catch {
+      /* 忽略 */
+    }
+  });
+  return { text, reasoning };
+}
+
+/* ---------------- 统一入口 ---------------- */
+export async function chatStream(card: ModelCard, msgs: ChatMsg[], opts: StreamOpts = {}): Promise<StreamResult> {
+  if (!card.baseUrl && card.protocol !== "gemini") throw new Error(`模型「${card.name}」缺少 Base URL`);
+  if (!card.model) throw new Error(`模型「${card.name}」缺少模型名称`);
+  const run = card.protocol === "anthropic" ? streamAnthropic : card.protocol === "gemini" ? streamGemini : streamOpenAI;
+  const result = await run(card, msgs, opts);
+  if (!result.text && !result.reasoning)
+    throw new Error(`模型「${card.name}」没有返回内容（请检查 Base URL / 模型名 / 协议是否匹配）`);
+  return result;
+}
+
+/** 一句话工具调用（内部仍走流式） */
+export async function chatOnce(card: ModelCard, system: string, user: string): Promise<string> {
+  const { text } = await chatStream(card, [{ role: "user", text: user }], { system });
   return text.trim();
 }
 

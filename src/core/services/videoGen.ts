@@ -4,7 +4,7 @@
  *  - siliconflow 硅基流动：POST /video/submit → POST /video/status
  *  - openai      OpenAI 兼容：POST /videos → GET /videos/{id} → /videos/{id}/content
  */
-import type { VideoModelCfg } from "../types";
+import type { ModelCard } from "../types";
 import { xfetch, trimBase, readErrorBody } from "./http";
 
 export type VideoGenReq = {
@@ -23,17 +23,18 @@ const sleep = (ms: number, signal?: AbortSignal) =>
     });
   });
 
-export async function generateVideo(cfg: VideoModelCfg, req: VideoGenReq): Promise<string> {
-  if (!cfg.baseUrl || !cfg.model) throw new Error("请先在「设置 → 模型配置」中填写视频模型");
-  const base = trimBase(cfg.baseUrl);
+export async function generateVideo(card: ModelCard, req: VideoGenReq): Promise<string> {
+  if (!card.baseUrl || !card.model) throw new Error(`模型「${card.name}」缺少 Base URL 或模型名称`);
+  const base = trimBase(card.baseUrl);
   const headers = {
     "Content-Type": "application/json",
-    ...(cfg.apiKey ? { Authorization: `Bearer ${cfg.apiKey}` } : {}),
+    ...(card.apiKey ? { Authorization: `Bearer ${card.apiKey}` } : {}),
   };
   const progress = (m: string) => req.onProgress?.(m);
+  const tick = (i: number) => progress(`生成中… (${Math.floor(((i + 1) * 3) / 60)}分${((i + 1) * 3) % 60}秒)`);
 
-  if (cfg.style === "zhipu") {
-    const body: Record<string, unknown> = { model: cfg.model, prompt: req.prompt };
+  if (card.protocol === "zhipu") {
+    const body: Record<string, unknown> = { model: card.model, prompt: req.prompt };
     if (req.image) body.image_url = req.image;
     const resp = await xfetch(`${base}/videos/generations`, { method: "POST", headers, body: JSON.stringify(body) });
     if (!resp.ok) throw new Error(`视频任务提交失败 ${resp.status}: ${await readErrorBody(resp)}`);
@@ -45,20 +46,19 @@ export async function generateVideo(cfg: VideoModelCfg, req: VideoGenReq): Promi
       const r = await xfetch(`${base}/async-result/${id}`, { headers });
       if (!r.ok) continue;
       const j = await r.json();
-      const st = j.task_status;
-      if (st === "SUCCESS") {
+      if (j.task_status === "SUCCESS") {
         const url = j.video_result?.[0]?.url;
         if (!url) throw new Error("任务成功但未返回视频地址");
         return url;
       }
-      if (st === "FAIL") throw new Error("视频生成失败（供应商返回 FAIL）");
-      progress(`生成中… (${Math.round(((i + 1) * 3) / 60)}分${((i + 1) * 3) % 60}秒)`);
+      if (j.task_status === "FAIL") throw new Error("视频生成失败（供应商返回 FAIL）");
+      tick(i);
     }
     throw new Error("视频生成超时");
   }
 
-  if (cfg.style === "siliconflow") {
-    const body: Record<string, unknown> = { model: cfg.model, prompt: req.prompt };
+  if (card.protocol === "siliconflow") {
+    const body: Record<string, unknown> = { model: card.model, prompt: req.prompt };
     if (req.image) body.image = req.image;
     const resp = await xfetch(`${base}/video/submit`, { method: "POST", headers, body: JSON.stringify(body) });
     if (!resp.ok) throw new Error(`视频任务提交失败 ${resp.status}: ${await readErrorBody(resp)}`);
@@ -76,14 +76,14 @@ export async function generateVideo(cfg: VideoModelCfg, req: VideoGenReq): Promi
         return url;
       }
       if (j.status === "Failed") throw new Error(`视频生成失败: ${j.reason ?? "未知原因"}`);
-      progress(`生成中… (${Math.round(((i + 1) * 3) / 60)}分${((i + 1) * 3) % 60}秒)`);
+      tick(i);
     }
     throw new Error("视频生成超时");
   }
 
-  // openai 风格
+  // openai 任务式
   {
-    const body: Record<string, unknown> = { model: cfg.model, prompt: req.prompt };
+    const body: Record<string, unknown> = { model: card.model, prompt: req.prompt };
     const resp = await xfetch(`${base}/videos`, { method: "POST", headers, body: JSON.stringify(body) });
     if (!resp.ok) throw new Error(`视频任务提交失败 ${resp.status}: ${await readErrorBody(resp)}`);
     const { id } = await resp.json();

@@ -1,0 +1,347 @@
+/* ============ 资产库 ============ */
+.assetlib-mask {
+  position: fixed;
+  inset: 0;
+  background: rgba(8, 12, 26, 0.5);
+  backdrop-filter: blur(8px);
+  z-index: 180;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: fadeIn 160ms ease;
+}
+.assetlib {
+  width: min(1240px, 94vw);
+  height: min(820px, 90vh);
+  background: var(--panel-solid);
+  border: 1px solid var(--panel-border);
+  border-radius: var(--r-lg);
+  box-shadow: var(--panel-shadow);
+  display: flex;
+  overflow: hidden;
+  animation: popIn 220ms var(--ease);
+}
+
+/* 左侧栏 */
+.al-side {
+  width: 208px;
+  flex: none;
+  border-right: 1px solid var(--panel-border);
+  padding: 16px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  overflow-y: auto;
+}
+.al-side .al-title {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-size: var(--fs-title);
+  font-weight: 800;
+  padding: 0 8px 12px;
+}
+.al-side .side-sec {
+  font-size: 11.5px;
+  font-weight: 700;
+  color: var(--text-3);
+  letter-spacing: 1px;
+  padding: 12px 10px 5px;
+}
+.al-side button.side-item {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 8px 11px;
+  border-radius: var(--r-sm);
+  font-size: var(--fs-base);
+  font-weight: 600;
+  color: var(--text-2);
+  text-align: left;
+  transition: background var(--t-fast), color var(--t-fast);
+  width: 100%;
+}
+.al-side button.side-item:hover {
+  background: var(--hover);
+}
+.al-side button.side-item.on {
+  background: var(--grad-brand-soft);
+  color: var(--accent);
+}
+.al-side button.side-item .cnt {
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--text-3);
+  font-weight: 600;
+}
+.al-side .side-item .fold-acts {
+  margin-left: auto;
+  display: none;
+  gap: 2px;
+}
+.al-side .side-item:hover .fold-acts {
+  display: flex;
+}
+.al-side .side-item .fold-acts .icon-btn {
+  width: 24px;
+  height: 24px;
+}
+
+/* 主区 */
+.al-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.al-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 13px 16px;
+  border-bottom: 1px solid var(--panel-border);
+  flex-wrap: wrap;
+}
+.al-toolbar .search-box {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  background: var(--input-bg);
+  border: 1px solid var(--input-border);
+  border-radius: var(--r-md);
+  padding: 0 11px;
+  min-height: 36px;
+  width: 240px;
+  color: var(--text-3);
+}
+.al-toolbar .search-box input {
+  border: none;
+  background: none;
+  outline: none;
+  flex: 1;
+  min-width: 0;
+  color: var(--text-1);
+}
+.al-grid {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(168px, 1fr));
+  gap: 12px;
+  align-content: start;
+}
+.al-empty {
+  grid-column: 1 / -1;
+  text-align: center;
+  color: var(--text-3);
+  padding: 80px 20px;
+  line-height: 2.1;
+}
+
+/* 资产卡片 */
+.a-card {
+  position: relative;
+  border-radius: var(--r-md);
+  overflow: hidden;
+  background: var(--input-bg);
+  border: 2px solid transparent;
+  cursor: pointer;
+  transition: transform var(--t-fast), border-color var(--t-fast), box-shadow var(--t-fast);
+}
+.a-card:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--node-shadow);
+}
+.a-card.sel {
+  border-color: var(--accent);
+}
+.a-card .a-thumb {
+  aspect-ratio: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-3);
+  overflow: hidden;
+}
+.a-card .a-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.a-card .a-name {
+  padding: 7px 10px 8px;
+  font-size: 12.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--text-2);
+  background: var(--panel-solid);
+}
+.a-card .a-badge {
+  position: absolute;
+  top: 7px;
+  left: 7px;
+  font-size: 11px;
+  background: rgba(10, 14, 30, 0.62);
+  color: #fff;
+  border-radius: 6px;
+  padding: 2px 7px;
+  pointer-events: none;
+}
+.a-card .a-check {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 22px;
+  height: 22px;
+  border-radius: 7px;
+  border: 2px solid #fff;
+  background: rgba(10, 14, 30, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  opacity: 0;
+  transition: opacity var(--t-fast);
+}
+.a-card:hover .a-check,
+.assetlib.selecting .a-card .a-check {
+  opacity: 1;
+}
+.a-card.sel .a-check {
+  background: var(--accent);
+  border-color: var(--accent);
+  opacity: 1;
+}
+
+/* 批量操作条 */
+.al-batchbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 16px;
+  border-top: 1px solid var(--panel-border);
+  background: var(--grad-brand-soft);
+  animation: fadeIn 150ms ease;
+  flex-wrap: wrap;
+}
+.al-batchbar b {
+  color: var(--accent);
+}
+
+/* ============ 预览层 ============ */
+.a-preview {
+  position: fixed;
+  inset: 0;
+  z-index: 420;
+  background: rgba(5, 8, 18, 0.88);
+  backdrop-filter: blur(12px);
+  display: flex;
+  animation: fadeIn 160ms ease;
+}
+.a-preview .ap-stage {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  min-width: 0;
+  padding: 44px 68px;
+}
+.a-preview .ap-stage img,
+.a-preview .ap-stage video {
+  max-width: 100%;
+  max-height: 100%;
+  border-radius: var(--r-sm);
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.55);
+}
+.a-preview .ap-stage iframe {
+  width: 100%;
+  height: 100%;
+  border: none;
+  border-radius: var(--r-sm);
+  background: #fff;
+}
+.a-preview .ap-audio {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 22px;
+  color: #dde;
+}
+.a-preview .ap-nav {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 46px;
+  height: 46px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background var(--t-fast);
+}
+.a-preview .ap-nav:hover {
+  background: rgba(255, 255, 255, 0.22);
+}
+.a-preview .ap-nav.prev { left: 14px; }
+.a-preview .ap-nav.next { right: 14px; }
+.a-preview .ap-close {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.a-preview .ap-close:hover {
+  background: rgba(255, 80, 100, 0.5);
+}
+.a-preview .ap-info {
+  width: 292px;
+  flex: none;
+  background: var(--panel-solid);
+  border-left: 1px solid var(--panel-border);
+  padding: 20px 18px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 13px;
+}
+.a-preview .ap-info h4 {
+  font-size: var(--fs-lg);
+  word-break: break-all;
+}
+.a-preview .ap-info .meta-row {
+  font-size: var(--fs-sm);
+  color: var(--text-2);
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+}
+.a-preview .ap-info .meta-row span:first-child {
+  color: var(--text-3);
+  flex: none;
+}
+.a-preview .ap-info .prompt-box {
+  font-size: var(--fs-sm);
+  background: var(--input-bg);
+  border-radius: var(--r-sm);
+  padding: 9px 11px;
+  line-height: 1.65;
+  color: var(--text-2);
+  max-height: 180px;
+  overflow-y: auto;
+  user-select: text;
+  word-break: break-word;
+}

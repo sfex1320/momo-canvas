@@ -5,9 +5,11 @@ import { SmartCanvas } from "./modules/canvas/SmartCanvas";
 import { GalleryDock } from "./modules/shell/GalleryDock";
 import { SettingsDialog } from "./modules/settings/SettingsDialog";
 import { TemplateManager } from "./modules/comfy/TemplateManager";
+import { AssetLibrary } from "./modules/assets/AssetLibrary";
 import { useSettings } from "./core/stores/settingsStore";
 import { useBoard } from "./core/stores/boardStore";
 import { useComfy } from "./core/stores/comfyStore";
+import { useAssets } from "./core/stores/assetStore";
 import { useUi } from "./core/stores/uiStore";
 import { IcLogo } from "./ui/icons";
 
@@ -39,9 +41,12 @@ export default function App() {
   const [ready, setReady] = useState(false);
 
   useEffect(() => {
-    void Promise.all([useSettings.getState().init(), useBoard.getState().init(), useComfy.getState().init()]).then(() =>
-      setReady(true),
-    );
+    void Promise.all([
+      useSettings.getState().init(),
+      useBoard.getState().init(),
+      useComfy.getState().init(),
+      useAssets.getState().init(),
+    ]).then(() => setReady(true));
   }, []);
 
   /* 屏蔽 webview 默认右键菜单（右键用于平移画布）与 Ctrl+滚轮页面缩放 */
@@ -77,6 +82,7 @@ export default function App() {
       <GalleryDock />
       <SettingsDialog />
       <TemplateManager />
+      <AssetLibrary />
       <Lightbox />
       <Toasts />
     </ReactFlowProvider>

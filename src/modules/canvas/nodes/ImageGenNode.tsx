@@ -2,8 +2,9 @@ import { memo } from "react";
 import type { NodeProps } from "@xyflow/react";
 import { NodeShell, PortImageIn, PortOut, PortTextIn } from "../NodeShell";
 import { IcDownload, IcLoading, IcSparkles } from "../../../ui/icons";
+import { ModelPicker } from "../../../ui/ModelPicker";
 import { useBoard } from "../../../core/stores/boardStore";
-import { useSettings } from "../../../core/stores/settingsStore";
+import { resolveModelCard, useSettings } from "../../../core/stores/settingsStore";
 import { toast, useUi } from "../../../core/stores/uiStore";
 import { runImageGen } from "../../../core/runner";
 import { saveImageAs } from "../../../core/services/imageSaver";
@@ -22,7 +23,12 @@ export const ImageGenNode = memo(function ImageGenNode({ id, data, selected }: N
   const save = async () => {
     if (!main) return;
     try {
-      const model = useSettings.getState().settings.image.model;
+      let model: string | undefined;
+      try {
+        model = resolveModelCard("image", d.modelId).model;
+      } catch {
+        /* 未配置模型时仅影响文件命名 */
+      }
       const p = await saveImageAs(main, useSettings.getState().settings.save, { prompt: d.prompt, model });
       if (p) toast(`已保存 → ${p}`, "ok");
     } catch (e) {
@@ -50,6 +56,7 @@ export const ImageGenNode = memo(function ImageGenNode({ id, data, selected }: N
       }
     >
       <div className="mnode-body">
+        <ModelPicker role="image" value={d.modelId} onChange={(v) => upd(id, { modelId: v })} />
         <textarea
           className="textarea nodrag nowheel"
           rows={3}

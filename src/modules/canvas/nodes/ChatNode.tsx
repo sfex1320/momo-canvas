@@ -2,6 +2,7 @@ import { memo, useEffect, useRef } from "react";
 import type { NodeProps } from "@xyflow/react";
 import { NodeShell, PortImageIn, PortOut, PortTextIn } from "../NodeShell";
 import { IcBrain, IcChat, IcGlobe, IcLoading, IcSend, IcTrash } from "../../../ui/icons";
+import { ModelPicker } from "../../../ui/ModelPicker";
 import { useBoard } from "../../../core/stores/boardStore";
 import { sendChat } from "../../../core/runner";
 import { openExternal } from "../../../core/external";
@@ -59,6 +60,7 @@ export const ChatNode = memo(function ChatNode({ id, data, selected }: NodeProps
             <MsgView key={i} m={m} showThinking={d.showThinking} />
           ))}
         </div>
+        <ModelPicker role="chat" value={d.modelId} onChange={(v) => upd(id, { modelId: v })} />
         <div className="chat-input-row nodrag">
           <textarea
             className="textarea nowheel"

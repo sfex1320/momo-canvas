@@ -279,3 +279,108 @@ export const IcSend = (p: IconProps) => (
     <path d="M3.4 11.1 19.8 4a.8.8 0 0 1 1.1 1L14 21.4a.8.8 0 0 1-1.5 0l-2.2-6.2a1 1 0 0 0-.6-.6l-6.2-2.2a.8.8 0 0 1 0-1.4Z" />
   </I>
 );
+
+export const IcLibrary = (p: IconProps) => (
+  <I {...p}>
+    <path d="M4 4.5h3.5v15H4zM9.5 4.5H13v15H9.5z" />
+    <path d="m15 5.5 4.4 1.2-3.7 13.4-4.4-1.2z" />
+  </I>
+);
+
+export const IcWand = (p: IconProps) => (
+  <I {...p}>
+    <path d="m14 7 3 3L6.5 20.5l-3-3L14 7Z" />
+    <path d="m14 7 3 3M18.5 3v2.4M21.5 8.5h-2.4M19.8 4.7l-1.6 1.6" />
+  </I>
+);
+
+export const IcPalette = (p: IconProps) => (
+  <I {...p}>
+    <path d="M12 3.5a8.5 8.5 0 1 0 0 17c1.4 0 2-.8 2-1.7 0-.8-.5-1.3-.5-2 0-1 .8-1.8 2-1.8h1.8a3.2 3.2 0 0 0 3.2-3.2c0-4.6-3.9-8.3-8.5-8.3Z" />
+    <circle cx="7.8" cy="10" r="1.2" fill="currentColor" stroke="none" />
+    <circle cx="12" cy="7.6" r="1.2" fill="currentColor" stroke="none" />
+    <circle cx="16.2" cy="10" r="1.2" fill="currentColor" stroke="none" />
+  </I>
+);
+
+export const IcScan = (p: IconProps) => (
+  <I {...p}>
+    <path d="M4 8V6a2 2 0 0 1 2-2h2M16 4h2a2 2 0 0 1 2 2v2M20 16v2a2 2 0 0 1-2 2h-2M8 20H6a2 2 0 0 1-2-2v-2" />
+    <circle cx="12" cy="12" r="3.2" />
+  </I>
+);
+
+export const IcMerge = (p: IconProps) => (
+  <I {...p}>
+    <path d="M4 6h4l4.5 6H20M4 18h4l2.5-3.4" />
+    <path d="m17 8.5 3.5 3.5-3.5 3.5" />
+  </I>
+);
+
+export const IcNote = (p: IconProps) => (
+  <I {...p}>
+    <path d="M4.5 6A1.5 1.5 0 0 1 6 4.5h12A1.5 1.5 0 0 1 19.5 6v8.5L14.5 19.5H6A1.5 1.5 0 0 1 4.5 18V6Z" />
+    <path d="M14.5 19.5V15a.5.5 0 0 1 .5-.5h4.5" />
+  </I>
+);
+
+export const IcMusic = (p: IconProps) => (
+  <I {...p}>
+    <path d="M9 18.5V6l11-2v12.5" />
+    <circle cx="6.5" cy="18.5" r="2.5" />
+    <circle cx="17.5" cy="16.5" r="2.5" />
+  </I>
+);
+
+export const IcFile = (p: IconProps) => (
+  <I {...p}>
+    <path d="M6 4.5A1.5 1.5 0 0 1 7.5 3h6L18.5 8v11.5a1.5 1.5 0 0 1-1.5 1.5H7.5A1.5 1.5 0 0 1 6 19.5v-15Z" />
+    <path d="M13.5 3v5h5" />
+  </I>
+);
+
+export const IcFilter = (p: IconProps) => (
+  <I {...p}>
+    <path d="M4 5.5h16l-6.2 7.4v5.6l-3.6-1.8v-3.8L4 5.5Z" />
+  </I>
+);
+
+export const IcFolderPlus = (p: IconProps) => (
+  <I {...p}>
+    <path d="M3.5 7A2.5 2.5 0 0 1 6 4.5h3.6l2 2.5H18A2.5 2.5 0 0 1 20.5 9.5v7A2.5 2.5 0 0 1 18 19H6a2.5 2.5 0 0 1-2.5-2.5V7Z" />
+    <path d="M12 10.5v5M9.5 13h5" />
+  </I>
+);
+
+export const IcArrowL = (p: IconProps) => (
+  <I {...p}>
+    <path d="m14.5 6-6 6 6 6" />
+  </I>
+);
+
+export const IcArrowR = (p: IconProps) => (
+  <I {...p}>
+    <path d="m9.5 6 6 6-6 6" />
+  </I>
+);
+
+export const IcCheckSquare = (p: IconProps) => (
+  <I {...p}>
+    <rect x="4" y="4" width="16" height="16" rx="4" />
+    <path d="m8.5 12 2.5 2.5 4.8-5" />
+  </I>
+);
+
+export const IcUndo = (p: IconProps) => (
+  <I {...p}>
+    <path d="M8.5 6 4 10.5 8.5 15" />
+    <path d="M4 10.5h10a6 6 0 0 1 6 6v1" />
+  </I>
+);
+
+export const IcRedo = (p: IconProps) => (
+  <I {...p}>
+    <path d="M15.5 6 20 10.5 15.5 15" />
+    <path d="M20 10.5H10a6 6 0 0 0-6 6v1" />
+  </I>
+);

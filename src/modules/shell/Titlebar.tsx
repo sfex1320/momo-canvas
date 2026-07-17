@@ -5,6 +5,7 @@ import { useEffect, useRef, useState } from "react";
 import { useBoard } from "../../core/stores/boardStore";
 import { useSettings } from "../../core/stores/settingsStore";
 import { useUi } from "../../core/stores/uiStore";
+import { useAssets } from "../../core/stores/assetStore";
 import { isTauri } from "../../core/utils";
 import {
   IcCheck,
@@ -14,6 +15,7 @@ import {
   IcGallery,
   IcGear,
   IcLayers,
+  IcLibrary,
   IcLogo,
   IcMax,
   IcMin,
@@ -163,6 +165,8 @@ export function Titlebar() {
   const galleryOpen = useUi((s) => s.galleryOpen);
   const setGalleryOpen = useUi((s) => s.setGalleryOpen);
   const galleryCount = useUi((s) => s.gallery.length);
+  const libOpen = useAssets((s) => s.open);
+  const setLibOpen = useAssets((s) => s.setOpen);
   const { maximized, call } = useWindowControls();
 
   return (
@@ -175,6 +179,9 @@ export function Titlebar() {
       </div>
       <BoardSwitch />
       <div className="spacer" data-tauri-drag-region />
+      <button className={`icon-btn ${libOpen ? "on" : ""}`} title="资产库" onClick={() => setLibOpen(!libOpen)}>
+        <IcLibrary size={19} />
+      </button>
       <button
         className={`icon-btn ${galleryOpen ? "on" : ""}`}
         title={`生成记录${galleryCount ? `（${galleryCount}）` : ""}`}

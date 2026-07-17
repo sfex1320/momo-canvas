@@ -6,7 +6,8 @@ import { useUi, toast } from "../../core/stores/uiStore";
 import { useSettings } from "../../core/stores/settingsStore";
 import { saveImageAs, saveVideoAs } from "../../core/services/imageSaver";
 import { errMsg } from "../../core/utils";
-import { IcClose, IcDownload, IcFit, IcGallery } from "../../ui/icons";
+import { useAssets } from "../../core/stores/assetStore";
+import { IcClose, IcDownload, IcFit, IcGallery, IcLibrary } from "../../ui/icons";
 
 export function GalleryDock() {
   const open = useUi((s) => s.galleryOpen);
@@ -40,6 +41,13 @@ export function GalleryDock() {
         <IcGallery size={18} />
         生成记录
         <span className="cnt">{items.length ? `${items.length} 条` : ""}</span>
+        <button
+          className="icon-btn"
+          title="打开资产库（全部历史生成都在那里）"
+          onClick={() => useAssets.getState().setOpen(true)}
+        >
+          <IcLibrary size={17} />
+        </button>
         <button className="icon-btn" title="关闭" onClick={() => setOpen(false)}>
           <IcClose size={17} />
         </button>
