@@ -534,8 +534,20 @@ export function VideoConfigPanel() {
           </div>
           <BatchPicker nodeId={selId} refCount={refCount} />
         </div>
+        {(meta.maxRef ?? 0) > 0 && refCount > 0 ? (
+          <div className="gp-seg" title={`该家族支持角色/主体参考图模式（最多 ${meta.maxRef} 张）：全部上游图作为参考而非首帧`}>
+            <button className={(d.refMode ?? "frame") === "frame" ? "on" : ""} onClick={() => patch({ refMode: "frame" })}>
+              首帧模式
+            </button>
+            <button className={d.refMode === "reference" ? "on" : ""} onClick={() => patch({ refMode: "reference" })}>
+              参考图模式
+            </button>
+          </div>
+        ) : null}
         <div className="gp-foot">
-          参考图：{refCount} 路（第 1 路 = 首帧{meta.tail ? " · 第 2 路 = 尾帧" : ""}）
+          {d.refMode === "reference" && (meta.maxRef ?? 0) > 0
+            ? `参考图：${refCount} 路全部作为角色/主体参考（最多 ${meta.maxRef} 张）`
+            : `参考图：${refCount} 路（第 1 路 = 首帧${meta.tail ? " · 第 2 路 = 尾帧" : ""}）· 绿色口可接参考视频`}
         </div>
       </div>
 

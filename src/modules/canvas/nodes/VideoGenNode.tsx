@@ -1,6 +1,6 @@
 import { memo } from "react";
 import type { NodeProps } from "@xyflow/react";
-import { NodeShell, PortImageIn, PortOut, PortTextIn } from "../NodeShell";
+import { NodeShell, PortImageIn, PortOut, PortTextIn, PortVideoIn } from "../NodeShell";
 import { IcGear } from "../../../ui/icons";
 import { IcDownload, IcLoading, IcVideo } from "../../../ui/icons";
 import { ModelPicker } from "../../../ui/ModelPicker";
@@ -99,6 +99,7 @@ export const VideoGenNode = memo(function VideoGenNode({ id, data, selected }: N
       </div>
       <PortTextIn />
       <PortImageIn />
+      <PortVideoIn top={90} />
       <PortOut kind="video" />
     </NodeShell>
   );

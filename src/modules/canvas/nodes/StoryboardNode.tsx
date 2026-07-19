@@ -5,11 +5,11 @@
  */
 import { memo, useState } from "react";
 import { Handle, Position, type NodeProps } from "@xyflow/react";
-import { NodeShell, PortOut, PortTextIn } from "../NodeShell";
+import { NodeShell, PortImageIn, PortOut, PortTextIn } from "../NodeShell";
 import { IcClapper, IcImage, IcLoading, IcSparkles, IcVideo } from "../../../ui/icons";
 import { ModelPicker } from "../../../ui/ModelPicker";
 import { useBoard } from "../../../core/stores/boardStore";
-import { refineStory, runFlow, spawnShotNodes } from "../../../core/runner";
+import { collectUpstream, refineStory, runFlow, spawnShotNodes } from "../../../core/runner";
 import type { StoryboardData, StoryShot } from "../../../core/types";
 
 /** 定调快捷词（点击填入，可继续手改） */
@@ -18,6 +18,8 @@ const TONES = ["油画质感", "水彩淡彩", "胶片写实", "赛博霓虹", "
 export const StoryboardNode = memo(function StoryboardNode({ id, data, selected }: NodeProps) {
   const d = data as StoryboardData;
   const upd = useBoard((s) => s.updateData);
+  // 上游已接入文本 → 故事框隐藏（运行时自动取上游；已手写的优先级更高，保留显示）
+  const hasUpText = useBoard(() => collectUpstream(id).texts.length > 0);
   const running = d.status === "running";
   const [showRefined, setShowRefined] = useState(true);
 
@@ -29,13 +31,15 @@ export const StoryboardNode = memo(function StoryboardNode({ id, data, selected 
   return (
     <NodeShell id={id} title="分镜" icon={<IcClapper size={17} />} status={d.status} error={d.error} selected={selected} width={360}>
       <div className="mnode-body">
-        <textarea
-          className="textarea nodrag nowheel"
-          rows={3}
-          placeholder="故事 / 剧本（留空自动取上游文本；长剧本会先分小节整理再拆分镜）"
-          value={d.story}
-          onChange={(e) => upd(id, { story: e.target.value })}
-        />
+        {hasUpText && !(d.story ?? "").trim() ? null : (
+          <textarea
+            className="textarea nodrag nowheel"
+            rows={3}
+            placeholder="故事 / 剧本（留空自动取上游文本；长剧本会先分小节整理再拆分镜）"
+            value={d.story}
+            onChange={(e) => upd(id, { story: e.target.value })}
+          />
+        )}
         <div style={{ display: "flex", gap: 6 }}>
           <button className="btn nodrag" style={{ flex: 1 }} disabled={running} title="编剧模型补全起承转合与视觉细节；拆分镜时优先用完善后的版本" onClick={() => void refineStory(id)}>
             {running && d.progress?.includes("完善") ? <IcLoading size={15} /> : <IcSparkles size={15} />} 完善故事
@@ -60,22 +64,22 @@ export const StoryboardNode = memo(function StoryboardNode({ id, data, selected 
           </div>
         ) : null}
 
-        <input
-          className="input nodrag"
-          placeholder="风格提示词（全片统一，如：吉卜力手绘、柔和晨光）"
-          value={d.style}
-          onChange={(e) => upd(id, { style: e.target.value })}
-        />
         <div>
           <input
             className="input nodrag"
-            placeholder="定调 / 色调（如：油画、暖黄胶片…）"
-            value={d.tone}
-            onChange={(e) => upd(id, { tone: e.target.value })}
+            placeholder="风格与定调（留空则「完善故事」时自动提炼；会织入每一镜）"
+            title="全片统一的画风/色调/光线（如：日系动画，暖黄胶片色调）。点「完善故事」时若此处为空会按故事自动填写，可再手改"
+            value={d.style}
+            onChange={(e) => upd(id, { style: e.target.value })}
           />
           <div className="sb-tones nodrag">
             {TONES.map((t) => (
-              <button key={t} className={d.tone === t ? "on" : ""} onClick={() => upd(id, { tone: t })}>
+              <button
+                key={t}
+                className={d.style.includes(t) ? "on" : ""}
+                title="点击追加到风格与定调"
+                onClick={() => upd(id, { style: d.style.includes(t) ? d.style : d.style.trim() ? `${d.style.trim()}，${t}` : t })}
+              >
                 {t}
               </button>
             ))}
@@ -129,6 +133,12 @@ export const StoryboardNode = memo(function StoryboardNode({ id, data, selected 
                     value={sh.prompt}
                     onChange={(e) => setShot(i, { prompt: e.target.value })}
                   />
+                  <input
+                    className="input nodrag sb-line"
+                    placeholder="台词（可选，如 橘猫：欢迎光临！支持音频的视频模型会说出来）"
+                    value={sh.line ?? ""}
+                    onChange={(e) => setShot(i, { line: e.target.value || undefined })}
+                  />
                 </div>
               ))}
             </div>
@@ -144,6 +154,7 @@ export const StoryboardNode = memo(function StoryboardNode({ id, data, selected 
         ) : null}
       </div>
       <PortTextIn />
+      <PortImageIn top={58} />
       <PortOut kind="text" />
     </NodeShell>
   );

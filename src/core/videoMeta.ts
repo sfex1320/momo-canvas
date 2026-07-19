@@ -49,6 +49,8 @@ export type VideoFamilyMeta = {
   tail: boolean;
   /** 连续时长范围（秒）：有则面板显示滑块+自定义输入（如 Seedance 2.0 支持 4-15 任意秒） */
   durationRange?: { min: number; max: number };
+  /** 参考图模式支持的最大参考图数（0/缺省 = 不支持，只有首尾帧） */
+  maxRef?: number;
   note?: string;
 };
 
@@ -74,7 +76,8 @@ const META: Record<VideoFamily, VideoFamilyMeta> = {
     aspects: ["16:9", "9:16"],
     audioToggle: true,
     tail: true,
-    note: "1080p 及参考图模式建议 8 秒；尾帧需与首帧同时提供",
+    maxRef: 3,
+    note: "1080p 及参考图模式建议 8 秒；尾帧需与首帧同时提供；3.1 支持最多 3 张主体参考图",
   },
   luma: {
     label: "Luma Ray",
@@ -97,7 +100,8 @@ const META: Record<VideoFamily, VideoFamilyMeta> = {
     audioToggle: true,
     tail: true,
     durationRange: { min: 3, max: 15 },
-    note: "支持首帧 + 尾帧（image_tail）；1080p 档按 pro 模式发；3.0 支持 3-15 任意秒；音频为 2.6+ 的 sound 开关",
+    maxRef: 4,
+    note: "支持首帧 + 尾帧（image_tail）；1080p 档按 pro 模式发；3.0 支持 3-15 任意秒与角色/物体参考（elements）；音频为 2.6+ 的 sound 开关",
   },
   seedance: {
     label: "即梦 Seedance",
@@ -109,7 +113,8 @@ const META: Record<VideoFamily, VideoFamilyMeta> = {
     audioToggle: true,
     tail: true,
     durationRange: { min: 2, max: 15 },
-    note: "adaptive = 比例自适应（图生视频推荐）；1.0 支持 2-12 秒、1.5 Pro 4-12 秒、2.0 支持 4-15 任意秒；1.5+ 音画同出",
+    maxRef: 9,
+    note: "adaptive = 比例自适应（图生视频推荐）；1.0 支持 2-12 秒、1.5 Pro 4-12 秒、2.0 支持 4-15 任意秒并可挂 9 张角色/主体参考图；1.5+ 音画同出",
   },
   wan: {
     label: "通义万相 Wan",
@@ -133,7 +138,8 @@ const META: Record<VideoFamily, VideoFamilyMeta> = {
     audioToggle: true,
     tail: true,
     durationRange: { min: 1, max: 16 },
-    note: "Q2 支持 1-10 秒、Q3 支持 1-16 秒；首尾帧即官方「首尾帧」模式；音频开关对应 bgm",
+    maxRef: 7,
+    note: "Q2 支持 1-10 秒、Q3 支持 1-16 秒；首尾帧即官方「首尾帧」模式；参考图模式对应 reference2video；音频开关对应 bgm",
   },
   hailuo: {
     label: "海螺 MiniMax",
@@ -178,6 +184,7 @@ const META: Record<VideoFamily, VideoFamilyMeta> = {
     audioToggle: false,
     tail: true,
     durationRange: { min: 1, max: 60 },
+    maxRef: 4,
     note: "参数按常见字段透传，具体以中转站支持为准",
   },
 };

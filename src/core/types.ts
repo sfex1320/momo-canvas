@@ -108,6 +108,8 @@ export type VideoGenData = {
   audio?: boolean;
   /** 第二路上游图片作为尾帧（家族支持首尾帧时可开） */
   useTail?: boolean;
+  /** 参考模式：frame = 首帧/尾帧（默认）；reference = 全部上游图作为角色/主体参考（家族支持时） */
+  refMode?: "frame" | "reference";
 };
 
 /** 分镜：故事/剧本 → 完善 → 按风格与定调拆分镜（带时间轴），每镜独立输出口接生成节点 */
@@ -116,6 +118,8 @@ export type StoryShot = {
   time: string;
   /** 该镜的生图/生视频提示词（已织入风格与定调） */
   prompt: string;
+  /** 台词/对白（可选，如 "橘猫：欢迎光临！"；输出时附在提示词后，支持音频的视频模型会说出来） */
+  line?: string;
 };
 export type StoryboardData = {
   status: RunStatus;

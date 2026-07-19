@@ -283,8 +283,9 @@ export function collectUpstream(
     // 分镜单镜端口：只输出该镜的提示词
     if (src.type === "storyboard" && e.sourceHandle?.startsWith("shot-")) {
       const g = src.data as StoryboardData;
-      const t = g.shots?.[Number(e.sourceHandle.slice(5))]?.prompt?.trim();
-      if (t) texts.push(t);
+      const sh = g.shots?.[Number(e.sourceHandle.slice(5))];
+      const t = sh?.prompt?.trim();
+      if (t) texts.push(sh?.line?.trim() ? t + "\n对白台词：「" + sh.line.trim() + "」" : t);
       continue;
     }
     // 角色卡单素材端口：只输出对应素材（提示词模式给提示词，出图模式给首图）
@@ -642,7 +643,7 @@ export async function runVideoGen(id: string) {
   if (!node) return;
   const data = node.data as VideoGenData;
   if (data.status === "running") return;
-  const { texts, images } = collectUpstream(id);
+  const { texts, images, videos } = collectUpstream(id);
   const prompt = (data.prompt ?? "").trim() || texts.join("\n");
   if (!prompt && !images.length) {
     toast("请输入视频描述，或连接提示词/图片节点", "err");
@@ -653,12 +654,15 @@ export async function runVideoGen(id: string) {
     const card = resolveModelCard("video", data.modelId);
     const meta = videoMeta(videoFamily(card));
     const finalPrompt = await localizePrompt(prompt, (data as { lang?: string }).lang);
-    // 第 1 路上游图 = 首帧；第 2 路 = 尾帧（家族支持且未关闭时）
-    const lastFrame = meta.tail && (data.useTail ?? true) && images.length >= 2 ? images[1] : undefined;
+    // 参考模式（家族支持）：全部上游图作为角色/主体参考；否则第 1 路=首帧、第 2 路=尾帧
+    const useRef = data.refMode === "reference" && (meta.maxRef ?? 0) > 0 && images.length > 0;
+    const lastFrame = !useRef && meta.tail && (data.useTail ?? true) && images.length >= 2 ? images[1] : undefined;
     const url = await generateVideo(card, {
       prompt: finalPrompt,
-      image: images[0],
+      image: useRef ? undefined : images[0],
       lastFrame,
+      refImages: useRef ? images.slice(0, meta.maxRef) : undefined,
+      video: videos[0],
       duration: data.duration,
       resolution: data.resolution,
       aspect: data.aspect,
@@ -1356,7 +1360,8 @@ export async function regenCharDeliverable(id: string, k: CharDeliverable) {
 /* ---------- 分镜 ---------- */
 
 const STORY_REFINE_SYSTEM =
-  "你是资深编剧。把用户给出的故事/梗概完善成一段结构完整、画面感强的短片故事：补全起承转合与视觉细节，保持原设定与语言（中文进中文出）。长剧本先按情节分小节整理再连贯改写。只输出完善后的故事正文，不要任何解释。";
+  "你是资深编剧兼美术指导。把用户给出的故事/梗概完善成结构完整、画面感强的短片故事（补全起承转合与视觉细节，保持原设定，中文进中文出；长剧本先按情节分小节整理再连贯改写），并为全片提炼一行「风格与定调」词（画风/色调/光线/质感，如：日系动画，暖黄胶片色调，柔和逆光）。" +
+  '只输出 JSON：{"story":"完善后的故事正文","styleTone":"风格与定调一行"}';
 
 /** 完善故事：原文（或上游文本）→ 编剧模型 → refined */
 export async function refineStory(id: string) {
@@ -1372,8 +1377,12 @@ export async function refineStory(id: string) {
   upd(id, { status: "running", error: undefined, progress: "完善故事中…" });
   try {
     const card = resolveModelCard("chat", data.chatModelId);
-    const refined = await chatOnce(card, STORY_REFINE_SYSTEM, story.slice(0, 24000));
-    upd(id, { status: "idle", refined: refined.trim(), progress: undefined });
+    const out = await chatOnce(card, STORY_REFINE_SYSTEM, story.slice(0, 24000));
+    const j = parseJsonLoose(out) as { story?: string; styleTone?: string } | null;
+    const refined = (j?.story ?? out).trim();
+    // 自动定调：用户没手填风格时，把提炼出的风格定调填进去（手填的不覆盖）
+    const style = (data.style ?? "").trim() || (j?.styleTone ?? "").trim();
+    upd(id, { status: "idle", refined, style, progress: undefined });
     notifyDone("故事完善");
   } catch (e) {
     upd(id, { status: "error", error: errMsg(e), progress: undefined });
@@ -1399,7 +1408,7 @@ export async function runStoryboard(id: string) {
     const card = resolveModelCard("chat", data.chatModelId);
     const system =
       "你是专业分镜师。把故事拆解成给定数量的连贯分镜，只输出 JSON（不要 markdown 代码块外的任何文字）：" +
-      '{"shots":[{"time":"0-5秒","prompt":"..."}]}';
+      '{"shots":[{"time":"0-5秒","prompt":"画面提示词","line":"角色名：台词（该镜无对白则省略此字段）"}]}';
     const ask = [
       `故事（若很长请先在心里分小节整理，再均衡分配到各镜）：
 ${story.slice(0, 24000)}`,
@@ -1407,15 +1416,21 @@ ${story.slice(0, 24000)}`,
 要求：`,
       `1. 恰好拆成 ${count} 个分镜，每镜时长 ${sec} 秒，time 字段按累计时间标注（如 "0-${sec}秒"、"${sec}-${sec * 2}秒"…）`,
       `2. 每条 prompt 是一段可直接发给 AI 生图/生视频的中文提示词：包含镜头景别/构图/光线/动作，主体外观在各镜间保持一致`,
-      data.style.trim() ? `3. 全片风格（织入每条 prompt 开头）：${data.style.trim()}` : "",
-      data.tone.trim() ? `4. 画面定调/色调（织入每条 prompt）：${data.tone.trim()}` : "",
-      `5. 分镜之间画面要能衔接（上一镜结尾与下一镜开头呼应）`,
+      [data.style, data.tone].filter((x) => x?.trim()).length
+        ? `3. 全片风格与定调（织入每条 prompt 开头，保持全片统一）：${[data.style, data.tone].filter((x) => x?.trim()).join("，")}`
+        : "",
+      `4. 有对白的镜头输出 line 字段（"角色名：台词"），没有就省略；台词要短、口语化`,
+      `5. 分镜之间画面要能衔接（上一镜结尾与下一镜开头呼应），主角外观全片一致`,
     ].filter(Boolean).join("\n");
     const out = await chatOnce(card, system, ask);
-    const j = parseJsonLoose(out) as { shots?: { time?: string; prompt?: string }[] } | null;
+    const j = parseJsonLoose(out) as { shots?: { time?: string; prompt?: string; line?: string }[] } | null;
     const shots = (j?.shots ?? [])
       .filter((x) => (x?.prompt ?? "").trim())
-      .map((x, i) => ({ time: (x.time ?? `${i * sec}-${(i + 1) * sec}秒`).trim(), prompt: x.prompt!.trim() }));
+      .map((x, i) => ({
+        time: (x.time ?? `${i * sec}-${(i + 1) * sec}秒`).trim(),
+        prompt: x.prompt!.trim(),
+        line: (x as { line?: string }).line?.trim() || undefined,
+      }));
     if (!shots.length) throw new Error(`模型没有返回有效的分镜 JSON：${out.slice(0, 160)}`);
     upd(id, { status: "done", shots, progress: undefined });
     toast(`已生成 ${shots.length} 个分镜：每镜右侧有独立输出口，或点「一键铺节点」`, "ok");
@@ -1439,12 +1454,18 @@ export function spawnShotNodes(id: string, kind: "imageGen" | "videoGen") {
   const parent = node.parentId ? s.nodes.find((n) => n.id === node.parentId) : undefined;
   const baseX = node.position.x + (parent?.position.x ?? 0) + (node.measured?.width ?? 340) + 90;
   const baseY = node.position.y + (parent?.position.y ?? 0);
+  // 分镜节点上游接入的图片（角色卡/角色图）同步连给每个生成节点 → 全片角色/风格一致
+  const refEdges = s.edges.filter((ed) => ed.target === id && ed.targetHandle === "in-image");
   data.shots.forEach((_, i) => {
     const bs = useBoard.getState();
     const nid = bs.addNode(kind, { x: baseX, y: baseY + i * (kind === "videoGen" ? 300 : 330) });
     bs.connectNodes(id, nid, "in-text", `shot-${i}`);
+    for (const re of refEdges) bs.connectNodes(re.source, nid, "in-image", re.sourceHandle ?? "out");
   });
-  toast(`已按 ${data.shots.length} 个分镜铺好${kind === "videoGen" ? "生成视频" : "生成图像"}节点（逐镜连线完成）`, "ok");
+  toast(
+    `已按 ${data.shots.length} 个分镜铺好${kind === "videoGen" ? "生成视频" : "生成图像"}节点${refEdges.length ? "（角色参考图已连给每一镜）" : ""}`,
+    "ok",
+  );
 }
 
 /* ---------- 本地视频处理：取帧 / 取段 / 拼接（零模型成本） ---------- */

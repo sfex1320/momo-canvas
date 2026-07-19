@@ -15,6 +15,10 @@ export type VideoGenReq = {
   image?: string; // 首帧参考图 dataURL
   /** 尾帧参考图 dataURL（首尾帧过渡；家族支持时才传） */
   lastFrame?: string;
+  /** 参考图模式：全部上游图作为角色/主体参考（Seedance 2.0 / Veo 3.1 / 可灵 elements / Vidu reference） */
+  refImages?: string[];
+  /** 参考视频（部分家族支持；自定义协议用 {{video}} 占位） */
+  video?: string;
   /** 时长（秒数字符串，如 "5"；服务层按协议转格式） */
   duration?: string;
   /** 分辨率档（如 "720p"） */
@@ -52,9 +56,12 @@ async function genCustomVideo(card: ModelCard, req: VideoGenReq): Promise<string
         size: "",
         n: "1",
         taskId: "",
-        // 首帧参考图 dataURL（模板用 {{image}} 占位）；{{image2}} = 尾帧
-        image: req.image ?? "",
+        // 首帧参考图 dataURL（模板用 {{image}} 占位）；{{image2}} = 尾帧；
+        // {{images}} = 参考图 JSON 数组（角色/主体参考模式）；{{video}} = 参考视频
+        image: req.image ?? req.refImages?.[0] ?? "",
         image2: req.lastFrame ?? "",
+        images: JSON.stringify(req.refImages ?? []),
+        video: req.video ?? "",
         // 家族化参数（模板按需引用；空值配合条件块 {{?duration}}…{{/duration}} 不发）
         duration: req.duration ?? "",
         resolution: req.resolution ?? "",
@@ -160,7 +167,7 @@ export async function generateVideo(card: ModelCard, req: VideoGenReq): Promise<
         if (wh) body.size = `${wh.w}x${wh.h}`;
       }
     }
-    if (req.image) body.input_reference = req.image;
+    if (req.image ?? req.refImages?.[0]) body.input_reference = req.image ?? req.refImages![0];
     const resp = await xfetch(`${base}/videos`, { method: "POST", headers, body: JSON.stringify(body) });
     if (!resp.ok) throw new Error(`视频任务提交失败 ${resp.status}: ${await readErrorBody(resp)}`);
     const { id } = await resp.json();
