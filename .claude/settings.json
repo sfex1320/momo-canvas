@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "powershell -NoProfile -File \"$CLAUDE_PROJECT_DIR/.claude/hooks/restart-app.ps1\"",
+            "timeout": 30,
+            "statusMessage": "重启 momo 画布…"
+          }
+        ]
+      }
+    ]
+  }
+}

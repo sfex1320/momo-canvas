@@ -12,6 +12,10 @@ dist
 dist-ssr
 *.local
 
+# Claude Code hook runtime files
+.claude/last-restart.txt
+.claude/scheduled_tasks.lock
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
