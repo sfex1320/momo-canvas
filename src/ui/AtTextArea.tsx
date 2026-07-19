@@ -1,14 +1,20 @@
 /**
- * 带 @ 引用胶囊的提示词输入框 —
- * 未编辑时把文本里的 @图片名 渲染成「缩略图 + 图N」胶囊（对齐即梦/可灵的引用展示），
- * 点击进入编辑态回到普通 textarea（中文输入法安全）；图N 编号与实际传给模型的参考图顺序一致。
+ * 带 @ 引用胶囊的提示词编辑器 —
+ * contentEditable 富文本：@图片名 始终渲染为「缩略图 + 图N」胶囊（编辑中也不打回原形，
+ * 对齐即梦/可灵）；胶囊是不可编辑的原子块，退格整体删除；数据模型仍是纯文本 @token，
+ * 发模型/存档不受影响。图N 编号与实际传给模型的参考图顺序一致。
  */
-import { useMemo, useRef, useState, type RefObject } from "react";
+import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, type CSSProperties } from "react";
 import { useBoard } from "../core/stores/boardStore";
 import { orderedInEdges } from "../core/runner";
-import { Thumb } from "./Thumb";
+import { makeThumb, thumbSync } from "./Thumb";
 
 export type AtRef = { label: string; src: string };
+
+export type AtTextAreaHandle = {
+  /** 在光标处插入一个 @ 引用胶囊（未聚焦时插到末尾） */
+  insertToken: (label: string) => void;
+};
 
 const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
@@ -37,76 +43,160 @@ export function useOwnUpstreamImageRefs(nodeId: string): AtRef[] {
   }, [nodes, edges, nodeId]);
 }
 
-/** 把文本按 @label 切段，命中的渲染成胶囊 */
-function RichView({ value, refs }: { value: string; refs: AtRef[] }) {
-  const parts = useMemo(() => {
-    const labs = refs.map((r) => escapeRe(`@${r.label}`)).sort((a, b) => b.length - a.length);
-    if (!labs.length) return [value];
-    return value.split(new RegExp(`(${labs.join("|")})`, "g"));
-  }, [value, refs]);
-  return (
-    <>
-      {parts.map((p, i) => {
-        const idx = refs.findIndex((r) => `@${r.label}` === p);
-        if (idx < 0) return <span key={i}>{p}</span>;
-        const r = refs[idx];
-        return (
-          <span key={i} className="at-pill" title={`引用参考图 @${r.label}（发给模型时写作「图${idx + 1}」）`}>
-            <Thumb src={r.src} alt="" />图{idx + 1}
-          </span>
-        );
-      })}
-    </>
-  );
+/** DOM → 纯文本（胶囊还原为 @token；<br>/块级元素还原为换行） */
+function serialize(el: HTMLElement): string {
+  let out = "";
+  const walk = (node: Node) => {
+    if (node.nodeType === Node.TEXT_NODE) {
+      out += node.textContent ?? "";
+      return;
+    }
+    if (!(node instanceof HTMLElement)) return;
+    if (node.dataset.at !== undefined) {
+      out += `@${node.dataset.at}`;
+      return;
+    }
+    if (node.tagName === "BR") {
+      out += "\n";
+      return;
+    }
+    if (/^(DIV|P)$/.test(node.tagName) && out && !out.endsWith("\n")) out += "\n";
+    node.childNodes.forEach(walk);
+  };
+  el.childNodes.forEach(walk);
+  return out;
 }
 
-export function AtTextArea({
-  value,
-  onChange,
-  refs,
-  placeholder,
-  rows = 5,
-  taRef,
-}: {
-  value: string;
-  onChange: (v: string) => void;
-  refs: AtRef[];
-  placeholder?: string;
-  rows?: number;
-  /** 外部需要操作光标（如点击 @ 插入）时传入 */
-  taRef?: RefObject<HTMLTextAreaElement | null>;
-}) {
-  const inner = useRef<HTMLTextAreaElement>(null);
-  const ta = taRef ?? inner;
-  const [editing, setEditing] = useState(false);
-  const hasToken = refs.some((r) => value.includes(`@${r.label}`));
-
-  // 没有 @ 引用时保持普通输入框；有引用且未在编辑 → 胶囊展示，点击进入编辑
-  if (hasToken && !editing) {
-    return (
-      <div
-        className="textarea at-view nodrag nowheel"
-        style={{ minHeight: `${rows * 1.55 + 1.2}em` }}
-        title="点击编辑（@ 引用以胶囊显示）"
-        onClick={() => {
-          setEditing(true);
-          requestAnimationFrame(() => ta.current?.focus());
-        }}
-      >
-        <RichView value={value} refs={refs} />
-      </div>
-    );
+function makePill(r: AtRef, idx: number): HTMLSpanElement {
+  const span = document.createElement("span");
+  span.className = "at-pill";
+  span.contentEditable = "false";
+  span.dataset.at = r.label;
+  span.title = `引用参考图 @${r.label}（发给模型时写作「图${idx + 1}」）· 退格可整体删除`;
+  const img = document.createElement("img");
+  img.alt = "";
+  img.draggable = false;
+  img.src = thumbSync(r.src) ?? "";
+  if (!img.src) {
+    void makeThumb(r.src, 96).then((t) => {
+      img.src = t;
+    });
   }
+  span.appendChild(img);
+  span.appendChild(document.createTextNode(`图${idx + 1}`));
+  return span;
+}
+
+/** 纯文本 → DOM（@token 替换为胶囊） */
+function renderInto(el: HTMLElement, value: string, refs: AtRef[]) {
+  el.textContent = "";
+  const labs = refs.map((r) => escapeRe(`@${r.label}`)).sort((a, b) => b.length - a.length);
+  const re = labs.length ? new RegExp(`(${labs.join("|")})`, "g") : null;
+  value.split("\n").forEach((line, li) => {
+    if (li) el.appendChild(document.createElement("br"));
+    for (const p of re ? line.split(re) : [line]) {
+      if (!p) continue;
+      const idx = refs.findIndex((r) => `@${r.label}` === p);
+      if (idx >= 0) el.appendChild(makePill(refs[idx], idx));
+      else el.appendChild(document.createTextNode(p));
+    }
+  });
+}
+
+/** 光标移到元素内容末尾 */
+function caretToEnd(el: HTMLElement) {
+  const sel = window.getSelection();
+  if (!sel) return;
+  const range = document.createRange();
+  range.selectNodeContents(el);
+  range.collapse(false);
+  sel.removeAllRanges();
+  sel.addRange(range);
+}
+
+export const AtTextArea = forwardRef<
+  AtTextAreaHandle,
+  {
+    value: string;
+    onChange: (v: string) => void;
+    refs: AtRef[];
+    placeholder?: string;
+    rows?: number;
+    style?: CSSProperties;
+  }
+>(function AtTextArea({ value, onChange, refs, placeholder, rows = 5, style }, handle) {
+  const ref = useRef<HTMLDivElement>(null);
+  const composing = useRef(false);
+  const refsRef = useRef(refs);
+  refsRef.current = refs;
+
+  // 外部 value 与 DOM 不一致时才重建（打字过程 serialize === value，不会打断光标/输入法）
+  useEffect(() => {
+    const el = ref.current;
+    if (!el || composing.current) return;
+    if (serialize(el) !== value) {
+      renderInto(el, value, refsRef.current);
+      if (document.activeElement === el) caretToEnd(el);
+    }
+  }, [value, refs]);
+
+  useImperativeHandle(handle, () => ({
+    insertToken: (label: string) => {
+      const el = ref.current;
+      const idx = refsRef.current.findIndex((r) => r.label === label);
+      if (!el || idx < 0) return;
+      el.focus();
+      const sel = window.getSelection();
+      let range: Range;
+      if (sel && sel.rangeCount && el.contains(sel.anchorNode)) {
+        range = sel.getRangeAt(0);
+      } else {
+        range = document.createRange();
+        range.selectNodeContents(el);
+        range.collapse(false);
+      }
+      range.deleteContents();
+      const pill = makePill(refsRef.current[idx], idx);
+      range.insertNode(pill);
+      const space = document.createTextNode(" ");
+      pill.after(space);
+      const nr = document.createRange();
+      nr.setStartAfter(space);
+      nr.collapse(true);
+      sel?.removeAllRanges();
+      sel?.addRange(nr);
+      onChange(serialize(el));
+    },
+  }));
+
   return (
-    <textarea
-      ref={ta}
-      className="textarea nodrag nowheel"
-      rows={rows}
-      placeholder={placeholder}
-      value={value}
-      autoFocus={editing}
-      onChange={(e) => onChange(e.target.value)}
-      onBlur={() => setEditing(false)}
+    <div
+      ref={ref}
+      className="textarea at-edit nodrag nowheel"
+      style={{ minHeight: `${rows * 1.55 + 1.2}em`, ...style }}
+      contentEditable
+      suppressContentEditableWarning
+      data-ph={placeholder ?? ""}
+      spellCheck={false}
+      onInput={() => {
+        if (composing.current) return;
+        const el = ref.current;
+        if (el) onChange(serialize(el));
+      }}
+      onCompositionStart={() => {
+        composing.current = true;
+      }}
+      onCompositionEnd={() => {
+        composing.current = false;
+        const el = ref.current;
+        if (el) onChange(serialize(el));
+      }}
+      onPaste={(e) => {
+        // 粘贴一律按纯文本插入（外来富文本会污染编辑器结构）
+        e.preventDefault();
+        const text = e.clipboardData.getData("text/plain");
+        if (text) document.execCommand("insertText", false, text);
+      }}
     />
   );
-}
+});

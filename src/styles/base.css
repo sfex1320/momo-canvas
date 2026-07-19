@@ -487,3 +487,24 @@ button {
   height: 38px;
   border-radius: var(--r-sm);
 }
+
+/* @ 引用富文本编辑器（contentEditable）：胶囊在输入过程中也保持胶囊 */
+.at-edit {
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.75;
+  cursor: text;
+  overflow-y: auto;
+  max-height: 320px;
+}
+.at-edit:focus {
+  outline: none;
+}
+.at-edit:empty::before {
+  content: attr(data-ph);
+  color: var(--text-3);
+  pointer-events: none;
+}
+.at-edit .at-pill {
+  user-select: none;
+}

@@ -6,7 +6,7 @@ import { useBoard } from "../../../core/stores/boardStore";
 import { optimizePrompt, orderedInEdges } from "../../../core/runner";
 import { Thumb } from "../../../ui/Thumb";
 import { PromptHistoryBtn } from "../../../ui/PromptHistory";
-import { AtTextArea } from "../../../ui/AtTextArea";
+import { AtTextArea, type AtTextAreaHandle } from "../../../ui/AtTextArea";
 import type { PromptData } from "../../../core/types";
 
 /** 与本提示词共同接入同一个下游生成节点的上游图片（供 @ 引用） */
@@ -42,22 +42,14 @@ export const PromptNode = memo(function PromptNode({ id, data, selected }: NodeP
   const d = data as PromptData;
   const upd = useBoard((s) => s.updateData);
   const images = useSiblingImages(id);
-  const taRef = useRef<HTMLTextAreaElement>(null);
+  const editorRef = useRef<AtTextAreaHandle>(null);
 
   const insertAt = (label: string) => {
-    const token = `@${label} `;
-    const ta = taRef.current;
-    if (!ta) {
-      upd(id, { text: `${d.text}${d.text && !d.text.endsWith(" ") ? " " : ""}${token}` });
+    if (editorRef.current) {
+      editorRef.current.insertToken(label);
       return;
     }
-    const start = ta.selectionStart ?? d.text.length;
-    const end = ta.selectionEnd ?? start;
-    upd(id, { text: d.text.slice(0, start) + token + d.text.slice(end) });
-    requestAnimationFrame(() => {
-      ta.focus();
-      ta.setSelectionRange(start + token.length, start + token.length);
-    });
+    upd(id, { text: `${d.text}${d.text && !d.text.endsWith(" ") ? " " : ""}@${label} ` });
   };
 
   return (
@@ -91,7 +83,7 @@ export const PromptNode = memo(function PromptNode({ id, data, selected }: NodeP
           </div>
         ) : null}
         <AtTextArea
-          taRef={taRef}
+          ref={editorRef}
           rows={5}
           placeholder="描述你想要的画面…"
           value={d.text}

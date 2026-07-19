@@ -653,8 +653,8 @@ export function SmartCanvas() {
         <Background variant={BackgroundVariant.Dots} gap={24} size={1.6} color="var(--dot)" />
         <EdgeBoxSelect />
         {!zen && nodes.length > 3 ? (
-          // 右移距离要让开右侧竖向工具条（运行全部/缩放列，约 60px 宽），底部让开工具坞，避免重叠
-          <MiniMap pannable zoomable position="bottom-right" style={{ marginBottom: 84, marginRight: 64 + dockShift }} />
+          // 右移让开右侧竖向工具条（约 60px 宽），底部抬高让开工具坞（坞高 + 余量），确保任何窗口尺寸都不重叠
+          <MiniMap pannable zoomable position="bottom-right" style={{ marginBottom: 122, marginRight: 64 + dockShift }} />
         ) : null}
       </ReactFlow>
 
