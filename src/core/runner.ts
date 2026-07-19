@@ -56,6 +56,7 @@ import type {
   RelightData,
   ResizeData,
   StylePresetData,
+  StoryboardData,
   VideoGenData,
   FrameData,
   VideoTrimData,
@@ -204,6 +205,11 @@ function nodeOutput(
       }
       break;
     }
+    case "storyboard": {
+      const g = d as StoryboardData;
+      if (g.shots?.length) texts.push(g.shots.map((sh) => `【${sh.time}】${sh.prompt}`).join("\n"));
+      break;
+    }
     case "videoGen":
     case "videoTrim":
     case "videoConcat": {
@@ -272,6 +278,13 @@ export function collectUpstream(
         else texts.push(...o.texts);
         videos.push(...o.videos);
       }
+      continue;
+    }
+    // 分镜单镜端口：只输出该镜的提示词
+    if (src.type === "storyboard" && e.sourceHandle?.startsWith("shot-")) {
+      const g = src.data as StoryboardData;
+      const t = g.shots?.[Number(e.sourceHandle.slice(5))]?.prompt?.trim();
+      if (t) texts.push(t);
       continue;
     }
     // 角色卡单素材端口：只输出对应素材（提示词模式给提示词，出图模式给首图）
@@ -1340,6 +1353,100 @@ export async function regenCharDeliverable(id: string, k: CharDeliverable) {
   }
 }
 
+/* ---------- 分镜 ---------- */
+
+const STORY_REFINE_SYSTEM =
+  "你是资深编剧。把用户给出的故事/梗概完善成一段结构完整、画面感强的短片故事：补全起承转合与视觉细节，保持原设定与语言（中文进中文出）。长剧本先按情节分小节整理再连贯改写。只输出完善后的故事正文，不要任何解释。";
+
+/** 完善故事：原文（或上游文本）→ 编剧模型 → refined */
+export async function refineStory(id: string) {
+  const node = useBoard.getState().nodes.find((n) => n.id === id);
+  if (!node) return;
+  const data = node.data as StoryboardData;
+  if (data.status === "running") return;
+  const story = (data.story ?? "").trim() || collectUpstream(id).texts.join("\n");
+  if (!story) {
+    toast("请先输入故事，或连接上游文本节点", "err");
+    return;
+  }
+  upd(id, { status: "running", error: undefined, progress: "完善故事中…" });
+  try {
+    const card = resolveModelCard("chat", data.chatModelId);
+    const refined = await chatOnce(card, STORY_REFINE_SYSTEM, story.slice(0, 24000));
+    upd(id, { status: "idle", refined: refined.trim(), progress: undefined });
+    notifyDone("故事完善");
+  } catch (e) {
+    upd(id, { status: "error", error: errMsg(e), progress: undefined });
+    pushError("分镜 · 完善故事", errMsg(e));
+  }
+}
+
+/** 拆分镜：故事 + 风格/定调 + 数量/每镜秒数 → 带时间轴的分镜提示词表 */
+export async function runStoryboard(id: string) {
+  const node = useBoard.getState().nodes.find((n) => n.id === id);
+  if (!node) return;
+  const data = node.data as StoryboardData;
+  if (data.status === "running") return;
+  const story = (data.refined ?? "").trim() || (data.story ?? "").trim() || collectUpstream(id).texts.join("\n");
+  if (!story) {
+    toast("请先输入故事（或先点「完善故事」），也可以连接上游文本节点", "err");
+    return;
+  }
+  const count = Math.max(2, Math.min(24, data.count ?? 4));
+  const sec = Math.max(1, data.shotSec ?? 5);
+  upd(id, { status: "running", error: undefined, progress: `拆分 ${count} 个分镜…` });
+  try {
+    const card = resolveModelCard("chat", data.chatModelId);
+    const system =
+      "你是专业分镜师。把故事拆解成给定数量的连贯分镜，只输出 JSON（不要 markdown 代码块外的任何文字）：" +
+      '{"shots":[{"time":"0-5秒","prompt":"..."}]}';
+    const ask = [
+      `故事（若很长请先在心里分小节整理，再均衡分配到各镜）：
+${story.slice(0, 24000)}`,
+      `
+要求：`,
+      `1. 恰好拆成 ${count} 个分镜，每镜时长 ${sec} 秒，time 字段按累计时间标注（如 "0-${sec}秒"、"${sec}-${sec * 2}秒"…）`,
+      `2. 每条 prompt 是一段可直接发给 AI 生图/生视频的中文提示词：包含镜头景别/构图/光线/动作，主体外观在各镜间保持一致`,
+      data.style.trim() ? `3. 全片风格（织入每条 prompt 开头）：${data.style.trim()}` : "",
+      data.tone.trim() ? `4. 画面定调/色调（织入每条 prompt）：${data.tone.trim()}` : "",
+      `5. 分镜之间画面要能衔接（上一镜结尾与下一镜开头呼应）`,
+    ].filter(Boolean).join("\n");
+    const out = await chatOnce(card, system, ask);
+    const j = parseJsonLoose(out) as { shots?: { time?: string; prompt?: string }[] } | null;
+    const shots = (j?.shots ?? [])
+      .filter((x) => (x?.prompt ?? "").trim())
+      .map((x, i) => ({ time: (x.time ?? `${i * sec}-${(i + 1) * sec}秒`).trim(), prompt: x.prompt!.trim() }));
+    if (!shots.length) throw new Error(`模型没有返回有效的分镜 JSON：${out.slice(0, 160)}`);
+    upd(id, { status: "done", shots, progress: undefined });
+    toast(`已生成 ${shots.length} 个分镜：每镜右侧有独立输出口，或点「一键铺节点」`, "ok");
+    notifyDone("分镜");
+  } catch (e) {
+    upd(id, { status: "error", error: errMsg(e), progress: undefined });
+    pushError("分镜", errMsg(e));
+  }
+}
+
+/** 一键铺节点：每个分镜建一个生成节点并连到对应单镜端口 */
+export function spawnShotNodes(id: string, kind: "imageGen" | "videoGen") {
+  const s = useBoard.getState();
+  const node = s.nodes.find((n) => n.id === id);
+  if (!node) return;
+  const data = node.data as StoryboardData;
+  if (!data.shots?.length) {
+    toast("请先生成分镜", "err");
+    return;
+  }
+  const parent = node.parentId ? s.nodes.find((n) => n.id === node.parentId) : undefined;
+  const baseX = node.position.x + (parent?.position.x ?? 0) + (node.measured?.width ?? 340) + 90;
+  const baseY = node.position.y + (parent?.position.y ?? 0);
+  data.shots.forEach((_, i) => {
+    const bs = useBoard.getState();
+    const nid = bs.addNode(kind, { x: baseX, y: baseY + i * (kind === "videoGen" ? 300 : 330) });
+    bs.connectNodes(id, nid, "in-text", `shot-${i}`);
+  });
+  toast(`已按 ${data.shots.length} 个分镜铺好${kind === "videoGen" ? "生成视频" : "生成图像"}节点（逐镜连线完成）`, "ok");
+}
+
 /* ---------- 本地视频处理：取帧 / 取段 / 拼接（零模型成本） ---------- */
 
 export async function runFrame(id: string) {
@@ -1425,6 +1532,7 @@ const RUNNERS: Partial<Record<NodeKind, (id: string) => Promise<void>>> = {
   frame: runFrame,
   videoTrim: runVideoTrim,
   videoConcat: runVideoConcat,
+  storyboard: runStoryboard,
 };
 
 type LiteNode = { id: string; type?: string; parentId?: string; data: unknown };
@@ -1482,6 +1590,8 @@ function hasFreshOutput(n: LiteNode): boolean {
       return !!d.resultUrl;
     case "frame":
       return !!d.result;
+    case "storyboard":
+      return !!(d.shots as unknown[] | undefined)?.length;
     case "resize":
       // 文本样式输出由参数即时推导，测过上游尺寸即视为新鲜
       return (d.out ?? "image") === "image" ? !!d.result : !!d.srcW;

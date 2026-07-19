@@ -63,6 +63,7 @@ import { CropNode } from "./nodes/CropNode";
 import { FrameNode } from "./nodes/FrameNode";
 import { VideoTrimNode } from "./nodes/VideoTrimNode";
 import { VideoConcatNode } from "./nodes/VideoConcatNode";
+import { StoryboardNode } from "./nodes/StoryboardNode";
 
 /** 一键清空画布：首次点击进入确认态（2.5 秒内再点执行），入撤销历史可 Ctrl+Z 恢复 */
 function ClearAllBtn() {
@@ -115,6 +116,7 @@ const nodeTypes: NodeTypes = {
   frame: FrameNode,
   videoTrim: VideoTrimNode,
   videoConcat: VideoConcatNode,
+  storyboard: StoryboardNode,
 };
 
 /** Ctrl + 框选结束后，把与选框相交的连线也选中（便于批量删除连线） */

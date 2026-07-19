@@ -25,7 +25,8 @@ export type NodeKind =
   | "crop"
   | "frame"
   | "videoTrim"
-  | "videoConcat";
+  | "videoConcat"
+  | "storyboard";
 
 export type RunStatus = "idle" | "running" | "done" | "error";
 
@@ -107,6 +108,33 @@ export type VideoGenData = {
   audio?: boolean;
   /** 第二路上游图片作为尾帧（家族支持首尾帧时可开） */
   useTail?: boolean;
+};
+
+/** 分镜：故事/剧本 → 完善 → 按风格与定调拆分镜（带时间轴），每镜独立输出口接生成节点 */
+export type StoryShot = {
+  /** 时间段标注，如 "0-5秒" */
+  time: string;
+  /** 该镜的生图/生视频提示词（已织入风格与定调） */
+  prompt: string;
+};
+export type StoryboardData = {
+  status: RunStatus;
+  error?: string;
+  /** 故事/剧本原文（留空自动取上游文本；长剧本会先分小节整理再拆分镜） */
+  story: string;
+  /** 完善后的故事（可手改；拆分镜时优先用它） */
+  refined?: string;
+  /** 分镜数量 */
+  count: number;
+  /** 每镜时长（秒），用于时间轴标注与视频节点对齐 */
+  shotSec: number;
+  /** 风格提示词（全片统一，织入每一镜） */
+  style: string;
+  /** 定调：色调/画风基调（油画、胶片…） */
+  tone: string;
+  shots: StoryShot[];
+  progress?: string;
+  chatModelId?: string;
 };
 
 /** 视频取帧：从上游视频抽一帧输出为图片（本地抽帧，零成本） */
@@ -574,6 +602,7 @@ export type HotkeyAction =
   | "addMatting"
   | "addEnhance"
   | "addCrop"
+  | "addStoryboard"
   | "addFrame"
   | "addVideoTrim"
   | "addVideoConcat";
@@ -615,6 +644,7 @@ export const HOTKEY_LABEL: Record<HotkeyAction, string> = {
   addMatting: "添加节点：抠图",
   addEnhance: "添加节点：高清增强",
   addCrop: "添加节点：聚焦裁剪",
+  addStoryboard: "添加节点：分镜",
   addFrame: "添加节点：视频取帧",
   addVideoTrim: "添加节点：视频取段",
   addVideoConcat: "添加节点：视频拼接",
@@ -659,6 +689,7 @@ export const DEFAULT_HOTKEYS: Record<HotkeyAction, string> = {
   addMatting: "alt+7",
   addEnhance: "alt+8",
   addCrop: "alt+9",
+  addStoryboard: "",
   addFrame: "",
   addVideoTrim: "",
   addVideoConcat: "",

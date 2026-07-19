@@ -83,17 +83,22 @@ export const SEED_TEMPLATES: BoardTemplate[] = [
   },
   {
     id: "seed_story",
-    name: "示例 · 剧情拆分镜出图",
+    name: "示例 · 分镜节点拆故事",
     builtin: true,
     createdAt: 0,
     nodes: [
-      n("p", "prompt", 0, 0, { text: "深夜便利店，一只会说话的橘猫开始了它的第一天打工" }),
-      n("l", "llmText", 340, 0, {
-        op: "custom",
-        custom: "把输入的剧情拆解成 4 个连贯分镜，每个分镜输出一行可直接用于 AI 绘画的中文提示词（含镜头/构图/光线），行与行之间用换行分隔，只输出这 4 行。",
+      n("p", "prompt", 0, 60, { text: "深夜便利店，一只会说话的橘猫开始了它的第一天打工" }),
+      n("sb", "storyboard", 380, 0, {
+        count: 4,
+        shotSec: 5,
+        style: "温暖治愈的深夜便利店，主角橘猫外观全片一致",
+        tone: "日系动画",
       }),
-      n("g", "imageGen", 720, 0, { count: 4 }),
+      n("tip", "note", 380, -240, {
+        text: "分镜节点用法：\n① 点「完善故事」把梗概补成完整故事（可编辑）\n② 设风格/定调/分镜数 → 点「生成分镜」\n③ 每镜右侧有独立输出口，或点「一键铺生图/铺视频」自动建好 N 个节点逐镜连线\n④ 时间轴按每镜秒数标注，和视频节点的时长设置对齐",
+        color: "blue",
+      }),
     ],
-    edges: [e("p", "l", "in-text"), e("l", "g", "in-text")],
+    edges: [e("p", "sb", "in-text")],
   },
 ];

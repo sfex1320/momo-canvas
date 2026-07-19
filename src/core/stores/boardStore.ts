@@ -28,6 +28,8 @@ export function defaultData(kind: NodeKind): Record<string, unknown> {
       return { status: "idle", prompt: "" };
     case "frame":
       return { status: "idle", point: "last" };
+    case "storyboard":
+      return { status: "idle", story: "", count: 4, shotSec: 5, style: "", tone: "", shots: [] };
     case "videoTrim":
       return { status: "idle", start: 0 };
     case "videoConcat":
@@ -106,6 +108,7 @@ export function outPortType(kind: NodeKind, data?: Record<string, unknown>): Por
     case "llmText":
     case "combine":
     case "stylePreset":
+    case "storyboard":
       return "text";
     case "videoGen":
     case "videoTrim":
@@ -142,6 +145,7 @@ export const NODE_INPUTS: Record<NodeKind, { text?: boolean; image?: boolean; vi
   matting: { image: true },
   enhance: { image: true },
   crop: { image: true },
+  storyboard: { text: true },
   frame: { video: true },
   videoTrim: { video: true },
   videoConcat: { video: true },
@@ -156,6 +160,7 @@ const KIND_RANK: Record<NodeKind, number> = {
   caption: 4,
   llmText: 5,
   combine: 6,
+  storyboard: 6.5,
   imageGen: 7,
   resize: 7.5,
   crop: 7.6,
@@ -200,6 +205,7 @@ export const NODE_LABEL: Record<NodeKind, string> = {
   matting: "抠图",
   enhance: "高清增强",
   crop: "聚焦裁剪",
+  storyboard: "分镜",
   frame: "视频取帧",
   videoTrim: "视频取段",
   videoConcat: "视频拼接",

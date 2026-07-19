@@ -540,13 +540,46 @@ export function VideoConfigPanel() {
       </div>
 
       <div className="gp-col gp-col-main">
-        <div className="gp-lab">时长（秒）</div>
-        <div className="gp-seg">
-          {meta.durations.map((t) => (
-            <button key={t} className={dur === t ? "on" : ""} onClick={() => patch({ duration: t })}>
-              {t}s
-            </button>
-          ))}
+        <div className="gp-lab">
+          时长（秒）
+          <span className="gp-hint">当前 {dur}s</span>
+        </div>
+        <div className="gp-dur">
+          <div className="gp-seg" style={{ flex: "0 0 auto" }}>
+            {meta.durations.map((t) => (
+              <button key={t} className={dur === t ? "on" : ""} style={{ minWidth: 44, flex: "0 0 auto" }} onClick={() => patch({ duration: t })}>
+                {t}s
+              </button>
+            ))}
+          </div>
+          {meta.durationRange ? (
+            <>
+              <input
+                type="range"
+                className="range nodrag"
+                style={{ flex: 1, minWidth: 90 }}
+                min={meta.durationRange.min}
+                max={meta.durationRange.max}
+                step={1}
+                title={`滑动选择 ${meta.durationRange.min}-${meta.durationRange.max} 秒（该家族支持任意整数秒）`}
+                value={Math.min(Math.max(Number(dur) || meta.durationRange.min, meta.durationRange.min), meta.durationRange.max)}
+                onChange={(e) => patch({ duration: e.target.value })}
+              />
+              <input
+                className="input nodrag"
+                type="number"
+                min={1}
+                max={600}
+                style={{ width: 68, minHeight: 26 }}
+                title="自定义秒数（可超出滑块范围；模型不支持会由服务商报错）"
+                value={Number(dur) || ""}
+                onChange={(e) => {
+                  const v = Math.max(1, Math.min(600, Number(e.target.value) || 1));
+                  patch({ duration: String(v) });
+                }}
+              />
+            </>
+          ) : null}
         </div>
         {meta.aspects.length ? (
           <>

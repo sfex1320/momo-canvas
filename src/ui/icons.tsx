@@ -469,6 +469,14 @@ export const IcRows = (p: IconProps) => (
   </I>
 );
 
+export const IcClapper = (p: IconProps) => (
+  <I {...p}>
+    <path d="M3.5 10h17v8.5a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2V10Z" />
+    <path d="M3.5 10 4.8 5.2 21 3.6l-1.1 4.6L3.5 10Z" />
+    <path d="m8.4 9.5 1.2-4.2M13.2 9l1.2-4.2M18 8.6l1.2-4.2" />
+  </I>
+);
+
 export const IcFilmFrame = (p: IconProps) => (
   <I {...p}>
     <rect x="3" y="5" width="18" height="14" rx="2" />

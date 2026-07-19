@@ -47,6 +47,8 @@ export type VideoFamilyMeta = {
   audioToggle: boolean;
   /** 支持尾帧（首尾帧过渡） */
   tail: boolean;
+  /** 连续时长范围（秒）：有则面板显示滑块+自定义输入（如 Seedance 2.0 支持 4-15 任意秒） */
+  durationRange?: { min: number; max: number };
   note?: string;
 };
 
@@ -60,7 +62,8 @@ const META: Record<VideoFamily, VideoFamilyMeta> = {
     aspects: ["16:9", "9:16"],
     audioToggle: false,
     tail: false,
-    note: "自带音画同出；首帧参考图需与输出尺寸一致；1080p 档建议 pro 模型",
+    durationRange: { min: 4, max: 20 },
+    note: "自带音画同出；首帧参考图需与输出尺寸一致；1080p 档建议 pro 模型；16/20 秒为新版通道",
   },
   veo: {
     label: "Google Veo",
@@ -93,7 +96,8 @@ const META: Record<VideoFamily, VideoFamilyMeta> = {
     aspects: ["16:9", "9:16", "1:1"],
     audioToggle: true,
     tail: true,
-    note: "支持首帧 + 尾帧（image_tail）；1080p 档按 pro 模式发；音频为 2.6+ 的 sound 开关",
+    durationRange: { min: 3, max: 15 },
+    note: "支持首帧 + 尾帧（image_tail）；1080p 档按 pro 模式发；3.0 支持 3-15 任意秒；音频为 2.6+ 的 sound 开关",
   },
   seedance: {
     label: "即梦 Seedance",
@@ -104,7 +108,8 @@ const META: Record<VideoFamily, VideoFamilyMeta> = {
     aspects: ["adaptive", "16:9", "9:16", "1:1", "4:3", "3:4", "21:9"],
     audioToggle: true,
     tail: true,
-    note: "adaptive = 比例自适应（图生视频推荐）；1.5+ 支持音画同出（generate_audio）",
+    durationRange: { min: 2, max: 15 },
+    note: "adaptive = 比例自适应（图生视频推荐）；1.0 支持 2-12 秒、1.5 Pro 4-12 秒、2.0 支持 4-15 任意秒；1.5+ 音画同出",
   },
   wan: {
     label: "通义万相 Wan",
@@ -115,6 +120,8 @@ const META: Record<VideoFamily, VideoFamilyMeta> = {
     aspects: ["16:9", "9:16", "1:1"],
     audioToggle: true,
     tail: true,
+    durationRange: { min: 2, max: 15 },
+    note: "2.5 支持 5/10 秒，2.6+ 支持 2-15 任意秒",
   },
   vidu: {
     label: "Vidu",
@@ -125,7 +132,8 @@ const META: Record<VideoFamily, VideoFamilyMeta> = {
     aspects: ["16:9", "9:16", "1:1"],
     audioToggle: true,
     tail: true,
-    note: "首尾帧即官方「首尾帧」模式；音频开关对应 bgm",
+    durationRange: { min: 1, max: 16 },
+    note: "Q2 支持 1-10 秒、Q3 支持 1-16 秒；首尾帧即官方「首尾帧」模式；音频开关对应 bgm",
   },
   hailuo: {
     label: "海螺 MiniMax",
@@ -157,6 +165,8 @@ const META: Record<VideoFamily, VideoFamilyMeta> = {
     aspects: ["16:9", "9:16", "1:1"],
     audioToggle: false,
     tail: false,
+    durationRange: { min: 1, max: 15 },
+    note: "v6/c1 支持 1-15 任意秒；1080p 只能 5 秒",
   },
   generic: {
     label: "通用视频",
@@ -167,6 +177,7 @@ const META: Record<VideoFamily, VideoFamilyMeta> = {
     aspects: ["16:9", "9:16", "1:1"],
     audioToggle: false,
     tail: true,
+    durationRange: { min: 1, max: 60 },
     note: "参数按常见字段透传，具体以中转站支持为准",
   },
 };
