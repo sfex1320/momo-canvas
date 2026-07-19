@@ -163,14 +163,16 @@ const ROLE_ICON: Record<ModelRole, React.ReactNode> = {
   chat: <IcChat size={16} />,
   image: <IcSparkles size={16} />,
   video: <IcVideo size={16} />,
+  audio: <IcMusic size={16} />,
 };
 
-const ROLES: ModelRole[] = ["chat", "image", "video"];
+const ROLES: ModelRole[] = ["chat", "image", "video", "audio"];
 
 const MODEL_PLACEHOLDER: Record<ModelRole, string> = {
   chat: "输入模型名回车添加，如 deepseek-chat",
   image: "输入模型名回车添加，如 gpt-image-1",
   video: "输入模型名回车添加，如 cogvideox-3",
+  audio: "输入模型名回车添加，如 tts-1 / speech-02",
 };
 
 /** 编辑草稿：三个角色槽位全部实体化，models 为空表示该用途未启用 */
@@ -194,7 +196,7 @@ function toDraft(p?: ProviderCard): ProviderDraft {
     name: p?.name ?? "",
     baseUrl: p?.baseUrl ?? "",
     apiKey: p?.apiKey ?? "",
-    slots: { chat: slot("chat"), image: slot("image"), video: slot("video") },
+    slots: { chat: slot("chat"), image: slot("image"), video: slot("video"), audio: slot("audio") },
   };
 }
 
@@ -376,7 +378,7 @@ function ModelsTab() {
   );
 }
 
-const EMPTY_BY_ROLE: Record<ModelRole, string> = { chat: "", image: "", video: "" };
+const EMPTY_BY_ROLE: Record<ModelRole, string> = { chat: "", image: "", video: "", audio: "" };
 
 function ProviderEditor({
   draft,
@@ -498,7 +500,7 @@ function ProviderEditor({
                 ))}
                 {role !== "chat"
                   ? customProtocols
-                      .filter((p) => (p.role === "video" ? "video" : "image") === role)
+                      .filter((p) => (p.role === "video" ? "video" : p.role === "audio" ? "audio" : "image") === role)
                       .map((p) => (
                         <option key={p.id} value={`custom:${p.id}`}>
                           自定义 · {p.name}
@@ -665,7 +667,7 @@ function ProtocolTab() {
     patch({ testProvider: pid });
     if (pid === MANUAL) return;
     const p = providers.find((x) => x.id === pid);
-    const m = p?.models[roleSel === "video" ? "video" : "image"]?.models[0];
+    const m = p?.models[roleSel]?.models[0];
     if (m) patch({ testModel: m });
   };
 
@@ -730,8 +732,8 @@ function ProtocolTab() {
       if (!p.id) p.id = uid(6);
       p.role = done.role;
       update("customProtocols", [...settings.customProtocols.filter((x) => x.id !== p.id), p]);
-      const role = done.role === "video" ? "video" : "image";
-      const roleLabel = role === "video" ? "视频" : "绘画";
+      const role = done.role === "video" ? "video" : done.role === "audio" ? "audio" : "image";
+      const roleLabel = role === "video" ? "视频" : role === "audio" ? "音频" : "绘画";
       if (done.providerId) {
         const prov = settings.models.providers.find((x) => x.id === done.providerId);
         if (!prov) throw new Error("测试时所用的服务商已被删除，请到「模型配置」手动选择该协议");
@@ -779,9 +781,10 @@ function ProtocolTab() {
       const out = await chatOnce(card, PROTOCOL_SYSTEM, material.slice(0, 48000));
       const json = out.match(/\{[\s\S]*\}/)?.[0] ?? out;
       const parsed = JSON.parse(json) as CustomProtocol;
-      patch({ roleSel: parsed.role === "video" ? "video" : "image", draft: json });
+      const pr = parsed.role === "video" ? "video" : parsed.role === "audio" ? "audio" : "image";
+      patch({ roleSel: pr, draft: json });
       toast(
-        `协议草稿已生成 ✓ 助手判定用途为「${parsed.role === "video" ? "视频" : "图片"}生成」，请核对右侧 JSON 与用途后保存`,
+        `协议草稿已生成 ✓ 助手判定用途为「${pr === "video" ? "视频" : pr === "audio" ? "音频" : "图片"}生成」，请核对右侧 JSON 与用途后保存`,
         "ok",
       );
     } catch (e) {
@@ -809,7 +812,15 @@ function ProtocolTab() {
         }
       }
       const card = resolveModelCard("chat");
-      const ask = (roleSel === "video"
+      const ask = (roleSel === "audio"
+        ? [
+            "下面是一份音频生成协议 JSON。请在【不改动它已有的端点、鉴权、轮询、结果路径】的前提下，补全朗读/音乐能力：",
+            "1. body 的文本字段用占位符 {{prompt}}（朗读文本或音乐描述），字段名以参考文档为准（常见：input / text / prompt / lyrics）",
+            "2. 若文档有音色/歌手/风格字段，用 {{voice}} 占位（常见：voice / voice_id / timbre）",
+            "3. 所有可选字段用 {{?var}}…{{/var}} 条件块包裹；resultPath 指向音频地址（常见：data.audio_url / audio_url / data[].url）",
+            "只输出补全后的完整协议 JSON（保留原 id、name、role；若是无文档的推断，在 name 末尾加「(待验证)」）。",
+          ]
+        : roleSel === "video"
         ? [
             "下面是一份视频生成协议 JSON。请在【不改动它已有的端点、鉴权、轮询、结果路径】的前提下，补全图生视频与参数能力：",
             "1. body 补首帧图片字段：占位符 {{image}}（dataURL 或 URL），字段名以参考文档为准（常见：image / image_url / image_urls / first_frame_image）",
@@ -836,7 +847,9 @@ function ProtocolTab() {
       toast(
         roleSel === "video"
           ? "已补全图生视频/尾帧/参数字段 ✓ 核对右侧 JSON → 保存 → 校准"
-          : "已补全图片/蒙版字段 ✓ 核对右侧 JSON → 保存 → 到下方「真实测试并校准」跑一遍",
+          : roleSel === "audio"
+            ? "已补全朗读/音色字段 ✓ 核对右侧 JSON → 保存 → 校准"
+            : "已补全图片/蒙版字段 ✓ 核对右侧 JSON → 保存 → 到下方「真实测试并校准」跑一遍",
         "ok",
       );
     } catch (e) {
@@ -856,7 +869,7 @@ function ProtocolTab() {
       p.role = roleSel;
       update("customProtocols", [...settings.customProtocols.filter((x) => x.id !== p.id), p]);
       toast(
-        `协议「${p.name}」已保存（${p.role === "video" ? "视频" : "图片"}生成）——到「模型配置」里给服务商的${p.role === "video" ? "视频" : "绘画"}槽位选择「自定义 · ${p.name}」即可使用`,
+        `协议「${p.name}」已保存（${p.role === "video" ? "视频" : p.role === "audio" ? "音频" : "图片"}生成）——到「模型配置」里给服务商的${p.role === "video" ? "视频" : p.role === "audio" ? "音频" : "绘画"}槽位选择「自定义 · ${p.name}」即可使用`,
         "ok",
       );
       patch({ draft: "" });
@@ -913,15 +926,15 @@ function ProtocolTab() {
               <span
                 key={p.id}
                 className="pe-chip"
-                title={`${p.role === "video" ? "视频生成" : "图片生成"} · ${p.taskIdPath ? "异步轮询" : "同步"} · ${
+                title={`${p.role === "video" ? "视频生成" : p.role === "audio" ? "音频生成" : "图片生成"} · ${p.taskIdPath ? "异步轮询" : "同步"} · ${
                   p.verifiedAt ? `已于 ${new Date(p.verifiedAt).toLocaleString()} 真实测试通过` : "还没跑过真实测试（建议先到下方「测试并自动校准」验证）"
                 } · 点 × 删除`}
               >
-                {p.role === "video" ? "视频 · " : "图片 · "}
+                {p.role === "video" ? "视频 · " : p.role === "audio" ? "音频 · " : "图片 · "}
                 {p.name}
                 {p.verifiedAt ? " ✓" : ""}
                 <button
-                  onClick={() => patch({ draft: JSON.stringify(p, null, 2), roleSel: p.role === "video" ? "video" : "image" })}
+                  onClick={() => patch({ draft: JSON.stringify(p, null, 2), roleSel: p.role })}
                   title="编辑"
                   aria-label="编辑"
                 >
@@ -1022,6 +1035,9 @@ function ProtocolTab() {
             <button className={`btn sm ${roleSel === "video" ? "primary" : ""}`} onClick={() => patch({ roleSel: "video" })}>
               <IcVideo size={14} /> 视频生成
             </button>
+            <button className={`btn sm ${roleSel === "audio" ? "primary" : ""}`} onClick={() => patch({ roleSel: "audio" })}>
+              <IcMusic size={14} /> 音频生成
+            </button>
             <span style={{ flex: 1 }} />
             <button className="btn primary" disabled={!draft.trim()} onClick={save}>
               <IcCheck size={16} /> 校验并保存协议
@@ -1103,7 +1119,7 @@ function ProtocolTab() {
           </button>
           <span className="sec-desc" style={{ margin: 0 }}>
             一键衔接：保存已校准协议 → {calDone.providerId ? "该服务商" : "新服务商"}的
-            {calDone.role === "video" ? "视频" : "绘画"}槽位切到此协议 → 模型 {calDone.model} 加入槽位，配完即可用
+            {calDone.role === "video" ? "视频" : calDone.role === "audio" ? "音频" : "绘画"}槽位切到此协议 → 模型 {calDone.model} 加入槽位，配完即可用
           </span>
         </Row>
       ) : null}

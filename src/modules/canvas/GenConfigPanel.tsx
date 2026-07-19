@@ -39,11 +39,11 @@ function creativityLabel(v: number): string {
 }
 
 /** 多模型对比：勾选若干模型 → 克隆节点并行出图 */
-function ComparePicker({ nodeId, currentModel }: { nodeId: string; currentModel?: string }) {
+function ComparePicker({ nodeId, currentModel, role = "image" }: { nodeId: string; currentModel?: string; role?: "image" | "video" }) {
   const [open, setOpen] = useState(false);
   const [sel, setSel] = useState<string[]>([]);
-  const options = providersOfRole("image").flatMap((p) =>
-    (p.models.image?.models ?? []).map((m) => ({ key: modelKey(p.id, m), label: `${p.name} · ${m}` })),
+  const options = providersOfRole(role).flatMap((p) =>
+    (p.models[role]?.models ?? []).map((m) => ({ key: modelKey(p.id, m), label: `${p.name} · ${m}` })),
   );
   const toggle = (k: string) => setSel((s) => (s.includes(k) ? s.filter((x) => x !== k) : [...s, k]));
   const run = () => {
@@ -533,6 +533,7 @@ export function VideoConfigPanel() {
             </button>
           </div>
           <BatchPicker nodeId={selId} refCount={refCount} />
+          <ComparePicker nodeId={selId} currentModel={d.modelId} role="video" />
         </div>
         {(meta.maxRef ?? 0) > 0 && refCount > 0 ? (
           <div className="gp-seg" title={`该家族支持角色/主体参考图模式（最多 ${meta.maxRef} 张）：全部上游图作为参考而非首帧`}>
@@ -547,7 +548,7 @@ export function VideoConfigPanel() {
         <div className="gp-foot">
           {d.refMode === "reference" && (meta.maxRef ?? 0) > 0
             ? `参考图：${refCount} 路全部作为角色/主体参考（最多 ${meta.maxRef} 张）`
-            : `参考图：${refCount} 路（第 1 路 = 首帧${meta.tail ? " · 第 2 路 = 尾帧" : ""}）· 绿色口可接参考视频`}
+            : `参考图：${refCount} 路（第 1 路 = 首帧${meta.tail ? " · 第 2 路 = 尾帧" : ""}）· 绿口参考视频 · 橙口参考音频`}
         </div>
       </div>
 

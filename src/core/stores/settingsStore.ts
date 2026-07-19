@@ -77,7 +77,10 @@ function normalize(v: Partial<Settings>): Settings {
     hotkeys: { ...DEFAULT_HOTKEYS, ...(v.hotkeys ?? {}) },
     shortcuts: v.shortcuts ?? [],
     // 旧数据的协议没有 role 或 role 非法 → 一律归为图片（可在「设置 → 协议」编辑改用途）
-    customProtocols: (v.customProtocols ?? []).map((p) => ({ ...p, role: p.role === "video" ? "video" as const : "image" as const })),
+    customProtocols: (v.customProtocols ?? []).map((p) => ({
+      ...p,
+      role: p.role === "video" ? ("video" as const) : p.role === "audio" ? ("audio" as const) : ("image" as const),
+    })),
   };
 }
 
@@ -90,7 +93,7 @@ function applyGpu(on: boolean) {
   document.documentElement.classList.toggle("gpu-boost", on);
 }
 
-const ROLES: ModelRole[] = ["chat", "image", "video"];
+const ROLES: ModelRole[] = ["chat", "image", "video", "audio"];
 
 /** 修补 defaults：规整为「pid::model」，指向不存在的服务商/模型时退回第一个可用的 */
 function fixDefaults(cfg: ModelsCfg): ModelsCfg {

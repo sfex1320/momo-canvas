@@ -10,6 +10,7 @@ import { usePromptHist } from "./stores/promptHistStore";
 import { chatStream, chatOnce, OPTIMIZE_SYSTEM } from "./services/llm";
 import { generateImage } from "./services/imageGen";
 import { generateVideo } from "./services/videoGen";
+import { generateAudio } from "./services/audioGen";
 import { webSearch, searchContext } from "./services/webSearch";
 import { runComfyTemplate } from "./services/comfy";
 import { autoSaveImage } from "./services/imageSaver";
@@ -32,9 +33,11 @@ import {
 import { errMsg, isTauri, parseJsonLoose } from "./utils";
 import { assetUrl } from "./services/assetFiles";
 import { notifyDone } from "./sound";
-import { concatVideos, grabFrame, trimVideo } from "./videoEdit";
+import { concatVideos, dubVideo, grabFrame, trimVideo } from "./videoEdit";
 import type {
   AssetGenMeta,
+  AudioGenData,
+  VideoDubData,
   CaptionData,
   CharCardData,
   CharDeliverable,
@@ -74,14 +77,15 @@ const SEPARATORS: Record<CombineData["separator"], string> = {
    直接前驱取值；纯文本节点（拼接/风格预设）会向上递归物化自己的输出；
    组节点按成员位置顺序聚合；「忽略」的节点不向下游传递 */
 
-/** 单个节点自身的输出（文本 / 图片） */
+/** 单个节点自身的输出（文本 / 图片 / 视频 / 音频） */
 function nodeOutput(
   src: { id: string; type?: string; data: unknown },
   visited: Set<string>,
-): { texts: string[]; images: string[]; videos: string[] } {
+): { texts: string[]; images: string[]; videos: string[]; audios: string[] } {
   const texts: string[] = [];
   const images: string[] = [];
   const videos: string[] = [];
+  const audios: string[] = [];
   const kind = src.type as NodeKind;
   const d = src.data as Record<string, unknown>;
   switch (kind) {
@@ -216,9 +220,20 @@ function nodeOutput(
       if (s) videos.push(s);
       break;
     }
+    case "audio": {
+      const s = (d as { src?: string }).src;
+      if (s) audios.push(s);
+      break;
+    }
+    case "audioGen": {
+      const u = (d as { resultUrl?: string }).resultUrl;
+      if (u) audios.push(u);
+      break;
+    }
     case "videoGen":
     case "videoTrim":
-    case "videoConcat": {
+    case "videoConcat":
+    case "videoDub": {
       const u = (d as { resultUrl?: string }).resultUrl;
       if (u) videos.push(u);
       break;
@@ -231,7 +246,7 @@ function nodeOutput(
     default:
       break;
   }
-  return { texts, images, videos };
+  return { texts, images, videos, audios };
 }
 
 type LiteN = { id: string; type?: string; parentId?: string; position: { x: number; y: number }; data: unknown };
@@ -261,12 +276,13 @@ export function orderedInEdges(
 export function collectUpstream(
   nodeId: string,
   visited = new Set<string>(),
-): { texts: string[]; images: string[]; videos: string[] } {
+): { texts: string[]; images: string[]; videos: string[]; audios: string[] } {
   const { nodes, edges } = useBoard.getState();
   const texts: string[] = [];
   const images: string[] = [];
   const videos: string[] = [];
-  if (visited.has(nodeId)) return { texts, images, videos };
+  const audios: string[] = [];
+  if (visited.has(nodeId)) return { texts, images, videos, audios };
   visited.add(nodeId);
 
   for (const e of orderedInEdges(nodeId, nodes, edges)) {
@@ -311,8 +327,9 @@ export function collectUpstream(
     texts.push(...o.texts);
     images.push(...o.images);
     videos.push(...o.videos);
+    audios.push(...o.audios);
   }
-  return { texts, images, videos };
+  return { texts, images, videos, audios };
 }
 
 /* ---------- 上游明细（节点上「传入」徽标的弹窗预览用） ---------- */
@@ -535,11 +552,14 @@ export async function runImageGen(id: string) {
   }
 }
 
-/** 多模型对比：以该生成节点为母版，为每个所选模型克隆一个节点（继承参数 + 复制上游连线），并行出图横向对比 */
+/** 多模型对比：以该生成节点为母版，为每个所选模型克隆一个节点（继承参数 + 复制上游连线），并行出图/出片横向对比 */
 export async function runModelCompare(id: string, keys: string[]) {
   const s = useBoard.getState();
   const node = s.nodes.find((n) => n.id === id);
-  if (!node || node.type !== "imageGen" || !keys.length) return;
+  if (!node || (node.type !== "imageGen" && node.type !== "videoGen") || !keys.length) return;
+  const isVideo = node.type === "videoGen";
+  const runOne = isVideo ? runVideoGen : runImageGen;
+  const resetFields = isVideo ? { resultUrl: undefined, progress: undefined } : { results: [], picked: 0 };
   const base = node.data as ImageGenData;
   const parent = node.parentId ? s.nodes.find((n) => n.id === node.parentId) : undefined;
   const baseX = node.position.x + (parent?.position.x ?? 0);
@@ -550,15 +570,15 @@ export async function runModelCompare(id: string, keys: string[]) {
   keys.forEach((key, i) => {
     const bs = useBoard.getState();
     const nid = bs.addNode(
-      "imageGen",
+      node.type as NodeKind,
       { x: baseX + (w + 70) * (i + 1), y: baseY },
-      { ...base, modelId: key, status: "idle", error: undefined, results: [], picked: 0 },
+      { ...base, modelId: key, status: "idle", error: undefined, ...resetFields },
     );
     for (const e of inEdges) bs.connectNodes(e.source, nid, e.targetHandle ?? "in-text", e.sourceHandle ?? "out");
     ids.push(nid);
   });
   toast(`已按 ${keys.length} 个模型建立对比节点，并行生成中…`, "info");
-  await Promise.all(ids.map((nid) => runImageGen(nid)));
+  await Promise.all(ids.map((nid) => runOne(nid)));
   notifyDone("多模型对比");
 }
 
@@ -649,7 +669,7 @@ export async function runVideoGen(id: string) {
   if (!node) return;
   const data = node.data as VideoGenData;
   if (data.status === "running") return;
-  const { texts, images, videos } = collectUpstream(id);
+  const { texts, images, videos, audios } = collectUpstream(id);
   const prompt = (data.prompt ?? "").trim() || texts.join("\n");
   if (!prompt && !images.length) {
     toast("请输入视频描述，或连接提示词/图片节点", "err");
@@ -669,6 +689,7 @@ export async function runVideoGen(id: string) {
       lastFrame,
       refImages: useRef ? images.slice(0, meta.maxRef) : undefined,
       video: videos[0],
+      refAudio: audios[0],
       // 与左下面板显示的默认档保持一致：没手动调过也按家族默认值真实发送（此前是不发，所见 ≠ 所发）
       duration: data.duration ?? meta.defaultDuration,
       resolution: data.resolution ?? meta.defaultResolution,
@@ -1490,6 +1511,64 @@ export function spawnShotNodes(id: string, kind: "imageGen" | "videoGen") {
   );
 }
 
+/* ---------- 生成音频（TTS / 音乐） ---------- */
+export async function runAudioGen(id: string) {
+  const node = useBoard.getState().nodes.find((n) => n.id === id);
+  if (!node) return;
+  const data = node.data as AudioGenData;
+  if (data.status === "running") return;
+  const text = (data.text ?? "").trim() || collectUpstream(id).texts.join("\n");
+  if (!text) {
+    toast("请输入朗读文本/音乐描述，或连接上游文本节点（分镜台词也可以）", "err");
+    return;
+  }
+  upd(id, { status: "running", error: undefined, progress: "合成中…", resultUrl: undefined });
+  try {
+    const card = resolveModelCard("audio", data.modelId);
+    const url = await generateAudio(card, {
+      text,
+      voice: data.voice,
+      onProgress: (m) => upd(id, { progress: m }),
+    });
+    upd(id, { status: "done", resultUrl: url, progress: undefined });
+    // 收进资产库并换持久地址（dataURL 大、远程直链会过期）
+    const saved = await useAssets.getState().collect({ src: url, kind: "audio", prompt: text.slice(0, 80), model: card.name });
+    if (saved && isTauri) upd(id, { resultUrl: assetUrl(saved.path) });
+    notifyDone("音频生成");
+  } catch (e) {
+    upd(id, { status: "error", error: errMsg(e), progress: undefined });
+    pushError("生成音频", errMsg(e));
+  }
+}
+
+/* ---------- 视频配音（本地混音重编码） ---------- */
+export async function runVideoDub(id: string) {
+  const node = useBoard.getState().nodes.find((n) => n.id === id);
+  if (!node) return;
+  const data = node.data as VideoDubData;
+  if (data.status === "running") return;
+  const { videos, audios } = collectUpstream(id);
+  if (!videos.length) {
+    toast("请先连接上游视频（绿色口）", "err");
+    return;
+  }
+  if (!audios.length) {
+    toast("请先连接上游音频（橙色口：音频节点或生成音频）", "err");
+    return;
+  }
+  upd(id, { status: "running", error: undefined, progress: "准备重编码…", resultUrl: undefined });
+  try {
+    const url = await dubVideo(videos[0], audios[0], data.mode ?? "replace", (m) => upd(id, { progress: m }));
+    upd(id, { status: "done", resultUrl: url, progress: undefined });
+    const saved = await useAssets.getState().collect({ src: url, kind: "video", name: "视频配音", model: "本地处理" });
+    if (saved && isTauri) upd(id, { resultUrl: assetUrl(saved.path) });
+    notifyDone("视频配音");
+  } catch (e) {
+    upd(id, { status: "error", error: errMsg(e), progress: undefined });
+    pushError("视频配音", errMsg(e));
+  }
+}
+
 /* ---------- 本地视频处理：取帧 / 取段 / 拼接（零模型成本） ---------- */
 
 export async function runFrame(id: string) {
@@ -1536,12 +1615,46 @@ export async function runVideoTrim(id: string) {
   }
 }
 
+/** 拼接节点的片段清单（时间线粗剪条与 runVideoConcat 共用，保证所见顺序 = 拼接顺序）：
+ *  先按连线位置（上→下）收集各上游的片段，再套用节点上手动排好的顺序（新接入的附加在后） */
+export function concatClips(id: string): { nodeId: string; url: string }[] {
+  const { nodes, edges } = useBoard.getState();
+  const groups: { nodeId: string; urls: string[] }[] = [];
+  const push = (nodeId: string, urls: string[]) => {
+    if (urls.length) groups.push({ nodeId, urls });
+  };
+  for (const e of orderedInEdges(id, nodes, edges)) {
+    if (e.targetHandle !== "in-video") continue;
+    const src = nodes.find((n) => n.id === e.source);
+    if (!src || (src.data as Record<string, unknown>).ignored) continue;
+    if (src.type === "group") {
+      const members = nodes
+        .filter((n) => n.parentId === src.id && !(n.data as Record<string, unknown>).ignored)
+        .sort((a, b) => a.position.y - b.position.y || a.position.x - b.position.x);
+      for (const m of members) push(m.id, nodeOutput(m, new Set([id])).videos);
+      continue;
+    }
+    push(src.id, nodeOutput(src, new Set([id])).videos);
+  }
+  const order = (nodes.find((n) => n.id === id)?.data as VideoConcatData | undefined)?.order ?? [];
+  const rank = new Map(order.map((x, i) => [x, i]));
+  const sorted = [...groups].sort((a, b) => {
+    const ra = rank.get(a.nodeId);
+    const rb = rank.get(b.nodeId);
+    if (ra !== undefined && rb !== undefined) return ra - rb;
+    if (ra !== undefined) return -1;
+    if (rb !== undefined) return 1;
+    return 0; // 都没排过 → 维持位置序
+  });
+  return sorted.flatMap((g) => g.urls.map((url) => ({ nodeId: g.nodeId, url })));
+}
+
 export async function runVideoConcat(id: string) {
   const node = useBoard.getState().nodes.find((n) => n.id === id);
   if (!node) return;
   const data = node.data as VideoConcatData;
   if (data.status === "running") return;
-  const videos = collectUpstream(id).videos;
+  const videos = concatClips(id).map((c) => c.url);
   if (videos.length < 2) {
     toast("视频拼接需要接入至少 2 路上游视频（按连线上下位置排序）", "err");
     return;
@@ -1582,6 +1695,8 @@ const RUNNERS: Partial<Record<NodeKind, (id: string) => Promise<void>>> = {
   videoTrim: runVideoTrim,
   videoConcat: runVideoConcat,
   storyboard: runStoryboard,
+  audioGen: runAudioGen,
+  videoDub: runVideoDub,
 };
 
 type LiteNode = { id: string; type?: string; parentId?: string; data: unknown };
@@ -1636,6 +1751,8 @@ function hasFreshOutput(n: LiteNode): boolean {
     case "videoGen":
     case "videoTrim":
     case "videoConcat":
+    case "videoDub":
+    case "audioGen":
       return !!d.resultUrl;
     case "frame":
       return !!d.result;

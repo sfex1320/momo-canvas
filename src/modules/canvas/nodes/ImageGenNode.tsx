@@ -11,6 +11,7 @@ import { saveImageAs } from "../../../core/services/imageSaver";
 import { errMsg } from "../../../core/utils";
 import { Thumb } from "../../../ui/Thumb";
 import { PromptHistoryBtn } from "../../../ui/PromptHistory";
+import { AtTextArea, useOwnUpstreamImageRefs } from "../../../ui/AtTextArea";
 import type { ImageGenData } from "../../../core/types";
 
 export const ImageGenNode = memo(function ImageGenNode({ id, data, selected }: NodeProps) {
@@ -20,6 +21,7 @@ export const ImageGenNode = memo(function ImageGenNode({ id, data, selected }: N
   const setLightbox = useUi((s) => s.setLightbox);
   // 上游已接入文本 → 提示词框隐藏（运行时自动取上游；节点里已手写的提示词优先级更高，保留显示）
   const hasUpText = useBoard(() => collectUpstream(id).texts.length > 0);
+  const atRefs = useOwnUpstreamImageRefs(id);
   const running = d.status === "running";
   const main = d.results?.[d.picked ?? 0];
 
@@ -80,12 +82,12 @@ export const ImageGenNode = memo(function ImageGenNode({ id, data, selected }: N
       <div className="mnode-body">
         {hasUpText && !(d.prompt ?? "").trim() ? null : (
           <div style={{ position: "relative" }}>
-            <textarea
-              className="textarea nodrag nowheel"
+            <AtTextArea
               rows={3}
               placeholder="提示词（留空则自动使用上游提示词/对话结果）"
               value={d.prompt}
-              onChange={(e) => upd(id, { prompt: e.target.value })}
+              onChange={(t) => upd(id, { prompt: t })}
+              refs={atRefs}
             />
             <div style={{ position: "absolute", right: 5, bottom: 5 }}>
               <PromptHistoryBtn onPick={(t) => upd(id, { prompt: t })} />

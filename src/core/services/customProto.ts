@@ -86,6 +86,15 @@ const VID_PATHS = [
   "data.result.video_url", "result.video_url", "data.result.videos[].url", "result.videos[].url",
   "output[].url", "url",
 ];
+const AUD_PATHS = [
+  "data[].audio_url", "data.audio_url", "audio_url", "data[].url", "data.url",
+  "data.audio", "audio", "result.audio_url", "data.result.audio_url", "output[].url", "url",
+];
+
+/** 协议用途 → 结果媒体类型 */
+export function roleKind(role: string | undefined): "image" | "video" | "audio" {
+  return role === "video" ? "video" : role === "audio" ? "audio" : "image";
+}
 
 /** 先按协议的 statusPath 取状态，取不到再按常见路径兜底 */
 function readStatus(pj: any, primary: string): string {
@@ -97,14 +106,14 @@ function readStatus(pj: any, primary: string): string {
 }
 
 /** 按协议 resultPath 取结果字符串；未命中时按常见字段兜底 */
-export function extractResultStrings(final: any, primary: string, kind: "image" | "video"): string[] {
+export function extractResultStrings(final: any, primary: string, kind: "image" | "video" | "audio"): string[] {
   const tryPath = (p: string) =>
     jsonPath(final, p)
       .map((v) => (typeof v === "string" ? v : ""))
       .filter((s) => s.length > 4);
   const hit = tryPath(primary);
   if (hit.length) return hit;
-  for (const p of kind === "video" ? VID_PATHS : IMG_PATHS) {
+  for (const p of kind === "video" ? VID_PATHS : kind === "audio" ? AUD_PATHS : IMG_PATHS) {
     if (p === primary) continue;
     const out = tryPath(p);
     if (out.length) {
@@ -153,7 +162,7 @@ export async function runCustomFlow(
       }
     }
     // 拿不到任务 ID 但提交响应里已经有结果 → 服务商这次走了同步通道，直接收货
-    if (!taskId && extractResultStrings(final, proto.resultPath, proto.role === "video" ? "video" : "image").length) {
+    if (!taskId && extractResultStrings(final, proto.resultPath, roleKind(proto.role)).length) {
       traceAdd(trace, "同步返回", "提交响应已含结果，跳过轮询", vars.apiKey);
       return final;
     }
@@ -193,7 +202,7 @@ export async function runCustomFlow(
     onProgress?.("任务已提交，生成中…");
     traceAdd(trace, "轮询请求", `${pollCfg.method ?? "GET"} ${render(pollCfg.url, vars)}`, vars.apiKey);
     let pollSlot = -1;
-    const kind = proto.role === "video" ? "video" : "image";
+    const kind = roleKind(proto.role);
     const deadline = Date.now() + 10 * 60_000;
     let consecFail = 0;
     let blankStatus = 0; // 连续多少轮既读不到状态也没有结果（多半是轮询地址错但返回 200）
@@ -244,17 +253,16 @@ export async function runCustomFlow(
 }
 
 /** 从卡片协议标识（custom:<id>）解析出协议配置，并校验用途匹配 */
-export async function resolveCustomProto(protocolId: string, wantRole: "image" | "video"): Promise<CustomProtocol> {
+export async function resolveCustomProto(protocolId: string, wantRole: "image" | "video" | "audio"): Promise<CustomProtocol> {
   const { useSettings } = await import("../stores/settingsStore");
   const id = protocolId.slice("custom:".length);
   const proto = useSettings.getState().settings.customProtocols.find((p) => p.id === id);
   if (!proto) throw new Error(`自定义协议不存在（${id}），请到「设置 → 协议」检查`);
-  const role = proto.role === "video" ? "video" : "image";
+  const role = roleKind(proto.role);
   if (role !== wantRole) {
-    const cur = role === "video" ? "视频" : "图片";
-    const want = wantRole === "video" ? "视频" : "图片";
+    const LAB = { image: "图片", video: "视频", audio: "音频" } as const;
     throw new Error(
-      `协议「${proto.name}」的用途是「${cur}生成」，不能用于${want}槽位。请到「设置 → 协议」编辑该协议并把用途改为「${want}生成」，或换一个协议`,
+      `协议「${proto.name}」的用途是「${LAB[role]}生成」，不能用于${LAB[wantRole]}槽位。请到「设置 → 协议」编辑该协议并把用途改为「${LAB[wantRole]}生成」，或换一个协议`,
     );
   }
   return proto;

@@ -6,6 +6,9 @@ import type { HotkeyAction, NodeKind } from "../../core/types";
 import {
   IcBrush,
   IcBulb,
+  IcDub,
+  IcMic,
+  IcMusic,
   IcChat,
   IcCrop,
   IcEnhance,
@@ -46,6 +49,7 @@ export type CatalogItem = {
 export const NODE_CATALOG: CatalogItem[] = [
   { kind: "image", label: "图片", desc: "导入 / 拖入 / 粘贴一张图片", icon: <IcImage size={18} />, group: "输入", hotkey: "addImage" },
   { kind: "video", label: "视频", desc: "导入 / 拖入一段视频：接取帧、取段、拼接、生成视频参考、ComfyUI", icon: <IcVideo size={18} />, group: "输入", hotkey: "addVideo" },
+  { kind: "audio", label: "音频", desc: "导入 / 拖入一段音频：接视频配音或生成视频的参考音频", icon: <IcMusic size={18} />, group: "输入", hotkey: "addAudio", dockHidden: true },
   { kind: "prompt", label: "提示词", desc: "编写提示词，可 AI 扩写优化", icon: <IcText size={18} />, group: "输入", hotkey: "addPrompt" },
   { kind: "stylePreset", label: "风格预设", desc: "内置风格片段库，点选叠加输出", icon: <IcPalette size={18} />, group: "输入", hotkey: "addStylePreset" },
   { kind: "note", label: "备注", desc: "画布便签，整理思路", icon: <IcNote size={18} />, group: "输入", hotkey: "addNote" },
@@ -65,8 +69,10 @@ export const NODE_CATALOG: CatalogItem[] = [
   { kind: "resize", label: "尺寸调整", desc: "真实压缩/放大图片像素，或输出推荐比例/分辨率给生成节点", icon: <IcResize size={18} />, group: "编辑", hotkey: "addResize" },
   { kind: "relight", label: "打光", desc: "为上游图片重新打光：方向/亮度/颜色/轮廓光", icon: <IcBulb size={18} />, group: "编辑", hotkey: "addRelight" },
   { kind: "multiAngle", label: "多角度", desc: "换机位重拍上游图片：环绕/俯仰/景别", icon: <IcOrbit size={18} />, group: "编辑", hotkey: "addMultiAngle" },
+  { kind: "audioGen", label: "生成音频", desc: "TTS 朗读 / 音乐生成：文本留空自动取上游（分镜台词可直通）", icon: <IcMic size={18} />, group: "生成", hotkey: "addAudioGen", dockHidden: true },
   { kind: "frame", label: "视频取帧", desc: "抽首帧/末帧/任意帧输出图片：末帧接下一段视频可无限续接", icon: <IcFilmFrame size={18} />, group: "视频", hotkey: "addFrame" },
   { kind: "videoTrim", label: "视频取段", desc: "本地截取视频片段（实验性，输出 webm）", icon: <IcFilmCut size={18} />, group: "视频", hotkey: "addVideoTrim" },
-  { kind: "videoConcat", label: "视频拼接", desc: "多段视频按顺序合成一条成片（实验性）", icon: <IcFilmJoin size={18} />, group: "视频", hotkey: "addVideoConcat" },
+  { kind: "videoConcat", label: "视频拼接", desc: "时间线粗剪：片段调序 → 预览成片 → 本地合成一条（实验性）", icon: <IcFilmJoin size={18} />, group: "视频", hotkey: "addVideoConcat" },
+  { kind: "videoDub", label: "视频配音", desc: "把上游音频混入/替换视频原声（本地重编码，零成本）", icon: <IcDub size={18} />, group: "视频", hotkey: "addVideoDub", dockHidden: true },
   { kind: "charCard", label: "角色卡", desc: "分析人物图片/描述，一键产出三视图/表情/立绘/设定卡", icon: <IcIdCard size={18} />, group: "角色", hotkey: "addCharCard" },
 ];

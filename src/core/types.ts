@@ -4,6 +4,9 @@ import type { Node } from "@xyflow/react";
 export type NodeKind =
   | "image"
   | "video"
+  | "audio"
+  | "audioGen"
+  | "videoDub"
   | "prompt"
   | "chat"
   | "imageGen"
@@ -56,6 +59,39 @@ export type VideoData = {
   name?: string;
   /** 时长（秒，导入时测得，供角标显示） */
   dur?: number;
+};
+
+/** 音频源节点：本地音频文件（配乐/配音/参考音频）。src 在 Tauri 下为资产文件的 asset: URL */
+export type AudioData = {
+  status: RunStatus;
+  error?: string;
+  src?: string;
+  name?: string;
+  /** 时长（秒） */
+  dur?: number;
+};
+
+/** 生成音频：TTS 朗读 / 音乐生成（音频模型角色；OpenAI /audio/speech 或自定义协议） */
+export type AudioGenData = {
+  status: RunStatus;
+  error?: string;
+  /** 朗读文本 / 音乐描述（留空自动取上游文本，含分镜台词） */
+  text: string;
+  /** 音色（openai 协议的 voice 字段，如 alloy；自定义协议用 {{voice}} 占位） */
+  voice?: string;
+  resultUrl?: string;
+  progress?: string;
+  modelId?: string;
+};
+
+/** 视频配音：上游视频 + 音频 → 本地重编码，把音频混入/替换原声 */
+export type VideoDubData = {
+  status: RunStatus;
+  error?: string;
+  /** replace = 替换原声（默认）；mix = 与原声混合 */
+  mode: "replace" | "mix";
+  resultUrl?: string;
+  progress?: string;
 };
 
 export type PromptData = {
@@ -175,12 +211,15 @@ export type VideoTrimData = {
   srcDur?: number;
 };
 
-/** 视频拼接：把多路上游视频按连线顺序合成一条（实验性：实时录制重编码） */
+/** 视频拼接：把多路上游视频合成一条（实验性：实时录制重编码）
+ *  自带时间线粗剪条：片段缩略图按播放顺序排布，可调序、顺序预览后再拼接 */
 export type VideoConcatData = {
   status: RunStatus;
   error?: string;
   resultUrl?: string;
   progress?: string;
+  /** 手动排好的播放顺序（上游节点 id 列表）；未排过的片段按连线位置附加在后 */
+  order?: string[];
 };
 
 export type ComfyData = {
@@ -473,15 +512,16 @@ export type CropData = {
 export type AppNode = Node<Record<string, unknown>, NodeKind>;
 
 /* 端口数据类型 */
-export type PortType = "text" | "image" | "video";
+export type PortType = "text" | "image" | "video" | "audio";
 
 /* ---------------- 模型配置（服务商卡片） ---------------- */
-export type ModelRole = "chat" | "image" | "video";
+export type ModelRole = "chat" | "image" | "video" | "audio";
 
 export type ChatProtocol = "openai" | "anthropic" | "gemini";
 export type ImageProtocol = "openai" | "gemini";
 export type VideoProtocol = "zhipu" | "siliconflow" | "openai";
-export type AnyProtocol = ChatProtocol | ImageProtocol | VideoProtocol;
+export type AudioProtocol = "openai";
+export type AnyProtocol = ChatProtocol | ImageProtocol | VideoProtocol | AudioProtocol;
 /** 协议标识：内置协议，或自定义协议 "custom:<id>"（协议执行器） */
 export type ProtocolId = AnyProtocol | (string & {});
 
@@ -537,6 +577,7 @@ export const ROLE_LABEL: Record<ModelRole, string> = {
   chat: "对话模型",
   image: "绘画模型",
   video: "视频模型",
+  audio: "音频模型",
 };
 
 export const PROTOCOLS: Record<ModelRole, { value: string; label: string }[]> = {
@@ -554,6 +595,7 @@ export const PROTOCOLS: Record<ModelRole, { value: string; label: string }[]> = 
     { value: "siliconflow", label: "硅基流动" },
     { value: "openai", label: "OpenAI 兼容 (任务轮询)" },
   ],
+  audio: [{ value: "openai", label: "OpenAI 兼容 (audio/speech 朗读)" }],
 };
 
 /* ---------------- 其他设置 ---------------- */
@@ -600,6 +642,9 @@ export type HotkeyAction =
   // 下方工具坞：添加各类节点到视图中心（与 nodeCatalog 的条目一一对应）
   | "addImage"
   | "addVideo"
+  | "addAudio"
+  | "addAudioGen"
+  | "addVideoDub"
   | "addPrompt"
   | "addStylePreset"
   | "addNote"
@@ -644,6 +689,9 @@ export const HOTKEY_LABEL: Record<HotkeyAction, string> = {
   runAll: "运行全部工作流",
   addImage: "添加节点：图片",
   addVideo: "添加节点：视频",
+  addAudio: "添加节点：音频",
+  addAudioGen: "添加节点：生成音频",
+  addVideoDub: "添加节点：视频配音",
   addPrompt: "添加节点：提示词",
   addStylePreset: "添加节点：风格预设",
   addNote: "添加节点：备注",
@@ -691,6 +739,9 @@ export const DEFAULT_HOTKEYS: Record<HotkeyAction, string> = {
   // 工具坞按排列顺序对应 1~9、0，编辑/角色类用 Alt+数字
   addImage: "1",
   addVideo: "",
+  addAudio: "",
+  addAudioGen: "",
+  addVideoDub: "",
   addPrompt: "2",
   addStylePreset: "3",
   addNote: "4",
@@ -728,12 +779,14 @@ export type ShortcutItem = {
 /* ---------------- 自定义生成协议（协议执行器） ----------------
    模板占位符：{{baseUrl}} {{apiKey}} {{model}} {{prompt}} {{size}} {{n}} {{taskId}}
    图片类：{{image}} 首图 dataURL · {{image2}} 第二图 · {{images}} 全部参考图 JSON 数组（不加引号）· {{mask}} 蒙版 PNG dataURL
+   视频类：{{duration}} {{resolution}} {{aspect}} {{audio}} · {{video}} 参考视频 · {{refAudio}} 参考音频
+   音频类：{{voice}} 音色
    条件块：{{?var}}…{{/var}} 变量非空时保留；{{^var}}…{{/var}} 变量为空时保留（端点切换/可选字段用） */
 export type CustomProtocol = {
   id: string;
   name: string;
-  /** 用途：图片生成 / 视频生成（决定出现在哪个模型槽位、结果按图片还是视频处理） */
-  role: "image" | "video";
+  /** 用途：图片 / 视频 / 音频生成（决定出现在哪个模型槽位、结果按哪种媒体处理） */
+  role: "image" | "video" | "audio";
   /** 提交请求：url/headers/body 均为模板字符串，body 是 JSON 文本 */
   submit: { url: string; method?: "POST" | "GET"; headers?: Record<string, string>; body?: string };
   /** 提交响应里任务 id 的 JSON 路径（如 "task_id" / "data.id"）；留空 = 同步接口 */

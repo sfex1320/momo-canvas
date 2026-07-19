@@ -385,6 +385,24 @@ export const IcMusic = (p: IconProps) => (
   </I>
 );
 
+/** 麦克风（生成音频：TTS/音乐） */
+export const IcMic = (p: IconProps) => (
+  <I {...p}>
+    <rect x="9" y="3" width="6" height="11.5" rx="3" />
+    <path d="M5.5 11.5a6.5 6.5 0 0 0 13 0" />
+    <path d="M12 18v3M9 21h6" />
+  </I>
+);
+
+/** 视频配音（画面 + 声波） */
+export const IcDub = (p: IconProps) => (
+  <I {...p}>
+    <rect x="2.5" y="5.5" width="12.5" height="12" rx="3" />
+    <path d="M17.8 9.4a4.2 4.2 0 0 1 0 5.2" />
+    <path d="M20.3 7.2a7.6 7.6 0 0 1 0 9.6" />
+  </I>
+);
+
 export const IcFile = (p: IconProps) => (
   <I {...p}>
     <path d="M6 4.5A1.5 1.5 0 0 1 7.5 3h6L18.5 8v11.5a1.5 1.5 0 0 1-1.5 1.5H7.5A1.5 1.5 0 0 1 6 19.5v-15Z" />

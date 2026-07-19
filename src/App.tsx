@@ -98,6 +98,50 @@ function Lightbox() {
   );
 }
 
+/** 顺序预览播放器：时间线粗剪「预览成片」——按片段顺序自动连播，拼接前先看效果 */
+function SeqPlayer() {
+  const urls = useUi((s) => s.seqPreview);
+  const set = useUi((s) => s.setSeqPreview);
+  const [i, setI] = useState(0);
+  useEffect(() => setI(0), [urls]);
+  if (!urls?.length) return null;
+  const idx = Math.min(i, urls.length - 1);
+  return (
+    <div className="lightbox" onClick={() => set(null)}>
+      <div className="seq-wrap" onClick={(e) => e.stopPropagation()}>
+        <video
+          key={idx}
+          src={urls[idx]}
+          controls
+          autoPlay
+          onEnded={() => {
+            if (idx < urls.length - 1) setI(idx + 1);
+          }}
+        />
+        <div className="seq-bar glass">
+          <button className="btn sm" disabled={idx === 0} style={{ opacity: idx === 0 ? 0.4 : 1 }} onClick={() => setI(idx - 1)}>
+            上一段
+          </button>
+          <span>
+            第 {idx + 1} / {urls.length} 段 · 播完自动接下一段
+          </span>
+          <button
+            className="btn sm"
+            disabled={idx === urls.length - 1}
+            style={{ opacity: idx === urls.length - 1 ? 0.4 : 1 }}
+            onClick={() => setI(idx + 1)}
+          >
+            下一段
+          </button>
+          <button className="btn sm" onClick={() => set(null)}>
+            关闭
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
   const [ready, setReady] = useState(false);
 
@@ -154,6 +198,7 @@ export default function App() {
       <AssetLibrary />
       <CharLibrary />
       <Lightbox />
+      <SeqPlayer />
       <Toasts />
     </ReactFlowProvider>
   );

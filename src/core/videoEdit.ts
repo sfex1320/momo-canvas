@@ -182,6 +182,108 @@ export function concatVideos(srcs: string[], onProgress?: (msg: string) => void)
   return recordSegments(srcs.map((src) => ({ src })), onProgress);
 }
 
+/**
+ * 视频配音：把音频混入/替换视频原声，本地实时重编码输出 webm
+ *  replace = 只保留新音频；mix = 原声与新音频叠加。音频短于视频则后段静音，长于视频则截断。
+ */
+export async function dubVideo(
+  videoSrc: string,
+  audioSrc: string,
+  mode: "replace" | "mix",
+  onProgress?: (msg: string) => void,
+): Promise<string> {
+  const v = makeVideo(videoSrc);
+  await loadMeta(v);
+  const dur = Number.isFinite(v.duration) ? v.duration : 0;
+  if (dur <= 0.1) throw new Error("上游视频时长为 0，无法配音");
+
+  const c = document.createElement("canvas");
+  c.width = v.videoWidth || 1280;
+  c.height = v.videoHeight || 720;
+  const ctx = c.getContext("2d");
+  if (!ctx) throw new Error("无法创建画布上下文");
+
+  const ac = new AudioContext();
+  const dest = ac.createMediaStreamDestination();
+  // 新音频一路
+  const a = document.createElement("audio");
+  a.crossOrigin = "anonymous";
+  a.preload = "auto";
+  a.src = audioSrc;
+  await new Promise<void>((res, rej) => {
+    if (a.readyState >= 1) return res();
+    a.onloadedmetadata = () => res();
+    a.onerror = () => rej(new Error("音频加载失败：源可能已过期或格式不支持"));
+  });
+  try {
+    ac.createMediaElementSource(a).connect(dest);
+  } catch {
+    void ac.close();
+    throw new Error(CROSS_HINT);
+  }
+  // mix 模式再接入视频原声
+  if (mode === "mix") {
+    try {
+      ac.createMediaElementSource(v).connect(dest);
+    } catch {
+      /* 原声跨域取不到就只用新音频 */
+    }
+  }
+
+  const stream = c.captureStream(30);
+  for (const track of dest.stream.getAudioTracks()) stream.addTrack(track);
+  const rec = new MediaRecorder(stream, { mimeType: pickMime(), videoBitsPerSecond: 8_000_000 });
+  const chunks: Blob[] = [];
+  rec.ondataavailable = (e) => {
+    if (e.data.size) chunks.push(e.data);
+  };
+  const done = new Promise<void>((res) => (rec.onstop = () => res()));
+
+  let tainted = false;
+  rec.start(250);
+  try {
+    v.muted = mode !== "mix"; // replace：原声不出（也没接进采集）；mix：经 AudioContext 采集
+    if (mode === "mix") {
+      v.muted = false;
+      v.volume = 1;
+    }
+    a.volume = 1;
+    await v.play();
+    void a.play().catch(() => undefined);
+    await new Promise<void>((res, rej) => {
+      let raf = 0;
+      const tick = () => {
+        try {
+          ctx.drawImage(v, 0, 0, c.width, c.height);
+        } catch {
+          tainted = true;
+        }
+        onProgress?.(`配音重编码中 ${Math.min(99, Math.round((v.currentTime / dur) * 100))}%`);
+        if (v.ended || v.currentTime >= dur - 0.03) {
+          v.pause();
+          a.pause();
+          cancelAnimationFrame(raf);
+          res();
+          return;
+        }
+        raf = requestAnimationFrame(tick);
+      };
+      v.onerror = () => rej(new Error("视频播放出错"));
+      raf = requestAnimationFrame(tick);
+    });
+  } finally {
+    rec.stop();
+    await done;
+    void ac.close();
+    v.src = "";
+    a.src = "";
+  }
+  if (tainted) throw new Error(CROSS_HINT);
+  const blob = new Blob(chunks, { type: "video/webm" });
+  if (blob.size < 20_000) throw new Error("录制结果为空，可能是视频无法解码或被跨域保护");
+  return URL.createObjectURL(blob);
+}
+
 /** 读视频时长（秒），失败返回 0 */
 export async function videoDuration(src: string): Promise<number> {
   try {

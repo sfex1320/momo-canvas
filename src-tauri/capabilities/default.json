@@ -55,6 +55,18 @@
       "identifier": "fs:allow-stat",
       "allow": [{ "path": "**" }]
     },
+    {
+      "identifier": "fs:allow-write-text-file",
+      "allow": [{ "path": "**" }]
+    },
+    {
+      "identifier": "fs:allow-read-text-file",
+      "allow": [{ "path": "**" }]
+    },
+    {
+      "identifier": "fs:allow-read-dir",
+      "allow": [{ "path": "**" }]
+    },
     "updater:default",
     "process:default",
     "opener:allow-reveal-item-in-dir",

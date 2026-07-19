@@ -19,6 +19,8 @@ export type VideoGenReq = {
   refImages?: string[];
   /** 参考视频（部分家族支持；自定义协议用 {{video}} 占位） */
   video?: string;
+  /** 参考音频（Seedance 2.0 等支持；自定义协议用 {{refAudio}} 占位） */
+  refAudio?: string;
   /** 时长（秒数字符串，如 "5"；服务层按协议转格式） */
   duration?: string;
   /** 分辨率档（如 "720p"） */
@@ -62,6 +64,7 @@ async function genCustomVideo(card: ModelCard, req: VideoGenReq): Promise<string
         image2: req.lastFrame ?? "",
         images: JSON.stringify(req.refImages ?? []),
         video: req.video ?? "",
+        refAudio: req.refAudio ?? "",
         // 家族化参数（模板按需引用；空值配合条件块 {{?duration}}…{{/duration}} 不发）
         duration: req.duration ?? "",
         resolution: req.resolution ?? "",

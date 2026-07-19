@@ -6,6 +6,7 @@ import { useBoard } from "../../../core/stores/boardStore";
 import { optimizePrompt, orderedInEdges } from "../../../core/runner";
 import { Thumb } from "../../../ui/Thumb";
 import { PromptHistoryBtn } from "../../../ui/PromptHistory";
+import { AtTextArea } from "../../../ui/AtTextArea";
 import type { PromptData } from "../../../core/types";
 
 /** 与本提示词共同接入同一个下游生成节点的上游图片（供 @ 引用） */
@@ -72,24 +73,30 @@ export const PromptNode = memo(function PromptNode({ id, data, selected }: NodeP
       <div className="mnode-body">
         {images.length ? (
           <div className="ref-strip nodrag">
-            <span className="rs-lab">同路参考图 · 点击 @ 到提示词</span>
+            <span className="rs-lab">同路参考图 · 点击引用到提示词</span>
             <div className="rs-chips">
-              {images.map((im) => (
-                <button key={im.label} className="img-chip" title={`插入 @${im.label}（如：@${im.label} 把背景换成夜景）`} onClick={() => insertAt(im.label)}>
+              {images.map((im, i) => (
+                <button
+                  key={im.label}
+                  className="img-chip"
+                  title={`插入引用（如：图${i + 1} 把背景换成夜景）· 发给模型时按「图${i + 1}」编号`}
+                  onClick={() => insertAt(im.label)}
+                >
                   <Thumb src={im.src} alt="" />
-                  <span>@{im.label}</span>
+                  <b>图{i + 1}</b>
+                  {im.label !== `图${i + 1}` ? <span className="ic-name">{im.label}</span> : null}
                 </button>
               ))}
             </div>
           </div>
         ) : null}
-        <textarea
-          ref={taRef}
-          className="textarea nodrag nowheel"
+        <AtTextArea
+          taRef={taRef}
           rows={5}
           placeholder="描述你想要的画面…"
           value={d.text}
-          onChange={(e) => upd(id, { text: e.target.value })}
+          onChange={(t) => upd(id, { text: t })}
+          refs={images}
         />
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6 }}>
           <span style={{ fontSize: 12.5, color: "var(--text-3)", flex: 1 }}>{d.text.length} 字</span>

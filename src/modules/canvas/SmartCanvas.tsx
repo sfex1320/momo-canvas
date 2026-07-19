@@ -66,6 +66,9 @@ import { VideoTrimNode } from "./nodes/VideoTrimNode";
 import { VideoConcatNode } from "./nodes/VideoConcatNode";
 import { StoryboardNode } from "./nodes/StoryboardNode";
 import { VideoNode, importVideoFile } from "./nodes/VideoNode";
+import { AudioNode, importAudioFile } from "./nodes/AudioNode";
+import { AudioGenNode } from "./nodes/AudioGenNode";
+import { VideoDubNode } from "./nodes/VideoDubNode";
 
 /** 一键清空画布：首次点击进入确认态（2.5 秒内再点执行），入撤销历史可 Ctrl+Z 恢复 */
 function ClearAllBtn() {
@@ -96,6 +99,9 @@ function ClearAllBtn() {
 const nodeTypes: NodeTypes = {
   image: ImageNode,
   video: VideoNode,
+  audio: AudioNode,
+  audioGen: AudioGenNode,
+  videoDub: VideoDubNode,
   prompt: PromptNode,
   chat: ChatNode,
   imageGen: ImageGenNode,
@@ -242,7 +248,15 @@ export function SmartCanvas() {
         : outPortType(src.type as NodeKind, src.data as Record<string, unknown>);
     if (!pt) return false;
     const want =
-      conn.targetHandle === "in-text" ? "text" : conn.targetHandle === "in-image" ? "image" : conn.targetHandle === "in-video" ? "video" : null;
+      conn.targetHandle === "in-text"
+        ? "text"
+        : conn.targetHandle === "in-image"
+          ? "image"
+          : conn.targetHandle === "in-video"
+            ? "video"
+            : conn.targetHandle === "in-audio"
+              ? "audio"
+              : null;
     if (want !== pt) return false;
     if (s.edges.some((e) => e.source === conn.source && e.target === conn.target && e.targetHandle === conn.targetHandle))
       return false;
@@ -314,8 +328,8 @@ export function SmartCanvas() {
       if (assetId) {
         const it = useAssets.getState().items.find((x) => x.id === assetId);
         if (!it) return;
-        if (it.kind !== "image" && it.kind !== "video") {
-          toast("目前仅支持把图片/视频资产拖入画布", "err");
+        if (it.kind !== "image" && it.kind !== "video" && it.kind !== "audio") {
+          toast("目前仅支持把图片/视频/音频资产拖入画布", "err");
           return;
         }
         try {
@@ -323,6 +337,8 @@ export function SmartCanvas() {
             // 视频资产 → 视频节点（直接用磁盘文件的 asset: URL，重启依然有效）
             const src = assetUrl(it.path);
             autoLink(addNode("video", pos, { src, name: it.name, status: "done", dur: await videoDuration(src) }));
+          } else if (it.kind === "audio") {
+            autoLink(addNode("audio", pos, { src: assetUrl(it.path), name: it.name, status: "done" }));
           } else {
             const src = await assetToDataUrl(it.path, it.mime);
             autoLink(addNode("image", pos, { src, name: it.name, status: "done" }));
@@ -344,6 +360,22 @@ export function SmartCanvas() {
           try {
             const { src, dur } = await importVideoFile(videoFiles[i]);
             useBoard.getState().updateData(nid, { src, dur, status: "done" });
+            autoLink(nid);
+          } catch (err) {
+            useBoard.getState().updateData(nid, { status: "error", error: errMsg(err) });
+          }
+        }
+        return;
+      }
+
+      // 拖入音频文件 → 音频节点
+      const audioFiles = allFiles.filter((f) => f.type.startsWith("audio/") || /\.(mp3|wav|m4a|ogg|flac|aac)$/i.test(f.name));
+      if (audioFiles.length) {
+        for (let i = 0; i < audioFiles.length; i++) {
+          const nid = addNode("audio", { x: pos.x + i * 36, y: pos.y + i * 36 }, { status: "running", name: audioFiles[i].name });
+          try {
+            const { src } = await importAudioFile(audioFiles[i]);
+            useBoard.getState().updateData(nid, { src, status: "done" });
             autoLink(nid);
           } catch (err) {
             useBoard.getState().updateData(nid, { status: "error", error: errMsg(err) });
@@ -398,6 +430,19 @@ export function SmartCanvas() {
           if (f) {
             const src = await fileToDataUrl(f);
             addNode("image", center, { src, name: "粘贴的图片", status: "done" });
+          }
+          return;
+        }
+        if (it.type.startsWith("video/")) {
+          const f = it.getAsFile();
+          if (f) {
+            const nid = addNode("video", center, { status: "running", name: f.name || "粘贴的视频" });
+            try {
+              const { src, dur } = await importVideoFile(f);
+              useBoard.getState().updateData(nid, { src, dur, status: "done" });
+            } catch (err) {
+              useBoard.getState().updateData(nid, { status: "error", error: errMsg(err) });
+            }
           }
           return;
         }

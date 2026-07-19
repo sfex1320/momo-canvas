@@ -114,13 +114,19 @@ export async function calibrateProtocol(
     if (signal?.aborted) throw new Error("已手动停止测试（提交请求已发出的费用不退，任务仍会在服务商后台完成）");
   };
   const proto: CustomProtocol = JSON.parse(JSON.stringify(input));
-  const kind = proto.role === "video" ? "video" : "image";
+  const kind = proto.role === "video" ? "video" : proto.role === "audio" ? "audio" : "image";
   const base = trimBase(ctx.baseUrl);
   const vars: Record<string, string> = {
     baseUrl: base,
     apiKey: ctx.apiKey,
     model: ctx.model,
-    prompt: kind === "video" ? "测试：一只橘猫缓缓转头，简洁卡通风格" : "测试：一只可爱的橘猫，简洁卡通风格",
+    prompt:
+      kind === "video"
+        ? "测试：一只橘猫缓缓转头，简洁卡通风格"
+        : kind === "audio"
+          ? "测试：你好，这是一次语音合成测试。"
+          : "测试：一只可爱的橘猫，简洁卡通风格",
+    voice: proto.submit.body?.includes("{{voice}}") ? "alloy" : "",
     size: "1024x1024",
     n: "1",
     taskId: "",

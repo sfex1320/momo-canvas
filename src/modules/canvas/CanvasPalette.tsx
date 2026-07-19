@@ -10,7 +10,9 @@ import { NODE_LABEL, useBoard } from "../../core/stores/boardStore";
 import { useTemplates } from "../../core/stores/templateStore";
 import { useUi } from "../../core/stores/uiStore";
 import { NODE_CATALOG } from "./nodeCatalog";
-import { IcLayers, IcSearch, IcTrash } from "../../ui/icons";
+import { IcDownload, IcLayers, IcSearch, IcTrash, IcUpload } from "../../ui/icons";
+import { toast } from "../../core/stores/uiStore";
+import { errMsg, isTauri } from "../../core/utils";
 import type { AppNode, BoardTemplate, ChatMsg, NodeKind } from "../../core/types";
 
 /** 节点的可搜索文本：类型名 + 各类内容字段 */
@@ -224,6 +226,22 @@ export function Spotlight({ onPick, onPickTemplate }: { onPick: (kind: NodeKind)
                       ? it.desc
                       : `画布模板 · ${it.tpl.nodes.filter((x) => x.kind !== "group").length} 个节点，插入即用`}
                   </span>
+                  {it.type === "tpl" ? (
+                    <span
+                      className="pal-del"
+                      title="导出为 .momoflow 工作流文件（发给别人导入即用）"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        void useTemplates
+                          .getState()
+                          .exportOne(it.tpl)
+                          .then((p) => p && toast(`已导出 → ${p}`, "ok"))
+                          .catch((err) => toast(`导出失败：${errMsg(err)}`, "err"));
+                      }}
+                    >
+                      <IcDownload size={14} />
+                    </span>
+                  ) : null}
                   {it.type === "tpl" && !it.tpl.builtin ? (
                     <span
                       className="pal-del"
@@ -242,6 +260,41 @@ export function Spotlight({ onPick, onPickTemplate }: { onPick: (kind: NodeKind)
           ) : (
             <div className="pal-empty">没有匹配的节点或模板</div>
           )}
+          <button
+            className="pal-item"
+            title="导入别人分享的 .momoflow 工作流文件（导入后出现在模板列表，插入即用）"
+            onClick={() => {
+              const done = (name: string | null) => {
+                if (name) toast(`已导入工作流「${name}」：在此列表中选择即可插入画布`, "ok");
+              };
+              if (isTauri) {
+                void useTemplates
+                  .getState()
+                  .importViaDialog()
+                  .then(done)
+                  .catch((err) => toast(`导入失败：${errMsg(err)}`, "err"));
+                return;
+              }
+              const input = document.createElement("input");
+              input.type = "file";
+              input.accept = ".momoflow,.json";
+              input.onchange = () => {
+                const f = input.files?.[0];
+                if (!f) return;
+                void f
+                  .text()
+                  .then((t) => done(useTemplates.getState().importText(t)))
+                  .catch((err) => toast(`导入失败：${errMsg(err)}`, "err"));
+              };
+              input.click();
+            }}
+          >
+            <span className="pal-ic">
+              <IcUpload size={16} />
+            </span>
+            <b>导入工作流文件</b>
+            <span>.momoflow · 别人导出的画布工作流，导入后即出现在模板列表</span>
+          </button>
         </div>
       </div>
     </div>

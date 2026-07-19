@@ -1,6 +1,6 @@
 import { memo } from "react";
 import type { NodeProps } from "@xyflow/react";
-import { NodeShell, PortImageIn, PortOut, PortTextIn, PortVideoIn } from "../NodeShell";
+import { NodeShell, PortAudioIn, PortImageIn, PortOut, PortTextIn, PortVideoIn } from "../NodeShell";
 import { IcGear } from "../../../ui/icons";
 import { IcDownload, IcLoading, IcVideo } from "../../../ui/icons";
 import { ModelPicker } from "../../../ui/ModelPicker";
@@ -11,6 +11,7 @@ import { collectUpstream, runFlow } from "../../../core/runner";
 import { saveVideoAs } from "../../../core/services/imageSaver";
 import { errMsg } from "../../../core/utils";
 import { VideoThumb } from "../../../ui/VideoThumb";
+import { PromptHistoryBtn } from "../../../ui/PromptHistory";
 import type { VideoGenData } from "../../../core/types";
 
 export const VideoGenNode = memo(function VideoGenNode({ id, data, selected }: NodeProps) {
@@ -70,13 +71,18 @@ export const VideoGenNode = memo(function VideoGenNode({ id, data, selected }: N
           </div>
         </div>
         {hasUpText && !(d.prompt ?? "").trim() ? null : (
-          <textarea
-            className="textarea nodrag nowheel"
-            rows={3}
-            placeholder="视频描述（第 1 路上游图 = 首帧，第 2 路 = 尾帧）"
-            value={d.prompt}
-            onChange={(e) => upd(id, { prompt: e.target.value })}
-          />
+          <div style={{ position: "relative" }}>
+            <textarea
+              className="textarea nodrag nowheel"
+              rows={3}
+              placeholder="视频描述（第 1 路上游图 = 首帧，第 2 路 = 尾帧）"
+              value={d.prompt}
+              onChange={(e) => upd(id, { prompt: e.target.value })}
+            />
+            <div style={{ position: "absolute", right: 5, bottom: 5 }}>
+              <PromptHistoryBtn onPick={(t) => upd(id, { prompt: t })} />
+            </div>
+          </div>
         )}
         <div className="gen-sum nodrag" title="选中节点后，在画布左下角的「生成设置」面板中调整时长/分辨率/比例/音频等参数">
           <IcGear size={13} />
@@ -99,6 +105,7 @@ export const VideoGenNode = memo(function VideoGenNode({ id, data, selected }: N
       <PortTextIn />
       <PortImageIn />
       <PortVideoIn top={90} />
+      <PortAudioIn top={122} />
       <PortOut kind="video" />
     </NodeShell>
   );

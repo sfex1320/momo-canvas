@@ -19,7 +19,12 @@ export function defaultData(kind: NodeKind): Record<string, unknown> {
   switch (kind) {
     case "image":
     case "video":
+    case "audio":
       return { status: "idle" };
+    case "audioGen":
+      return { status: "idle", text: "" };
+    case "videoDub":
+      return { status: "idle", mode: "replace" };
     case "prompt":
       return { status: "idle", text: "" };
     case "chat":
@@ -116,7 +121,11 @@ export function outPortType(kind: NodeKind, data?: Record<string, unknown>): Por
     case "videoGen":
     case "videoTrim":
     case "videoConcat":
+    case "videoDub":
       return "video";
+    case "audio":
+    case "audioGen":
+      return "audio";
     case "frame":
       return "image";
     case "note":
@@ -126,15 +135,18 @@ export function outPortType(kind: NodeKind, data?: Record<string, unknown>): Por
 }
 
 /** 各节点的输入端口能力（自动连线 / 快速添加过滤共用） */
-export const NODE_INPUTS: Record<NodeKind, { text?: boolean; image?: boolean; video?: boolean }> = {
+export const NODE_INPUTS: Record<NodeKind, { text?: boolean; image?: boolean; video?: boolean; audio?: boolean }> = {
   image: {},
   video: {},
+  audio: {},
+  audioGen: { text: true },
+  videoDub: { video: true, audio: true },
   prompt: {},
   stylePreset: {},
   note: {},
   chat: { text: true, image: true },
   imageGen: { text: true, image: true },
-  videoGen: { text: true, image: true, video: true },
+  videoGen: { text: true, image: true, video: true, audio: true },
   comfy: { text: true, image: true, video: true },
   caption: { image: true },
   llmText: { text: true },
@@ -159,6 +171,7 @@ export const NODE_INPUTS: Record<NodeKind, { text?: boolean; image?: boolean; vi
 const KIND_RANK: Record<NodeKind, number> = {
   image: 0,
   video: 0.5,
+  audio: 0.6,
   prompt: 1,
   stylePreset: 2,
   chat: 3,
@@ -180,6 +193,8 @@ const KIND_RANK: Record<NodeKind, number> = {
   frame: 11.2,
   videoTrim: 11.3,
   videoConcat: 11.4,
+  audioGen: 11.5,
+  videoDub: 11.6,
   comfy: 12,
   note: 13,
   group: 14,
@@ -191,6 +206,9 @@ function kindRank(kind: NodeKind): number {
 export const NODE_LABEL: Record<NodeKind, string> = {
   image: "图片",
   video: "视频",
+  audio: "音频",
+  audioGen: "生成音频",
+  videoDub: "视频配音",
   prompt: "提示词",
   chat: "对话",
   imageGen: "生成图像",
@@ -308,8 +326,8 @@ function sanitizeNodes(nodes: AppNode[]): AppNode[] {
     d.progress = undefined;
     d.progressPct = undefined;
     if (typeof d.resultUrl === "string" && d.resultUrl.startsWith("blob:")) d.resultUrl = undefined;
-    // 视频节点的 blob 源 / ComfyUI 的 blob 视频结果同样跨会话失效
-    if (n.type === "video" && typeof d.src === "string" && d.src.startsWith("blob:")) d.src = undefined;
+    // 视频/音频节点的 blob 源 / ComfyUI 的 blob 视频结果同样跨会话失效
+    if ((n.type === "video" || n.type === "audio") && typeof d.src === "string" && d.src.startsWith("blob:")) d.src = undefined;
     if (Array.isArray(d.videoResults)) {
       const keep = (d.videoResults as string[]).filter((u) => typeof u === "string" && !u.startsWith("blob:"));
       d.videoResults = keep.length ? keep : undefined;
@@ -402,6 +420,7 @@ function linkHandles(
     targetHandle =
       pt === "image" ? (ins.image ? "in-image" : null)
       : pt === "video" ? (ins.video ? "in-video" : null)
+      : pt === "audio" ? (ins.audio ? "in-audio" : null)
       : ins.text ? "in-text" : null;
     if (!targetHandle) return null;
   }

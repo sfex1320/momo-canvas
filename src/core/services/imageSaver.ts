@@ -62,6 +62,32 @@ export async function saveImageAs(src: string, cfg: SaveCfg, meta: SaveMeta = {}
   return path;
 }
 
+/** 保存音频（asset/远程/blob/dataURL → 磁盘） */
+export async function saveAudioAs(url: string, cfg: SaveCfg, meta: SaveMeta = {}): Promise<string | null> {
+  const fetchBytes = async () => {
+    if (url.startsWith("data:")) return dataUrlToBytes(url);
+    const resp = url.startsWith("blob:") ? await fetch(url) : await xfetch(url);
+    return new Uint8Array(await resp.arrayBuffer());
+  };
+  const ext = /(\.|\/)(wav)\b/i.test(url) ? "wav" : "mp3";
+  if (!isTauri) {
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${buildFilename(cfg.pattern, meta)}.${ext}`;
+    a.click();
+    return null;
+  }
+  const { save } = await import("@tauri-apps/plugin-dialog");
+  const path = await save({
+    defaultPath: `${cfg.dir ? cfg.dir + "\\" : ""}${buildFilename(cfg.pattern, meta)}.${ext}`,
+    filters: [{ name: "音频", extensions: ["mp3", "wav", "m4a", "ogg"] }],
+  });
+  if (!path) return null;
+  const { writeFile } = await import("@tauri-apps/plugin-fs");
+  await writeFile(path, await fetchBytes());
+  return path;
+}
+
 /** 保存视频（远程 url / blob url → 磁盘） */
 export async function saveVideoAs(url: string, cfg: SaveCfg, meta: SaveMeta = {}): Promise<string | null> {
   const fetchBytes = async () => {

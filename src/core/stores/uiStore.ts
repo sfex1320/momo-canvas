@@ -18,7 +18,7 @@ export type AddMenuState = {
   screenY: number;
   /** 从某个输出拖线松手时：来源节点，用于自动连线 */
   sourceNode?: string;
-  sourcePort?: "text" | "image" | "video";
+  sourcePort?: "text" | "image" | "video" | "audio";
 } | null;
 
 type UiState = {
@@ -38,6 +38,8 @@ type UiState = {
   lightboxBefore: string | null;
   /** 灯箱内容类型：video 时用 <video> 播放（节点上只显示封面帧，点开才真正播放） */
   lightboxKind: "image" | "video";
+  /** 顺序预览播放列表（时间线粗剪「预览成片」）：非空时全屏播放器逐段自动连播 */
+  seqPreview: string[] | null;
   addMenu: AddMenuState;
   gallery: GalleryItem[];
   toasts: Toast[];
@@ -81,6 +83,7 @@ type UiState = {
   setTemplateMgr: (v: boolean, editId?: string | null) => void;
   setCharLibOpen: (v: boolean) => void;
   setLightbox: (src: string | null, before?: string | null, kind?: "image" | "video") => void;
+  setSeqPreview: (urls: string[] | null) => void;
   setAddMenu: (v: AddMenuState) => void;
   setProxHint: (ids: string[] | null) => void;
   toggleTool: () => void;
@@ -106,6 +109,7 @@ export const useUi = create<UiState>((set) => ({
   lightbox: null,
   lightboxBefore: null,
   lightboxKind: "image",
+  seqPreview: null,
   addMenu: null,
   gallery: [],
   toasts: [],
@@ -142,6 +146,7 @@ export const useUi = create<UiState>((set) => ({
   setCharLibOpen: (v) => set({ charLibOpen: v }),
   setLightbox: (src, before, kind) =>
     set({ lightbox: src, lightboxBefore: src ? (before ?? null) : null, lightboxKind: src ? (kind ?? "image") : "image" }),
+  setSeqPreview: (urls) => set({ seqPreview: urls?.length ? urls : null }),
   setAddMenu: (v) => set({ addMenu: v }),
 
   setProxHint: (ids) =>
