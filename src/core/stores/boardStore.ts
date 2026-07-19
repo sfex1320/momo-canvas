@@ -233,6 +233,8 @@ type BoardState = {
   snapshot: () => void;
   undo: () => void;
   redo: () => void;
+  /** 一键清空当前画布（全部节点与连线；入撤销历史，Ctrl+Z 可整体恢复） */
+  clearAll: () => void;
 
   newBoard: () => void;
   switchBoard: (id: string) => void;
@@ -492,6 +494,13 @@ export const useBoard = create<BoardState>((set, get) => {
     },
 
     snapshot,
+
+    clearAll: () => {
+      if (!get().nodes.length && !get().edges.length) return;
+      snapshot();
+      set({ nodes: [], edges: [] });
+      persist();
+    },
 
     undo: () => {
       const snap = past.pop();

@@ -2271,3 +2271,14 @@
 .comfy-textout .btn.sm {
   align-self: flex-end;
 }
+
+/* 工具栏：清空画布的确认态 */
+.tool-bar .tb-btn.arm-danger {
+  color: var(--danger);
+  background: rgba(242, 79, 106, 0.14);
+  animation: pulse 0.9s ease-in-out infinite alternate;
+}
+@keyframes pulse {
+  from { box-shadow: 0 0 0 0 rgba(242, 79, 106, 0.35); }
+  to { box-shadow: 0 0 0 5px rgba(242, 79, 106, 0); }
+}

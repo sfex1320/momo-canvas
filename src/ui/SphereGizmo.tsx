@@ -28,7 +28,7 @@ export function SphereGizmo({
   onChange: (az: number, el: number) => void;
 }) {
   const ref = useRef<SVGSVGElement>(null);
-  const drag = useRef<{ az: number; el: number; x: number; y: number } | null>(null);
+  const drag = useRef<{ az: number; el: number; x: number; y: number; sign: 1 | -1 } | null>(null);
   const clipId = useId();
   const thumb = useThumb(image);
 
@@ -46,17 +46,19 @@ export function SphereGizmo({
   const nx = len > 8 ? (-y / len) * 13 : 0;
   const ny = len > 8 ? (x / len) * 13 : 0;
 
-  /* 轨迹球拖拽：以按下时的方位为基准做增量，水平满幅 ≈ 300°、垂直满幅 ≈ 200° */
+  /* 轨迹球拖拽：以按下时的方位为基准做增量，水平满幅 ≈ 300°、垂直满幅 ≈ 200°。
+     方向跟手：图标在背面时水平增量取反（否则物理镜像会让图标与鼠标反着走）；
+     方向在按下时锁定，拖动中途越过边缘也不突变，松手重按即按新半球生效。 */
   const onDown = (e: React.PointerEvent<SVGSVGElement>) => {
     if (e.button !== 0) return;
     e.currentTarget.setPointerCapture(e.pointerId);
-    drag.current = { az, el, x: e.clientX, y: e.clientY };
+    drag.current = { az, el, x: e.clientX, y: e.clientY, sign: depth >= 0 ? 1 : -1 };
   };
   const onMove = (e: React.PointerEvent<SVGSVGElement>) => {
     const d = drag.current;
     const b = ref.current?.getBoundingClientRect();
     if (!d || !b?.width) return;
-    let naz = d.az + ((e.clientX - d.x) / b.width) * 300;
+    let naz = d.az + d.sign * ((e.clientX - d.x) / b.width) * 300;
     naz = ((naz + 540) % 360) - 180; // 环绕到 -180..180
     const nel = Math.max(-85, Math.min(85, d.el - ((e.clientY - d.y) / b.height) * 200));
     onChange(Math.round(naz), Math.round(nel));

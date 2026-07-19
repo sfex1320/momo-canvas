@@ -37,7 +37,7 @@ import { AddNodeMenu } from "./AddNodeMenu";
 import { CanvasSearch, Spotlight } from "./CanvasPalette";
 import { AiWirePanel } from "./AiWirePanel";
 import { runAllFlows } from "../../core/runner";
-import { IcCursor, IcEyeOff, IcFit, IcGroup, IcLock, IcLogo, IcPlay, IcPlus, IcMin, IcUndo, IcRedo, IcWand } from "../../ui/icons";
+import { IcCursor, IcEyeOff, IcFit, IcGroup, IcLock, IcLogo, IcPlay, IcPlus, IcMin, IcTrash, IcUndo, IcRedo, IcWand } from "../../ui/icons";
 
 import { ImageNode } from "./nodes/ImageNode";
 import { PromptNode } from "./nodes/PromptNode";
@@ -60,6 +60,32 @@ import { OutpaintNode } from "./nodes/OutpaintNode";
 import { MattingNode } from "./nodes/MattingNode";
 import { EnhanceNode } from "./nodes/EnhanceNode";
 import { CropNode } from "./nodes/CropNode";
+
+/** 一键清空画布：首次点击进入确认态（2.5 秒内再点执行），入撤销历史可 Ctrl+Z 恢复 */
+function ClearAllBtn() {
+  const [arm, setArm] = useState(false);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  return (
+    <button
+      className={`tb-btn ${arm ? "arm-danger" : ""}`}
+      title={arm ? "再点一次确认清空整个画布（Ctrl+Z 可撤销）" : "一键清空画布：移除全部节点与连线（需点两次确认，可撤销）"}
+      onClick={() => {
+        if (!arm) {
+          setArm(true);
+          if (timer.current) clearTimeout(timer.current);
+          timer.current = setTimeout(() => setArm(false), 2500);
+          return;
+        }
+        if (timer.current) clearTimeout(timer.current);
+        setArm(false);
+        useBoard.getState().clearAll();
+        toast("画布已清空（Ctrl+Z 可整体恢复）", "ok");
+      }}
+    >
+      <IcTrash size={18} />
+    </button>
+  );
+}
 
 const nodeTypes: NodeTypes = {
   image: ImageNode,
@@ -600,6 +626,7 @@ export function SmartCanvas() {
           >
             <IcWand size={18} />
           </button>
+          <ClearAllBtn />
         </div>
       ) : null}
 
