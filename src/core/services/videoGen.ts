@@ -8,10 +8,21 @@ import type { ModelCard } from "../types";
 import { xfetch, trimBase, readErrorBody } from "./http";
 import { extractResultStrings, resolveCustomProto, runCustomFlow } from "./customProto";
 import { runWithSelfHeal } from "./protoSelfHeal";
+import { soraSize, videoFamily, videoWh } from "../videoMeta";
 
 export type VideoGenReq = {
   prompt: string;
   image?: string; // 首帧参考图 dataURL
+  /** 尾帧参考图 dataURL（首尾帧过渡；家族支持时才传） */
+  lastFrame?: string;
+  /** 时长（秒数字符串，如 "5"；服务层按协议转格式） */
+  duration?: string;
+  /** 分辨率档（如 "720p"） */
+  resolution?: string;
+  /** 宽高比（如 "16:9"） */
+  aspect?: string;
+  /** 生成音频 */
+  audio?: boolean;
   onProgress?: (msg: string) => void;
   signal?: AbortSignal;
 };
@@ -41,8 +52,14 @@ async function genCustomVideo(card: ModelCard, req: VideoGenReq): Promise<string
         size: "",
         n: "1",
         taskId: "",
-        // 首帧参考图 dataURL（模板用 {{image}} 占位）
+        // 首帧参考图 dataURL（模板用 {{image}} 占位）；{{image2}} = 尾帧
         image: req.image ?? "",
+        image2: req.lastFrame ?? "",
+        // 家族化参数（模板按需引用；空值配合条件块 {{?duration}}…{{/duration}} 不发）
+        duration: req.duration ?? "",
+        resolution: req.resolution ?? "",
+        aspect: req.aspect ?? "",
+        audio: req.audio === undefined ? "" : String(req.audio),
       };
       req.onProgress?.("提交任务…");
       const final = await runCustomFlow(p, vars, req.onProgress, trace);
@@ -71,9 +88,17 @@ export async function generateVideo(card: ModelCard, req: VideoGenReq): Promise<
   const progress = (m: string) => req.onProgress?.(m);
   const tick = (i: number) => progress(`生成中… (${Math.floor(((i + 1) * 3) / 60)}分${((i + 1) * 3) % 60}秒)`);
 
+  const family = videoFamily(card);
+
   if (card.protocol === "zhipu") {
     const body: Record<string, unknown> = { model: card.model, prompt: req.prompt };
     if (req.image) body.image_url = req.image;
+    if (req.duration) body.duration = Number(req.duration);
+    if (req.resolution) {
+      const wh = videoWh(req.resolution, req.aspect ?? "16:9");
+      if (wh) body.size = `${wh.w}x${wh.h}`;
+    }
+    if (req.audio !== undefined) body.with_audio = req.audio;
     const resp = await xfetch(`${base}/videos/generations`, { method: "POST", headers, body: JSON.stringify(body) });
     if (!resp.ok) throw new Error(`视频任务提交失败 ${resp.status}: ${await readErrorBody(resp)}`);
     const { id } = await resp.json();
@@ -98,6 +123,10 @@ export async function generateVideo(card: ModelCard, req: VideoGenReq): Promise<
   if (card.protocol === "siliconflow") {
     const body: Record<string, unknown> = { model: card.model, prompt: req.prompt };
     if (req.image) body.image = req.image;
+    if (req.resolution) {
+      const wh = videoWh(req.resolution, req.aspect ?? "16:9");
+      if (wh) body.image_size = `${wh.w}x${wh.h}`;
+    }
     const resp = await xfetch(`${base}/video/submit`, { method: "POST", headers, body: JSON.stringify(body) });
     if (!resp.ok) throw new Error(`视频任务提交失败 ${resp.status}: ${await readErrorBody(resp)}`);
     const { requestId } = await resp.json();
@@ -119,9 +148,19 @@ export async function generateVideo(card: ModelCard, req: VideoGenReq): Promise<
     throw new Error("视频生成超时");
   }
 
-  // openai 任务式
+  // openai 任务式（Sora 风格：seconds 字符串 + size 尺寸串；首帧 input_reference）
   {
     const body: Record<string, unknown> = { model: card.model, prompt: req.prompt };
+    if (req.duration) body.seconds = req.duration;
+    if (req.resolution) {
+      if (family === "sora") {
+        body.size = soraSize(req.resolution, req.aspect ?? "16:9");
+      } else {
+        const wh = videoWh(req.resolution, req.aspect ?? "16:9");
+        if (wh) body.size = `${wh.w}x${wh.h}`;
+      }
+    }
+    if (req.image) body.input_reference = req.image;
     const resp = await xfetch(`${base}/videos`, { method: "POST", headers, body: JSON.stringify(body) });
     if (!resp.ok) throw new Error(`视频任务提交失败 ${resp.status}: ${await readErrorBody(resp)}`);
     const { id } = await resp.json();

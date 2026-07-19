@@ -128,6 +128,11 @@ export async function calibrateProtocol(
     image2: proto.submit.body?.includes("{{image2}}") ? makeTestImage() : "",
     images: proto.submit.body?.includes("{{images}}") ? JSON.stringify([makeTestImage()]) : "[]",
     mask: proto.submit.body?.includes("{{mask}}") ? makeTestImage() : "",
+    // 视频家族参数：校准时给一组便宜的最小值（时长最短、分辨率最低）
+    duration: kind === "video" ? "5" : "",
+    resolution: kind === "video" ? "480p" : "",
+    aspect: kind === "video" ? "16:9" : "",
+    audio: kind === "video" ? "false" : "",
   };
 
   onLog(`① 发送提交请求：${render(proto.submit.url, vars)}`);

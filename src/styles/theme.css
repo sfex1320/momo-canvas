@@ -37,6 +37,7 @@
   /* 端口类型色 */
   --port-text: #9a6bff;
   --port-image: #37b6ff;
+  --port-video: #2fbf8f;
   --port-video: #ff6fae;
 
   --tb-h: 46px; /* 标题栏高度 */

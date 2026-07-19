@@ -1,6 +1,7 @@
 import { memo } from "react";
 import type { NodeProps } from "@xyflow/react";
-import { NodeShell, PortImageIn, PortTextIn } from "../NodeShell";
+import { NodeShell, PortImageIn, PortOut, PortTextIn } from "../NodeShell";
+import { IcGear } from "../../../ui/icons";
 import { IcDownload, IcLoading, IcVideo } from "../../../ui/icons";
 import { ModelPicker } from "../../../ui/ModelPicker";
 import { useBoard } from "../../../core/stores/boardStore";
@@ -71,11 +72,17 @@ export const VideoGenNode = memo(function VideoGenNode({ id, data, selected }: N
           <textarea
             className="textarea nodrag nowheel"
             rows={3}
-            placeholder="视频描述（可连接上游图片作为首帧参考）"
+            placeholder="视频描述（第 1 路上游图 = 首帧，第 2 路 = 尾帧）"
             value={d.prompt}
             onChange={(e) => upd(id, { prompt: e.target.value })}
           />
         )}
+        <div className="gen-sum nodrag" title="选中节点后，在画布左下角的「生成设置」面板中调整时长/分辨率/比例/音频等参数">
+          <IcGear size={13} />
+          <span>
+            {[d.duration ? `${d.duration}s` : null, d.resolution, d.aspect].filter(Boolean).join(" · ") || "生成参数：选中节点后在左下面板调整"}
+          </span>
+        </div>
         <button className="btn primary nodrag" disabled={running} onClick={() => void runFlow(id)}>
           {running ? <IcLoading size={17} /> : <IcVideo size={17} />}
           {running ? "生成中…" : "生成视频"}
@@ -92,6 +99,7 @@ export const VideoGenNode = memo(function VideoGenNode({ id, data, selected }: N
       </div>
       <PortTextIn />
       <PortImageIn />
+      <PortOut kind="video" />
     </NodeShell>
   );
 });

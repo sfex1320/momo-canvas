@@ -1,6 +1,6 @@
 import { memo } from "react";
 import type { NodeProps } from "@xyflow/react";
-import { NodeShell, PortImageIn, PortOut, PortTextIn } from "../NodeShell";
+import { NodeShell, PortImageIn, PortOut, PortTextIn, PortVideoIn } from "../NodeShell";
 import { IcDice, IcDownload, IcFlow, IcGear, IcLoading, IcPlay } from "../../../ui/icons";
 import { Switch } from "../../../ui/kit";
 import { useBoard } from "../../../core/stores/boardStore";
@@ -120,6 +120,9 @@ export const ComfyNode = memo(function ComfyNode({ id, data, selected }: NodePro
             ) : null}
           </>
         ) : null}
+        {d.videoResults?.length && !running ? (
+          <video className="img-main nodrag" src={d.videoResults[0]} controls style={{ cursor: "default" }} />
+        ) : null}
         {d.textOut && !running ? (
           <div className="comfy-textout nodrag">
             <pre>{d.textOut}</pre>
@@ -134,7 +137,8 @@ export const ComfyNode = memo(function ComfyNode({ id, data, selected }: NodePro
       </div>
       <PortTextIn />
       <PortImageIn />
-      <PortOut kind="image" />
+      <PortVideoIn top={90} />
+      <PortOut kind={d.videoResults?.length && !d.results?.length ? "video" : "image"} />
     </NodeShell>
   );
 });

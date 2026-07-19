@@ -14,6 +14,7 @@ import { webSearch, searchContext } from "./services/webSearch";
 import { runComfyTemplate } from "./services/comfy";
 import { autoSaveImage } from "./services/imageSaver";
 import { gptSize, imageFamily, nearestAspect, parseRatio } from "./modelMeta";
+import { videoFamily, videoMeta } from "./videoMeta";
 import { imageDims } from "./imageInfo";
 import { resampleImage, resizeTextOut, targetSize } from "./resizeMath";
 import { buildAnglePrompt, buildRelightPrompt } from "./cameraLight";
@@ -30,6 +31,7 @@ import {
 } from "./editPrompts";
 import { errMsg, parseJsonLoose } from "./utils";
 import { notifyDone } from "./sound";
+import { concatVideos, grabFrame, trimVideo } from "./videoEdit";
 import type {
   AssetGenMeta,
   CaptionData,
@@ -55,6 +57,9 @@ import type {
   ResizeData,
   StylePresetData,
   VideoGenData,
+  FrameData,
+  VideoTrimData,
+  VideoConcatData,
 } from "./types";
 
 const SEPARATORS: Record<CombineData["separator"], string> = {
@@ -68,9 +73,13 @@ const SEPARATORS: Record<CombineData["separator"], string> = {
    组节点按成员位置顺序聚合；「忽略」的节点不向下游传递 */
 
 /** 单个节点自身的输出（文本 / 图片） */
-function nodeOutput(src: { id: string; type?: string; data: unknown }, visited: Set<string>): { texts: string[]; images: string[] } {
+function nodeOutput(
+  src: { id: string; type?: string; data: unknown },
+  visited: Set<string>,
+): { texts: string[]; images: string[]; videos: string[] } {
   const texts: string[] = [];
   const images: string[] = [];
+  const videos: string[] = [];
   const kind = src.type as NodeKind;
   const d = src.data as Record<string, unknown>;
   switch (kind) {
@@ -122,6 +131,7 @@ function nodeOutput(src: { id: string; type?: string; data: unknown }, visited: 
       const g = d as ComfyData;
       const s = g.results?.[g.picked ?? 0];
       if (s) images.push(s);
+      for (const v of g.videoResults ?? []) videos.push(v);
       break;
     }
     case "inpaint":
@@ -194,10 +204,22 @@ function nodeOutput(src: { id: string; type?: string; data: unknown }, visited: 
       }
       break;
     }
+    case "videoGen":
+    case "videoTrim":
+    case "videoConcat": {
+      const u = (d as { resultUrl?: string }).resultUrl;
+      if (u) videos.push(u);
+      break;
+    }
+    case "frame": {
+      const g = d as FrameData;
+      if (g.result) images.push(g.result);
+      break;
+    }
     default:
       break;
   }
-  return { texts, images };
+  return { texts, images, videos };
 }
 
 type LiteN = { id: string; type?: string; parentId?: string; position: { x: number; y: number }; data: unknown };
@@ -224,11 +246,15 @@ export function orderedInEdges(
     });
 }
 
-export function collectUpstream(nodeId: string, visited = new Set<string>()): { texts: string[]; images: string[] } {
+export function collectUpstream(
+  nodeId: string,
+  visited = new Set<string>(),
+): { texts: string[]; images: string[]; videos: string[] } {
   const { nodes, edges } = useBoard.getState();
   const texts: string[] = [];
   const images: string[] = [];
-  if (visited.has(nodeId)) return { texts, images };
+  const videos: string[] = [];
+  if (visited.has(nodeId)) return { texts, images, videos };
   visited.add(nodeId);
 
   for (const e of orderedInEdges(nodeId, nodes, edges)) {
@@ -244,6 +270,7 @@ export function collectUpstream(nodeId: string, visited = new Set<string>()): { 
         const o = nodeOutput(m, visited);
         if (e.sourceHandle === "out-image") images.push(...o.images);
         else texts.push(...o.texts);
+        videos.push(...o.videos);
       }
       continue;
     }
@@ -263,8 +290,9 @@ export function collectUpstream(nodeId: string, visited = new Set<string>()): { 
     const o = nodeOutput(src, visited);
     texts.push(...o.texts);
     images.push(...o.images);
+    videos.push(...o.videos);
   }
-  return { texts, images };
+  return { texts, images, videos };
 }
 
 /* ---------- 上游明细（节点上「传入」徽标的弹窗预览用） ---------- */
@@ -523,7 +551,12 @@ export async function runBatchPrompts(id: string, lines: string[]) {
   const s = useBoard.getState();
   const node = s.nodes.find((n) => n.id === id);
   const prompts = lines.map((l) => l.trim()).filter(Boolean);
-  if (!node || node.type !== "imageGen" || !prompts.length) return;
+  if (!node || (node.type !== "imageGen" && node.type !== "videoGen") || !prompts.length) return;
+  const isVideo = node.type === "videoGen";
+  const runOne = isVideo ? runVideoGen : runImageGen;
+  const resetFields = isVideo
+    ? { resultUrl: undefined, progress: undefined }
+    : { results: [], picked: 0 };
   const base = node.data as ImageGenData;
   // 共用前缀 = 节点提示词 + 上游文本（尺寸指令除外）
   const upTexts = collectUpstream(id).texts.filter((t) => !isSizeDirective(t));
@@ -540,23 +573,26 @@ export async function runBatchPrompts(id: string, lines: string[]) {
   prompts.forEach((line, i) => {
     const bs = useBoard.getState();
     const nid = bs.addNode(
-      "imageGen",
+      node.type as NodeKind,
       { x: baseX + (w + 70) * ((i % COLS) + 1), y: baseY + Math.floor(i / COLS) * (h + 90) },
-      { ...base, prompt: shared ? `${shared}\n${line}` : line, status: "idle", error: undefined, results: [], picked: 0 },
+      { ...base, prompt: shared ? `${shared}\n${line}` : line, status: "idle", error: undefined, ...resetFields },
     );
     for (const e of inEdges) bs.connectNodes(e.source, nid, e.targetHandle ?? "in-image", e.sourceHandle ?? "out");
     ids.push(nid);
   });
-  toast(`批量出图：已建立 ${prompts.length} 个生成节点，并行生成中…${shared ? "（共用提示词已附加到每条）" : ""}`, "info");
-  await Promise.all(ids.map((nid) => runImageGen(nid)));
-  notifyDone("批量出图");
+  toast(`批量生成：已建立 ${prompts.length} 个节点，并行生成中…${shared ? "（共用提示词已附加到每条）" : ""}`, "info");
+  await Promise.all(ids.map((nid) => runOne(nid)));
+  notifyDone("批量生成");
 }
 
 /** 批量出图（按参考图）：每路上游图片克隆一个生成节点单独处理（文本连线全部继承），并行运行 */
 export async function runBatchImages(id: string) {
   const s = useBoard.getState();
   const node = s.nodes.find((n) => n.id === id);
-  if (!node || node.type !== "imageGen") return;
+  if (!node || (node.type !== "imageGen" && node.type !== "videoGen")) return;
+  const isVideo = node.type === "videoGen";
+  const runOne = isVideo ? runVideoGen : runImageGen;
+  const resetFields = isVideo ? { resultUrl: undefined, progress: undefined } : { results: [], picked: 0 };
   const imgEdges = s.edges.filter((e) => e.target === id && e.targetHandle === "in-image");
   if (imgEdges.length < 2) {
     toast("按参考图批量需要接入至少 2 路上游图片", "err");
@@ -574,16 +610,16 @@ export async function runBatchImages(id: string) {
   imgEdges.forEach((imgEdge, i) => {
     const bs = useBoard.getState();
     const nid = bs.addNode(
-      "imageGen",
+      node.type as NodeKind,
       { x: baseX + (w + 70) * ((i % COLS) + 1), y: baseY + Math.floor(i / COLS) * (h + 90) },
-      { ...base, status: "idle", error: undefined, results: [], picked: 0 },
+      { ...base, status: "idle", error: undefined, ...resetFields },
     );
     bs.connectNodes(imgEdge.source, nid, imgEdge.targetHandle ?? "in-image", imgEdge.sourceHandle ?? "out");
     for (const e of textEdges) bs.connectNodes(e.source, nid, e.targetHandle ?? "in-text", e.sourceHandle ?? "out");
     ids.push(nid);
   });
   toast(`按参考图批量：${imgEdges.length} 路图片各建一个生成节点，并行生成中…`, "info");
-  await Promise.all(ids.map((nid) => runImageGen(nid)));
+  await Promise.all(ids.map((nid) => runOne(nid)));
   notifyDone("按参考图批量");
 }
 
@@ -602,10 +638,18 @@ export async function runVideoGen(id: string) {
   upd(id, { status: "running", error: undefined, progress: "提交任务…", resultUrl: undefined });
   try {
     const card = resolveModelCard("video", data.modelId);
+    const meta = videoMeta(videoFamily(card));
     const finalPrompt = await localizePrompt(prompt, (data as { lang?: string }).lang);
+    // 第 1 路上游图 = 首帧；第 2 路 = 尾帧（家族支持且未关闭时）
+    const lastFrame = meta.tail && (data.useTail ?? true) && images.length >= 2 ? images[1] : undefined;
     const url = await generateVideo(card, {
       prompt: finalPrompt,
       image: images[0],
+      lastFrame,
+      duration: data.duration,
+      resolution: data.resolution,
+      aspect: data.aspect,
+      audio: meta.audioToggle ? data.audio : undefined,
       onProgress: (m) => upd(id, { progress: m }),
     });
     upd(id, { status: "done", resultUrl: url, progress: undefined });
@@ -634,7 +678,7 @@ export async function runComfy(id: string) {
     return;
   }
   const settings = useSettings.getState().settings;
-  const { texts, images } = collectUpstream(id);
+  const { texts, images, videos: upVideos } = collectUpstream(id);
   upd(id, { status: "running", error: undefined, progress: "准备参数…", progressPct: undefined });
   try {
     // 只收集用户在节点上手填的值；上游图/文交给服务层自动识别入口（图片参数 → LoadImage → 缺失图片输入自动注入）
@@ -643,16 +687,18 @@ export async function runComfy(id: string) {
       const own = data.params?.[p.key];
       if (own !== undefined && own !== "") values[p.key] = own;
     }
-    const { images: results, texts: outTexts } = await runComfyTemplate(settings.comfy.host, tpl, values, {
+    const { images: results, texts: outTexts, videos: outVideos } = await runComfyTemplate(settings.comfy.host, tpl, values, {
       onProgress: (m, pct) => upd(id, { progress: m, ...(pct !== undefined ? { progressPct: pct } : {}) }),
       upstreamImages: images,
       upstreamTexts: texts,
+      upstreamVideos: upVideos,
     });
     upd(id, {
       status: "done",
       results,
       picked: 0,
       textOut: outTexts.length ? outTexts.join("\n\n") : undefined,
+      videoResults: outVideos.length ? outVideos : undefined,
       progress: undefined,
       progressPct: undefined,
     });
@@ -1294,6 +1340,70 @@ export async function regenCharDeliverable(id: string, k: CharDeliverable) {
   }
 }
 
+/* ---------- 本地视频处理：取帧 / 取段 / 拼接（零模型成本） ---------- */
+
+export async function runFrame(id: string) {
+  const node = useBoard.getState().nodes.find((n) => n.id === id);
+  if (!node) return;
+  const data = node.data as FrameData;
+  if (data.status === "running") return;
+  const src = collectUpstream(id).videos[0];
+  if (!src) {
+    toast("请先连接上游视频节点（生成视频 / 取段 / 拼接）", "err");
+    return;
+  }
+  upd(id, { status: "running", error: undefined });
+  try {
+    const { dataUrl, duration } = await grabFrame(src, data.point ?? "last", data.timeSec);
+    upd(id, { status: "done", result: dataUrl, srcDur: duration });
+  } catch (e) {
+    upd(id, { status: "error", error: errMsg(e) });
+    pushError("视频取帧", errMsg(e));
+  }
+}
+
+export async function runVideoTrim(id: string) {
+  const node = useBoard.getState().nodes.find((n) => n.id === id);
+  if (!node) return;
+  const data = node.data as VideoTrimData;
+  if (data.status === "running") return;
+  const src = collectUpstream(id).videos[0];
+  if (!src) {
+    toast("请先连接上游视频节点", "err");
+    return;
+  }
+  upd(id, { status: "running", error: undefined, progress: "准备重编码…", resultUrl: undefined });
+  try {
+    const url = await trimVideo(src, data.start ?? 0, data.end, (m) => upd(id, { progress: m }));
+    upd(id, { status: "done", resultUrl: url, progress: undefined });
+    notifyDone("视频取段");
+  } catch (e) {
+    upd(id, { status: "error", error: errMsg(e), progress: undefined });
+    pushError("视频取段", errMsg(e));
+  }
+}
+
+export async function runVideoConcat(id: string) {
+  const node = useBoard.getState().nodes.find((n) => n.id === id);
+  if (!node) return;
+  const data = node.data as VideoConcatData;
+  if (data.status === "running") return;
+  const videos = collectUpstream(id).videos;
+  if (videos.length < 2) {
+    toast("视频拼接需要接入至少 2 路上游视频（按连线上下位置排序）", "err");
+    return;
+  }
+  upd(id, { status: "running", error: undefined, progress: "准备重编码…", resultUrl: undefined });
+  try {
+    const url = await concatVideos(videos, (m) => upd(id, { progress: m }));
+    upd(id, { status: "done", resultUrl: url, progress: undefined });
+    notifyDone("视频拼接");
+  } catch (e) {
+    upd(id, { status: "error", error: errMsg(e), progress: undefined });
+    pushError("视频拼接", errMsg(e));
+  }
+}
+
 /* ---------- 工作流链式运行 ---------- */
 
 /** 可主动运行的节点类型 → 运行函数（对话节点需要用户输入，不参与自动链） */
@@ -1312,6 +1422,9 @@ const RUNNERS: Partial<Record<NodeKind, (id: string) => Promise<void>>> = {
   matting: runMatting,
   enhance: runEnhance,
   crop: runCrop,
+  frame: runFrame,
+  videoTrim: runVideoTrim,
+  videoConcat: runVideoConcat,
 };
 
 type LiteNode = { id: string; type?: string; parentId?: string; data: unknown };
@@ -1364,7 +1477,11 @@ function hasFreshOutput(n: LiteNode): boolean {
       return Object.values(cc.results ?? {}).some((v) => v?.length);
     }
     case "videoGen":
+    case "videoTrim":
+    case "videoConcat":
       return !!d.resultUrl;
+    case "frame":
+      return !!d.result;
     case "resize":
       // 文本样式输出由参数即时推导，测过上游尺寸即视为新鲜
       return (d.out ?? "image") === "image" ? !!d.result : !!d.srcW;

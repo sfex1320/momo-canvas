@@ -29,7 +29,7 @@ import { toast, useUi } from "../../core/stores/uiStore";
 import { useSettings } from "../../core/stores/settingsStore";
 import { useAssets } from "../../core/stores/assetStore";
 import { assetToDataUrl } from "../../core/services/assetFiles";
-import { GenConfigPanel } from "./GenConfigPanel";
+import { GenConfigPanel, VideoConfigPanel } from "./GenConfigPanel";
 import type { AppNode, BoardTemplate, NodeKind } from "../../core/types";
 import { errMsg, fileToDataUrl, matchHotkey } from "../../core/utils";
 import { NODE_CATALOG } from "./nodeCatalog";
@@ -60,6 +60,9 @@ import { OutpaintNode } from "./nodes/OutpaintNode";
 import { MattingNode } from "./nodes/MattingNode";
 import { EnhanceNode } from "./nodes/EnhanceNode";
 import { CropNode } from "./nodes/CropNode";
+import { FrameNode } from "./nodes/FrameNode";
+import { VideoTrimNode } from "./nodes/VideoTrimNode";
+import { VideoConcatNode } from "./nodes/VideoConcatNode";
 
 /** 一键清空画布：首次点击进入确认态（2.5 秒内再点执行），入撤销历史可 Ctrl+Z 恢复 */
 function ClearAllBtn() {
@@ -109,6 +112,9 @@ const nodeTypes: NodeTypes = {
   matting: MattingNode,
   enhance: EnhanceNode,
   crop: CropNode,
+  frame: FrameNode,
+  videoTrim: VideoTrimNode,
+  videoConcat: VideoConcatNode,
 };
 
 /** Ctrl + 框选结束后，把与选框相交的连线也选中（便于批量删除连线） */
@@ -228,7 +234,8 @@ export function SmartCanvas() {
             : null
         : outPortType(src.type as NodeKind, src.data as Record<string, unknown>);
     if (!pt) return false;
-    const want = conn.targetHandle === "in-text" ? "text" : conn.targetHandle === "in-image" ? "image" : null;
+    const want =
+      conn.targetHandle === "in-text" ? "text" : conn.targetHandle === "in-image" ? "image" : conn.targetHandle === "in-video" ? "video" : null;
     if (want !== pt) return false;
     if (s.edges.some((e) => e.source === conn.source && e.target === conn.target && e.targetHandle === conn.targetHandle))
       return false;
@@ -247,7 +254,7 @@ export function SmartCanvas() {
             ? ("image" as const)
             : ("text" as const)
           : outPortType(state.fromNode.type as NodeKind, state.fromNode.data as Record<string, unknown>);
-      if (!pt || pt === "video") return;
+      if (!pt) return;
       const client =
         "clientX" in event
           ? { x: event.clientX, y: event.clientY }
@@ -719,6 +726,7 @@ export function SmartCanvas() {
       ) : null}
 
       {!zen ? <GenConfigPanel /> : null}
+      {!zen ? <VideoConfigPanel /> : null}
 
       <AddNodeMenu />
       <CanvasSearch />

@@ -23,6 +23,9 @@ import {
   IcText,
   IcVideo,
   IcWand,
+  IcFilmFrame,
+  IcFilmCut,
+  IcFilmJoin,
 } from "../../ui/icons";
 
 export type CatalogItem = {
@@ -30,7 +33,7 @@ export type CatalogItem = {
   label: string;
   desc: string;
   icon: ReactNode;
-  group: "输入" | "智能" | "生成" | "编辑" | "角色";
+  group: "输入" | "智能" | "生成" | "编辑" | "视频" | "角色";
   /** 对应的「添加节点」快捷键动作（设置 → 快捷键 可自定义） */
   hotkey: HotkeyAction;
   /** 不在底部工具坞显示（避免坞过宽；双击菜单 / Spotlight 仍可添加） */
@@ -57,5 +60,8 @@ export const NODE_CATALOG: CatalogItem[] = [
   { kind: "resize", label: "尺寸调整", desc: "真实压缩/放大图片像素，或输出推荐比例/分辨率给生成节点", icon: <IcResize size={18} />, group: "编辑", hotkey: "addResize" },
   { kind: "relight", label: "打光", desc: "为上游图片重新打光：方向/亮度/颜色/轮廓光", icon: <IcBulb size={18} />, group: "编辑", hotkey: "addRelight" },
   { kind: "multiAngle", label: "多角度", desc: "换机位重拍上游图片：环绕/俯仰/景别", icon: <IcOrbit size={18} />, group: "编辑", hotkey: "addMultiAngle" },
+  { kind: "frame", label: "视频取帧", desc: "抽首帧/末帧/任意帧输出图片：末帧接下一段视频可无限续接", icon: <IcFilmFrame size={18} />, group: "视频", hotkey: "addFrame" },
+  { kind: "videoTrim", label: "视频取段", desc: "本地截取视频片段（实验性，输出 webm）", icon: <IcFilmCut size={18} />, group: "视频", hotkey: "addVideoTrim" },
+  { kind: "videoConcat", label: "视频拼接", desc: "多段视频按顺序合成一条成片（实验性）", icon: <IcFilmJoin size={18} />, group: "视频", hotkey: "addVideoConcat" },
   { kind: "charCard", label: "角色卡", desc: "分析人物图片/描述，一键产出三视图/表情/立绘/设定卡", icon: <IcIdCard size={18} />, group: "角色", hotkey: "addCharCard" },
 ];

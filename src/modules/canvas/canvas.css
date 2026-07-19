@@ -32,6 +32,10 @@
   stroke: var(--port-image);
   opacity: 0.75;
 }
+.react-flow__edge.edge-video .react-flow__edge-path {
+  stroke: var(--port-video);
+  opacity: 0.75;
+}
 /* 选中节点（点击/框选）相连的边高亮 */
 .react-flow__edge.hl .react-flow__edge-path {
   stroke-width: 3.2;
@@ -205,6 +209,9 @@
 }
 .react-flow__handle.port-image::before {
   background: var(--port-image);
+}
+.react-flow__handle.port-video::before {
+  background: var(--port-video);
 }
 .react-flow__handle.port:hover::before,
 .react-flow__handle.port.connectingto::before,
@@ -2281,4 +2288,21 @@
 @keyframes pulse {
   from { box-shadow: 0 0 0 0 rgba(242, 79, 106, 0.35); }
   to { box-shadow: 0 0 0 5px rgba(242, 79, 106, 0); }
+}
+
+/* 视频面板：复选行 */
+.gen-panel .gp-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-2);
+  cursor: pointer;
+}
+.gen-panel .gp-check input[type="checkbox"] {
+  width: 15px;
+  height: 15px;
+  accent-color: var(--accent);
+  cursor: pointer;
 }

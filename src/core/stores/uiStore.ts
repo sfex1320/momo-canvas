@@ -18,7 +18,7 @@ export type AddMenuState = {
   screenY: number;
   /** 从某个输出拖线松手时：来源节点，用于自动连线 */
   sourceNode?: string;
-  sourcePort?: "text" | "image";
+  sourcePort?: "text" | "image" | "video";
 } | null;
 
 type UiState = {

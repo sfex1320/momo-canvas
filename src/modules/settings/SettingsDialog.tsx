@@ -809,20 +809,36 @@ function ProtocolTab() {
         }
       }
       const card = resolveModelCard("chat");
-      const ask = [
-        "下面是一份已能跑通文生图的协议 JSON。请在【不改动它已有的端点、鉴权、轮询、结果路径】的前提下，补全图生图与蒙版能力：",
-        "1. body 补图片字段：占位符用 {{images}}（数组，不加引号）或 {{image}}（单图 dataURL），字段名以参考文档为准；没有文档就按常见网关风格（如 image_urls）补",
-        "2. 若文档显示支持蒙版/inpaint，补 {{mask}} 字段；文生图与图生图端点不同时，用条件块切换 url",
-        "3. 所有可选字段用 {{?var}}…{{/var}} 条件块包裹，保证不传图时请求体依然是合法 JSON",
-        "只输出补全后的完整协议 JSON（保留原 id、name、role；若是无文档的推断，在 name 末尾加「(待验证)」）。",
+      const ask = (roleSel === "video"
+        ? [
+            "下面是一份视频生成协议 JSON。请在【不改动它已有的端点、鉴权、轮询、结果路径】的前提下，补全图生视频与参数能力：",
+            "1. body 补首帧图片字段：占位符 {{image}}（dataURL 或 URL），字段名以参考文档为准（常见：image / image_url / image_urls / first_frame_image）",
+            "2. 若文档显示支持首尾帧过渡，补尾帧字段用 {{image2}}（常见：image_tail / last_frame_image / lastFrame）",
+            "3. 补生成参数占位符：{{duration}}（秒数）/ {{resolution}}（如 720p）/ {{aspect}}（如 16:9）/ {{audio}}（true/false），字段名按文档",
+            "4. 所有可选字段用 {{?var}}…{{/var}} 条件块包裹，保证不传图/不传参时请求体依然是合法 JSON",
+            "只输出补全后的完整协议 JSON（保留原 id、name、role；若是无文档的推断，在 name 末尾加「(待验证)」）。",
+          ]
+        : [
+            "下面是一份已能跑通文生图的协议 JSON。请在【不改动它已有的端点、鉴权、轮询、结果路径】的前提下，补全图生图与蒙版能力：",
+            "1. body 补图片字段：占位符用 {{images}}（数组，不加引号）或 {{image}}（单图 dataURL），字段名以参考文档为准；没有文档就按常见网关风格（如 image_urls）补",
+            "2. 若文档显示支持蒙版/inpaint，补 {{mask}} 字段；文生图与图生图端点不同时，用条件块切换 url",
+            "3. 所有可选字段用 {{?var}}…{{/var}} 条件块包裹，保证不传图时请求体依然是合法 JSON",
+            "只输出补全后的完整协议 JSON（保留原 id、name、role；若是无文档的推断，在 name 末尾加「(待验证)」）。",
+          ]
+      ).concat([
         `\n当前协议：\n${draft}`,
         material ? `\n参考文档：\n${material}` : "\n（没有粘贴文档：按站点风格合理推断）",
-      ].join("\n");
+      ]).join("\n");
       const out = await chatOnce(card, PROTOCOL_SYSTEM, ask.slice(0, 48000));
       const json = out.match(/\{[\s\S]*\}/)?.[0] ?? out;
       JSON.parse(json); // 先校验再落草稿
       patch({ draft: json });
-      toast("已补全图片/蒙版字段 ✓ 核对右侧 JSON → 保存 → 到下方「真实测试并校准」跑一遍", "ok");
+      toast(
+        roleSel === "video"
+          ? "已补全图生视频/尾帧/参数字段 ✓ 核对右侧 JSON → 保存 → 校准"
+          : "已补全图片/蒙版字段 ✓ 核对右侧 JSON → 保存 → 到下方「真实测试并校准」跑一遍",
+        "ok",
+      );
     } catch (e) {
       toast(`补全失败：${errMsg(e)}`, "err");
     } finally {
@@ -945,7 +961,7 @@ function ProtocolTab() {
             className="textarea"
             style={{ flex: 1, minHeight: 260, fontFamily: "Consolas, monospace", fontSize: 12.5 }}
             placeholder={
-              '协议 JSON 会出现在这里，也可以直接手写。\n占位符：{{baseUrl}} {{apiKey}} {{model}} {{prompt}} {{size}} {{n}} {{taskId}}\n图片类：{{image}} 首图 · {{image2}} 第二图 · {{images}} 参考图JSON数组（不加引号）· {{mask}} 蒙版\n提示：要支持图生图/局部重绘，body 里必须写上图片/蒙版字段，否则图片不会发给模型'
+              '协议 JSON 会出现在这里，也可以直接手写。\n占位符：{{baseUrl}} {{apiKey}} {{model}} {{prompt}} {{size}} {{n}} {{taskId}}\n图片类：{{image}} 首图 · {{image2}} 第二图/尾帧 · {{images}} 参考图JSON数组（不加引号）· {{mask}} 蒙版\n视频类：{{duration}} 时长秒 · {{resolution}} 分辨率档 · {{aspect}} 宽高比 · {{audio}} true/false\n提示：要支持图生图/局部重绘，body 里必须写上图片/蒙版字段，否则图片不会发给模型'
             }
             value={draft}
             onChange={(e) => patch({ draft: e.target.value })}
@@ -968,6 +984,32 @@ function ProtocolTab() {
               </div>
             ) : (
               <div className="hint">✓ 模板含图片与蒙版占位符：文生图 / 图生图 / 真蒙版重绘均可用。</div>
+            )
+          ) : null}
+          {roleSel === "video" && draft.trim() ? (
+            !draft.includes("{{image}}") ? (
+              <div className="hint" style={{ color: "var(--warn, #d97706)" }}>
+                ⚠ 模板没有首帧占位符（{"{{image}}"}）：该协议只能<b>文生视频</b>，接上游图片不会生效。
+                <button className="btn sm" style={{ marginLeft: 8 }} disabled={busy} onClick={() => void completeDraft()}>
+                  {busy ? <IcLoading size={13} /> : <IcSparkles size={13} />} 让协议助手补全图生视频/尾帧/参数
+                </button>
+              </div>
+            ) : !draft.includes("{{image2}}") ? (
+              <div className="hint">
+                ℹ 模板不含尾帧 {"{{image2}}"}：首尾帧过渡不可用（接 2 路图时第 2 路会被忽略）。
+                <button className="btn sm" style={{ marginLeft: 8 }} disabled={busy} onClick={() => void completeDraft()}>
+                  {busy ? <IcLoading size={13} /> : <IcSparkles size={13} />} 让协议助手补全尾帧/参数
+                </button>
+              </div>
+            ) : !["{{duration}}", "{{resolution}}", "{{aspect}}"].some((k) => draft.includes(k)) ? (
+              <div className="hint">
+                ℹ 模板不含 {"{{duration}} / {{resolution}} / {{aspect}}"}：面板上的时长/分辨率/比例设置不会生效。
+                <button className="btn sm" style={{ marginLeft: 8 }} disabled={busy} onClick={() => void completeDraft()}>
+                  {busy ? <IcLoading size={13} /> : <IcSparkles size={13} />} 让协议助手补全参数
+                </button>
+              </div>
+            ) : (
+              <div className="hint">✓ 模板含首帧/尾帧/参数占位符：文生视频 / 图生视频 / 首尾帧 / 面板参数均可用。</div>
             )
           ) : null}
           <Row gap={8} style={{ alignItems: "center" }}>

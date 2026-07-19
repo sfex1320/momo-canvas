@@ -26,7 +26,8 @@ import {
 } from "../../core/modelMeta";
 import { ModelPicker } from "../../ui/ModelPicker";
 import { IcGear, IcLayers, IcRows } from "../../ui/icons";
-import type { ImageGenData } from "../../core/types";
+import type { ImageGenData, VideoGenData } from "../../core/types";
+import { videoFamily, videoMeta, type VideoFamily } from "../../core/videoMeta";
 
 /** 创意度档位说明 */
 function creativityLabel(v: number): string {
@@ -481,3 +482,128 @@ export function GenConfigPanel() {
     </div>
   );
 }
+
+/** 视频生成设置面板 — 选中「生成视频」节点时出现在画布左下角，按模型家族出参数 */
+export function VideoConfigPanel() {
+  const selId = useBoard((s) => {
+    const sel = s.nodes.filter((n) => n.selected);
+    return sel.length === 1 && sel[0].type === "videoGen" ? sel[0].id : null;
+  });
+  const node = useBoard((s) => (selId ? s.nodes.find((n) => n.id === selId) : undefined));
+  const edges = useBoard((s) => s.edges);
+  const upd = useBoard((s) => s.updateData);
+  const d = node?.data as VideoGenData | undefined;
+  const models = useSettings((s) => s.settings.models);
+  const suppressed = useUi((s) => s.genPanelSuppressed);
+
+  const family: VideoFamily = useMemo(() => {
+    if (!d) return "generic";
+    try {
+      return videoFamily(resolveModelCard("video", d.modelId));
+    } catch {
+      return "generic";
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [d, models]);
+
+  if (!selId || !d || suppressed) return null;
+  const meta = videoMeta(family);
+  const refCount = edges.filter((e) => e.target === selId && e.targetHandle === "in-image").length;
+  const patch = (p: Partial<VideoGenData>) => upd(selId, p);
+  const dur = d.duration ?? meta.defaultDuration;
+  const res = d.resolution ?? meta.defaultResolution;
+  const asp = d.aspect ?? meta.aspects[0];
+
+  return (
+    <div className="gen-panel glass">
+      <div className="gp-col gp-col-info">
+        <div className="gp-head">
+          <IcGear size={15} />
+          生成设置
+          <span className="gp-fam">{meta.label}</span>
+        </div>
+        <ModelPicker role="video" value={d.modelId} onChange={(v) => patch({ modelId: v })} />
+        <div className="gp-row2">
+          <div className="gp-seg" style={{ flex: 1 }} title="提示词语言：中文原文直发 / 生成前先译成英文">
+            <button className={(d.lang ?? "zh") === "zh" ? "on" : ""} onClick={() => patch({ lang: "zh" })}>
+              中文
+            </button>
+            <button className={d.lang === "en" ? "on" : ""} onClick={() => patch({ lang: "en" })}>
+              译英
+            </button>
+          </div>
+          <BatchPicker nodeId={selId} refCount={refCount} />
+        </div>
+        <div className="gp-foot">
+          参考图：{refCount} 路（第 1 路 = 首帧{meta.tail ? " · 第 2 路 = 尾帧" : ""}）
+        </div>
+      </div>
+
+      <div className="gp-col gp-col-main">
+        <div className="gp-lab">时长（秒）</div>
+        <div className="gp-seg">
+          {meta.durations.map((t) => (
+            <button key={t} className={dur === t ? "on" : ""} onClick={() => patch({ duration: t })}>
+              {t}s
+            </button>
+          ))}
+        </div>
+        {meta.aspects.length ? (
+          <>
+            <div className="gp-lab" style={{ marginTop: 4 }}>宽高比</div>
+            <div className="gp-grid ratios">
+              {meta.aspects.map((a) => (
+                <button
+                  key={a}
+                  className={`gp-cell ${asp === a ? "on" : ""}`}
+                  title={a === "adaptive" ? "比例自适应（图生视频推荐，跟随首帧）" : a}
+                  onClick={() => patch({ aspect: a })}
+                >
+                  {a === "adaptive" ? <span className="ar-ic">A</span> : <ArIcon ratio={a} />}
+                  {a === "adaptive" ? "自适应" : a}
+                </button>
+              ))}
+            </div>
+          </>
+        ) : (
+          <p className="sec-desc" style={{ margin: "6px 0 0" }}>该家族比例由模型按首帧/内容决定，无需设置。</p>
+        )}
+      </div>
+
+      <div className="gp-col gp-col-side wide">
+        <div className="gp-lab">分辨率</div>
+        <div className="gp-seg">
+          {meta.resolutions.map((r) => (
+            <button key={r} className={res === r ? "on" : ""} onClick={() => patch({ resolution: r })}>
+              {r}
+            </button>
+          ))}
+        </div>
+        <div className="gp-row2" style={{ marginTop: 6, flexWrap: "wrap", gap: 10 }}>
+          {meta.audioToggle ? (
+            <label className="gp-check nodrag" title="生成音频（音效/配乐，按家族映射到对应字段）">
+              <input type="checkbox" checked={d.audio ?? true} onChange={(e) => patch({ audio: e.target.checked })} />
+              生成音频
+            </label>
+          ) : null}
+          {meta.tail ? (
+            <label
+              className="gp-check nodrag"
+              title="接入 2 路上游图片时：第 1 路作首帧、第 2 路作尾帧（首尾帧过渡）；关闭则只用首帧"
+            >
+              <input
+                type="checkbox"
+                disabled={refCount < 2}
+                checked={(d.useTail ?? true) && refCount >= 2}
+                onChange={(e) => patch({ useTail: e.target.checked })}
+              />
+              尾帧过渡{refCount < 2 ? "（需 2 路图）" : ""}
+            </label>
+          ) : null}
+        </div>
+        {meta.note ? <div className="gp-foot" style={{ marginTop: 6 }}>{meta.note}</div> : null}
+      </div>
+    </div>
+  );
+}
+

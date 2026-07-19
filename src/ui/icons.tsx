@@ -469,6 +469,31 @@ export const IcRows = (p: IconProps) => (
   </I>
 );
 
+export const IcFilmFrame = (p: IconProps) => (
+  <I {...p}>
+    <rect x="3" y="5" width="18" height="14" rx="2" />
+    <path d="M7 5v14M17 5v14M3 12h4M17 12h4" />
+    <circle cx="12" cy="12" r="2.2" />
+  </I>
+);
+
+export const IcFilmCut = (p: IconProps) => (
+  <I {...p}>
+    <rect x="2.5" y="7" width="19" height="10" rx="2" />
+    <path d="M9 7v10M15 7v10" />
+    <path d="M12 4v16" strokeDasharray="2.5 2.5" />
+  </I>
+);
+
+export const IcFilmJoin = (p: IconProps) => (
+  <I {...p}>
+    <rect x="2.5" y="6" width="7.5" height="7" rx="1.5" />
+    <rect x="14" y="6" width="7.5" height="7" rx="1.5" />
+    <path d="M6 16.5v2h12v-2" />
+    <path d="M10.5 9.5h3" />
+  </I>
+);
+
 export const IcCursor = (p: IconProps) => (
   <I {...p} fill>
     <path d="M6.2 3.6a.8.8 0 0 1 1.3-.6l11.2 8.7a.8.8 0 0 1-.4 1.4l-4.8.6 2.7 5.4a.8.8 0 0 1-.35 1.07l-1.6.8a.8.8 0 0 1-1.07-.36l-2.7-5.4-3.5 3.4a.8.8 0 0 1-1.35-.55L6.2 3.6Z" />

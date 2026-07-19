@@ -26,6 +26,12 @@ export function defaultData(kind: NodeKind): Record<string, unknown> {
       return { status: "idle", prompt: "", size: "default", count: 1, results: [], picked: 0 };
     case "videoGen":
       return { status: "idle", prompt: "" };
+    case "frame":
+      return { status: "idle", point: "last" };
+    case "videoTrim":
+      return { status: "idle", start: 0 };
+    case "videoConcat":
+      return { status: "idle" };
     case "comfy":
       return { status: "idle", params: {}, results: [], picked: 0 };
     case "caption":
@@ -75,13 +81,18 @@ export function outPortType(kind: NodeKind, data?: Record<string, unknown>): Por
   switch (kind) {
     case "image":
     case "imageGen":
-    case "comfy":
     case "inpaint":
     case "outpaint":
     case "matting":
     case "enhance":
     case "crop":
       return "image";
+    case "comfy": {
+      // 最近一次只产出视频（如 SeedVR2 放大）→ 视频出口；否则图片出口
+      const vids = (data?.videoResults as string[] | undefined)?.length ?? 0;
+      const imgs = (data?.results as string[] | undefined)?.length ?? 0;
+      return vids && !imgs ? "video" : "image";
+    }
     case "relight":
     case "multiAngle":
     case "charCard":
@@ -97,6 +108,11 @@ export function outPortType(kind: NodeKind, data?: Record<string, unknown>): Por
     case "stylePreset":
       return "text";
     case "videoGen":
+    case "videoTrim":
+    case "videoConcat":
+      return "video";
+    case "frame":
+      return "image";
     case "note":
     case "group": // 组有 out-text / out-image 两个出口，走专门逻辑
       return null;
@@ -104,7 +120,7 @@ export function outPortType(kind: NodeKind, data?: Record<string, unknown>): Por
 }
 
 /** 各节点的输入端口能力（自动连线 / 快速添加过滤共用） */
-export const NODE_INPUTS: Record<NodeKind, { text?: boolean; image?: boolean }> = {
+export const NODE_INPUTS: Record<NodeKind, { text?: boolean; image?: boolean; video?: boolean }> = {
   image: {},
   prompt: {},
   stylePreset: {},
@@ -112,7 +128,7 @@ export const NODE_INPUTS: Record<NodeKind, { text?: boolean; image?: boolean }> 
   chat: { text: true, image: true },
   imageGen: { text: true, image: true },
   videoGen: { text: true, image: true },
-  comfy: { text: true, image: true },
+  comfy: { text: true, image: true, video: true },
   caption: { image: true },
   llmText: { text: true },
   combine: { text: true },
@@ -126,6 +142,9 @@ export const NODE_INPUTS: Record<NodeKind, { text?: boolean; image?: boolean }> 
   matting: { image: true },
   enhance: { image: true },
   crop: { image: true },
+  frame: { video: true },
+  videoTrim: { video: true },
+  videoConcat: { video: true },
 };
 
 /** 成组自动排布时的类别顺序：输入 → 智能处理 → 生成 → 备注 */
@@ -148,6 +167,9 @@ const KIND_RANK: Record<NodeKind, number> = {
   multiAngle: 9,
   charCard: 10,
   videoGen: 11,
+  frame: 11.2,
+  videoTrim: 11.3,
+  videoConcat: 11.4,
   comfy: 12,
   note: 13,
   group: 14,
@@ -178,6 +200,9 @@ export const NODE_LABEL: Record<NodeKind, string> = {
   matting: "抠图",
   enhance: "高清增强",
   crop: "聚焦裁剪",
+  frame: "视频取帧",
+  videoTrim: "视频取段",
+  videoConcat: "视频拼接",
 };
 
 type BoardRecord = { meta: BoardMeta; nodes: AppNode[]; edges: Edge[] };
@@ -352,8 +377,11 @@ function linkHandles(
     sourceHandle = targetHandle === "in-text" ? "out-text" : "out-image";
   } else {
     const pt = outPortType(up.type as NodeKind, up.data as Record<string, unknown>);
-    if (!pt || pt === "video") return null;
-    targetHandle = pt === "image" ? (ins.image ? "in-image" : null) : ins.text ? "in-text" : null;
+    if (!pt) return null;
+    targetHandle =
+      pt === "image" ? (ins.image ? "in-image" : null)
+      : pt === "video" ? (ins.video ? "in-video" : null)
+      : ins.text ? "in-text" : null;
     if (!targetHandle) return null;
   }
   if (edges.some((e) => e.source === up.id && e.target === down.id && e.targetHandle === targetHandle)) return null;

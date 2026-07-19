@@ -22,7 +22,10 @@ export type NodeKind =
   | "outpaint"
   | "matting"
   | "enhance"
-  | "crop";
+  | "crop"
+  | "frame"
+  | "videoTrim"
+  | "videoConcat";
 
 export type RunStatus = "idle" | "running" | "done" | "error";
 
@@ -94,6 +97,47 @@ export type VideoGenData = {
   modelId?: string;
   /** 提示词语言：zh 原文直发（默认）/ en 生成前先译成英文 */
   lang?: "zh" | "en";
+  /** 时长档（按模型家族枚举，如 "5" / "10"，videoMeta 定义） */
+  duration?: string;
+  /** 分辨率档（如 "720p" / "1080p"，按家族） */
+  resolution?: string;
+  /** 宽高比（如 "16:9"，按家族） */
+  aspect?: string;
+  /** 生成音频（支持的家族才显示） */
+  audio?: boolean;
+  /** 第二路上游图片作为尾帧（家族支持首尾帧时可开） */
+  useTail?: boolean;
+};
+
+/** 视频取帧：从上游视频抽一帧输出为图片（本地抽帧，零成本） */
+export type FrameData = {
+  status: RunStatus;
+  error?: string;
+  /** 取帧位置：首帧 / 末帧 / 自定义秒数 */
+  point: "first" | "last" | "custom";
+  timeSec?: number;
+  result?: string;
+  /** 上游视频时长（秒，抽帧时顺带记录，供 UI 展示） */
+  srcDur?: number;
+};
+
+/** 视频取段：本地重编码截取上游视频的一段（实验性：实时录制，时长≈片段时长） */
+export type VideoTrimData = {
+  status: RunStatus;
+  error?: string;
+  start: number;
+  end?: number;
+  resultUrl?: string;
+  progress?: string;
+  srcDur?: number;
+};
+
+/** 视频拼接：把多路上游视频按连线顺序合成一条（实验性：实时录制重编码） */
+export type VideoConcatData = {
+  status: RunStatus;
+  error?: string;
+  resultUrl?: string;
+  progress?: string;
 };
 
 export type ComfyData = {
@@ -105,6 +149,8 @@ export type ComfyData = {
   picked: number;
   /** 工作流的文本输出（ShowText 等节点），多段用空行分隔 */
   textOut?: string;
+  /** 工作流的视频输出（VHS 合成等，blob URL） */
+  videoResults?: string[];
   progress?: string;
   /** 实时进度百分比 0-100（WebSocket 可用时才有） */
   progressPct?: number;
@@ -527,7 +573,10 @@ export type HotkeyAction =
   | "addOutpaint"
   | "addMatting"
   | "addEnhance"
-  | "addCrop";
+  | "addCrop"
+  | "addFrame"
+  | "addVideoTrim"
+  | "addVideoConcat";
 
 export const HOTKEY_LABEL: Record<HotkeyAction, string> = {
   moveTool: "移动工具（激活/取消）",
@@ -566,6 +615,9 @@ export const HOTKEY_LABEL: Record<HotkeyAction, string> = {
   addMatting: "添加节点：抠图",
   addEnhance: "添加节点：高清增强",
   addCrop: "添加节点：聚焦裁剪",
+  addFrame: "添加节点：视频取帧",
+  addVideoTrim: "添加节点：视频取段",
+  addVideoConcat: "添加节点：视频拼接",
 };
 
 /** 组合键格式：修饰键小写用 + 连接，如 "ctrl+z" / "ctrl+shift+s"；单键直接写键名 */
@@ -607,6 +659,9 @@ export const DEFAULT_HOTKEYS: Record<HotkeyAction, string> = {
   addMatting: "alt+7",
   addEnhance: "alt+8",
   addCrop: "alt+9",
+  addFrame: "",
+  addVideoTrim: "",
+  addVideoConcat: "",
 };
 
 /* ---------------- 快捷方式（资产库侧边栏） ---------------- */

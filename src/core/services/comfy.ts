@@ -218,8 +218,23 @@ export async function uploadImageToComfy(host: string, dataUrl: string): Promise
   return j.subfolder ? `${j.subfolder}/${j.name}` : j.name;
 }
 
-/** images 已回传为 dataURL（显示/下游/资产收录全链路统一）；texts 为 ShowText 等节点的文本输出 */
-export type ComfyRunResult = { images: string[]; texts: string[] };
+export const isVideoLoaderClass = (ct: string) => /loadvideo/i.test(ct);
+
+/** 上传视频到 ComfyUI 的 input 目录（/upload/image 接口对任意文件通用） */
+export async function uploadVideoToComfy(host: string, src: string): Promise<string> {
+  const blob = src.startsWith("data:") ? dataUrlToBlob(src) : await (await xfetch(src)).blob();
+  const ext = /webm/.test(blob.type) ? "webm" : /quicktime|mov/.test(blob.type) ? "mov" : "mp4";
+  const fd = new FormData();
+  fd.append("image", blob, `momo_${uid(6)}.${ext}`);
+  fd.append("overwrite", "true");
+  const resp = await xfetch(`${normalizeHost(host)}/upload/image`, { method: "POST", body: fd });
+  if (!resp.ok) throw new Error(`上传视频到 ComfyUI 失败 ${resp.status}: ${await readErrorBody(resp)}`);
+  const j = await resp.json();
+  return j.subfolder ? `${j.subfolder}/${j.name}` : j.name;
+}
+
+/** images 已回传为 dataURL（显示/下游/资产收录全链路统一）；texts 为 ShowText 等文本输出；videos 为 VHS 合成等视频输出（blob URL） */
+export type ComfyRunResult = { images: string[]; texts: string[]; videos: string[] };
 
 /** WebSocket 实时进度：按已完成节点数 + 当前节点采样步数换算百分比，报给 onProgress */
 function openProgressSocket(
@@ -311,6 +326,8 @@ export async function runComfyTemplate(
     upstreamImages?: string[];
     /** 上游文本：模板没有文本参数时自动填入正面提示词入口 */
     upstreamTexts?: string[];
+    /** 上游视频：自动上传并喂给 LoadVideo 类节点（SeedVR2 放大等视频工作流） */
+    upstreamVideos?: string[];
   } = {},
 ): Promise<ComfyRunResult> {
   const base = normalizeHost(host);
@@ -379,6 +396,28 @@ export async function runComfyTemplate(
     for (const id of loaders) {
       if (!imgQueue.length) break;
       wf[id].inputs.image = await ensureUploaded(imgQueue.shift()!);
+    }
+  }
+
+  // 2a'. 上游视频 → LoadVideo 类节点（VHS_LoadVideo 等；输入名 video / file / video_path）
+  const vidQueue = [...(opts.upstreamVideos ?? [])];
+  if (vidQueue.length) {
+    const vLoaders = Object.keys(wf)
+      .filter((id) => isVideoLoaderClass(wf[id].class_type))
+      .sort((a, b) => Number(a) - Number(b) || a.localeCompare(b));
+    for (const id of vLoaders) {
+      if (!vidQueue.length) break;
+      opts.onProgress?.("上传视频到 ComfyUI…");
+      const name = await uploadVideoToComfy(host, vidQueue.shift()!);
+      const inputs = wf[id].inputs;
+      const key = ["video", "file", "video_path"].find((k) => k in inputs && !isConnection(inputs[k])) ?? "video";
+      inputs[key] = name;
+      opts.onProgress?.(`视频已接入 #${id} ${nodeTitle(id)}`);
+    }
+    if (vidQueue.length) {
+      throw new Error(
+        "已连接上游视频，但该工作流没有足够的视频加载节点（LoadVideo）。请在模板里加 VHS_LoadVideo 类节点，或断开视频连线。",
+      );
     }
   }
 
@@ -496,41 +535,53 @@ export async function runComfyTemplate(
         const msg = JSON.stringify(entry.status?.messages ?? []).slice(0, 300);
         throw new Error(`ComfyUI 执行出错: ${msg}`);
       }
-      // 收集输出：图片取指定输出节点（未指定则全部）；文本一律扫全部输出节点（ShowText 等）
+      // 收集输出：图片取指定输出节点（未指定则全部）；文本/视频一律扫全部输出节点
       const urls: string[] = [];
+      const vurls: string[] = [];
       const texts: string[] = [];
       const outputs = entry.outputs ?? {};
+      const viewUrl = (f: { filename: string; subfolder?: string; type?: string }) => {
+        const q = new URLSearchParams({ filename: f.filename, subfolder: f.subfolder ?? "", type: f.type ?? "output" });
+        return `${base}/view?${q.toString()}`;
+      };
       const nodeIds = tpl.outputNodeId && outputs[tpl.outputNodeId] ? [tpl.outputNodeId] : Object.keys(outputs);
       for (const nid of nodeIds) {
-        for (const img of outputs[nid]?.images ?? []) {
-          const q = new URLSearchParams({
-            filename: img.filename,
-            subfolder: img.subfolder ?? "",
-            type: img.type ?? "output",
-          });
-          urls.push(`${base}/view?${q.toString()}`);
-        }
+        for (const img of outputs[nid]?.images ?? []) urls.push(viewUrl(img));
       }
       for (const nid of Object.keys(outputs)) {
         const out = outputs[nid] ?? {};
         for (const t of [...(out.text ?? []), ...(out.string ?? []), ...(out.strings ?? [])]) {
           if (typeof t === "string" && t.trim()) texts.push(t.trim());
         }
+        // VHS_VideoCombine 等视频合成节点的输出叫 gifs（历史命名，内容是视频文件）
+        for (const g of [...(out.gifs ?? []), ...(out.videos ?? [])]) {
+          if (g?.filename) vurls.push(viewUrl(g));
+        }
       }
-      if (!urls.length && !texts.length) throw new Error("工作流执行完成，但未在输出节点找到图片或文本");
+      if (!urls.length && !texts.length && !vurls.length)
+        throw new Error("工作流执行完成，但未在输出节点找到图片、视频或文本");
 
-      // /view 是临时直链（ComfyUI 重启即失效），回传成 dataURL 才能进入统一管线
-      // （节点显示、下游图生图、资产收录、自动保存都按 dataURL 设计）
+      // /view 是临时直链（ComfyUI 重启即失效）：图片回传 dataURL、视频回传 blob URL，
+      // 进入统一管线（节点显示、下游使用、资产收录、自动保存）
       const images: string[] = [];
       for (const [i, u] of urls.entries()) {
         opts.onProgress?.(urls.length > 1 ? `回传生成结果 ${i + 1}/${urls.length}…` : "回传生成结果…");
         try {
-          images.push(await toDataUrl(u, (i, init) => xfetch(i as string, init)));
+          images.push(await toDataUrl(u, (i2, init) => xfetch(i2 as string, init)));
         } catch {
           images.push(u); // 回传失败保底用直链，至少当场能预览
         }
       }
-      return { images, texts };
+      const videos: string[] = [];
+      for (const u of vurls) {
+        opts.onProgress?.("回传视频结果…");
+        try {
+          videos.push(URL.createObjectURL(await (await xfetch(u)).blob()));
+        } catch {
+          videos.push(u);
+        }
+      }
+      return { images, texts, videos };
     }
     throw new Error("ComfyUI 执行超时");
   } finally {

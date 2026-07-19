@@ -21,7 +21,7 @@ export function AddNodeMenu() {
   const items = NODE_CATALOG.filter((i) => {
     if (!menu.sourcePort) return true;
     const ins = NODE_INPUTS[i.kind];
-    return menu.sourcePort === "image" ? !!ins.image : !!ins.text;
+    return menu.sourcePort === "image" ? !!ins.image : menu.sourcePort === "video" ? !!ins.video : !!ins.text;
   });
   const left = Math.min(menu.screenX, window.innerWidth - 265);
   const top = Math.max(50, Math.min(menu.screenY, window.innerHeight - (items.length * 50 + 80)));
@@ -29,7 +29,7 @@ export function AddNodeMenu() {
   const pick = (kind: (typeof items)[number]["kind"]) => {
     const id = addNode(kind, { x: menu.flowX, y: menu.flowY });
     if (menu.sourceNode && menu.sourcePort) {
-      connectNodes(menu.sourceNode, id, menu.sourcePort === "image" ? "in-image" : "in-text");
+      connectNodes(menu.sourceNode, id, menu.sourcePort === "image" ? "in-image" : menu.sourcePort === "video" ? "in-video" : "in-text");
     }
     setAddMenu(null);
   };

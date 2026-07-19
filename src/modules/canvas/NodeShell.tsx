@@ -213,7 +213,14 @@ export const PortImageIn = ({ top = 58 }: { top?: number }) => (
   <Handle type="target" position={Position.Left} id="in-image" data-lab="图片入" title="图片输入 · 接图片/生成图像等" className="port port-image" style={{ top }} />
 );
 
+/** 视频输入端口（绿色） */
+export const PortVideoIn = ({ top = 58 }: { top?: number }) => (
+  <Handle type="target" position={Position.Left} id="in-video" data-lab="视频入" title="视频输入 · 接生成视频/取段/拼接等" className="port port-video" style={{ top }} />
+);
+
+const OUT_LAB: Record<string, string> = { text: "文本出", image: "图片出", video: "视频出" };
+
 /** 输出端口（默认右中；传 top 可固定到指定高度，如角色卡放头部） */
-export const PortOut = ({ kind, top }: { kind: "text" | "image"; top?: number }) => (
-  <Handle type="source" position={Position.Right} id="out" data-lab={kind === "text" ? "文本出" : "图片出"} title={kind === "text" ? "文本输出" : "图片输出"} className={`port port-${kind}`} style={top !== undefined ? { top } : undefined} />
+export const PortOut = ({ kind, top }: { kind: "text" | "image" | "video"; top?: number }) => (
+  <Handle type="source" position={Position.Right} id="out" data-lab={OUT_LAB[kind]} title={OUT_LAB[kind].replace("出", "输出")} className={`port port-${kind}`} style={top !== undefined ? { top } : undefined} />
 );
