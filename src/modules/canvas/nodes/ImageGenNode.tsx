@@ -1,48 +1,28 @@
+/**
+ * 生成图像 — LibLib 式精简节点：画布上只留结果图；
+ * 提示词/参考图 @ 引用/模型/尺寸等全部在选中后的底部生成面板里编辑。
+ */
 import { memo } from "react";
 import type { NodeProps } from "@xyflow/react";
 import { NodeShell, PortImageIn, PortOut, PortTextIn } from "../NodeShell";
-import { IcDownload, IcGear, IcLoading, IcSparkles } from "../../../ui/icons";
+import { IcDownload, IcImage, IcLoading, IcSparkles } from "../../../ui/icons";
 import { useBoard } from "../../../core/stores/boardStore";
 import { resolveModelCard, useSettings } from "../../../core/stores/settingsStore";
-import { imageFamily } from "../../../core/modelMeta";
 import { toast, useUi } from "../../../core/stores/uiStore";
 import { collectUpstream, runFlow } from "../../../core/runner";
 import { saveImageAs } from "../../../core/services/imageSaver";
 import { errMsg } from "../../../core/utils";
 import { Thumb } from "../../../ui/Thumb";
-import { PromptHistoryBtn } from "../../../ui/PromptHistory";
-import { AtTextArea, useOwnUpstreamImageRefs } from "../../../ui/AtTextArea";
 import type { ImageGenData } from "../../../core/types";
 
 export const ImageGenNode = memo(function ImageGenNode({ id, data, selected }: NodeProps) {
   const d = data as ImageGenData;
   const upd = useBoard((s) => s.updateData);
-  const models = useSettings((s) => s.settings.models);
   const setLightbox = useUi((s) => s.setLightbox);
-  // 上游已接入文本 → 提示词框隐藏（运行时自动取上游；节点里已手写的提示词优先级更高，保留显示）
   const hasUpText = useBoard(() => collectUpstream(id).texts.length > 0);
-  const atRefs = useOwnUpstreamImageRefs(id);
   const running = d.status === "running";
   const main = d.results?.[d.picked ?? 0];
-
-  // 参数摘要（详细调控在左下角面板）
-  let summary = "";
-  try {
-    const card = resolveModelCard("image", d.modelId);
-    const fam = imageFamily(card);
-    const size =
-      fam === "banana"
-        ? `${d.aspect ?? "auto"} · ${d.resolution ?? "1K"}`
-        : d.width && d.height
-          ? `${d.width}×${d.height}`
-          : d.size === "default"
-            ? (card.size ?? "auto")
-            : d.size;
-    summary = `${card.model} · ${size} · ${d.count ?? 1}张`;
-  } catch {
-    summary = "尚未配置绘画模型";
-  }
-  void models; // 订阅设置变化以刷新摘要
+  const preview = (d.prompt ?? "").trim();
 
   const save = async () => {
     if (!main) return;
@@ -80,28 +60,6 @@ export const ImageGenNode = memo(function ImageGenNode({ id, data, selected }: N
       }
     >
       <div className="mnode-body">
-        {hasUpText && !(d.prompt ?? "").trim() ? null : (
-          <div style={{ position: "relative" }}>
-            <AtTextArea
-              rows={3}
-              placeholder="提示词（留空则自动使用上游提示词/对话结果）"
-              value={d.prompt}
-              onChange={(t) => upd(id, { prompt: t })}
-              refs={atRefs}
-            />
-            <div style={{ position: "absolute", right: 5, bottom: 5 }}>
-              <PromptHistoryBtn onPick={(t) => upd(id, { prompt: t })} />
-            </div>
-          </div>
-        )}
-        <div className="gen-sum nodrag" title="选中节点后，在画布左下角的「生成设置」面板中调整模型/尺寸/数量">
-          <IcGear size={13} />
-          <span>{summary}</span>
-        </div>
-        <button className="btn primary nodrag" disabled={running} onClick={() => void runFlow(id)}>
-          {running ? <IcLoading size={17} /> : <IcSparkles size={17} />}
-          {running ? "生成中…" : "生成"}
-        </button>
         {running ? (
           <div className="skeleton">
             <span>正在绘制…</span>
@@ -123,7 +81,21 @@ export const ImageGenNode = memo(function ImageGenNode({ id, data, selected }: N
               </div>
             ) : null}
           </>
-        ) : null}
+        ) : (
+          <div className="gen-empty">
+            <IcImage size={24} />
+            <span>选中节点，在底部面板输入提示词</span>
+          </div>
+        )}
+        <div className="gen-foot nodrag">
+          <span className="gf-prompt" title={preview || undefined}>
+            {preview || (hasUpText ? "使用上游提示词" : "未填提示词")}
+          </span>
+          <button className="btn sm primary" disabled={running} onClick={() => void runFlow(id)}>
+            {running ? <IcLoading size={15} /> : <IcSparkles size={15} />}
+            {running ? "生成中" : "生成"}
+          </button>
+        </div>
       </div>
       <PortTextIn />
       <PortImageIn />

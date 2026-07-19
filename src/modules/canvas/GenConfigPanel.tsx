@@ -26,7 +26,8 @@ import {
 } from "../../core/modelMeta";
 import { ModelPicker } from "../../ui/ModelPicker";
 import { IcGear, IcLayers, IcRows } from "../../ui/icons";
-import type { ImageGenData, VideoGenData } from "../../core/types";
+import { GenPromptBar } from "./GenPromptBar";
+import type { AudioGenData, ImageGenData, VideoGenData } from "../../core/types";
 import { videoFamily, videoMeta, type VideoFamily } from "../../core/videoMeta";
 
 /** 创意度档位说明 */
@@ -242,6 +243,7 @@ export function GenConfigPanel() {
 
   return (
     <div className="gen-panel glass">
+      <GenPromptBar nodeId={selId} kind="imageGen" />
       <div className="gp-col gp-col-info">
         <div className="gp-head">
           <IcGear size={15} />
@@ -516,6 +518,7 @@ export function VideoConfigPanel() {
 
   return (
     <div className="gen-panel glass">
+      <GenPromptBar nodeId={selId} kind="videoGen" />
       <div className="gp-col gp-col-info">
         <div className="gp-head">
           <IcGear size={15} />
@@ -648,6 +651,43 @@ export function VideoConfigPanel() {
           ) : null}
         </div>
         {meta.note ? <div className="gp-foot" style={{ marginTop: 6 }}>{meta.note}</div> : null}
+      </div>
+    </div>
+  );
+}
+
+/** 音频生成面板 — 选中「生成音频」节点时出现在工具坞上方：提示词栏 + 模型/音色 */
+export function AudioConfigPanel() {
+  const selId = useBoard((s) => {
+    const sel = s.nodes.filter((n) => n.selected);
+    return sel.length === 1 && sel[0].type === "audioGen" ? sel[0].id : null;
+  });
+  const node = useBoard((s) => (selId ? s.nodes.find((n) => n.id === selId) : undefined));
+  const upd = useBoard((s) => s.updateData);
+  const suppressed = useUi((s) => s.genPanelSuppressed);
+  const d = node?.data as AudioGenData | undefined;
+  if (!selId || !d || suppressed) return null;
+  return (
+    <div className="gen-panel glass" style={{ width: "min(760px, calc(100% - 120px))" }}>
+      <GenPromptBar nodeId={selId} kind="audioGen" />
+      <div className="gp-col gp-col-info" style={{ flex: 1 }}>
+        <div className="gp-head">
+          <IcGear size={15} />
+          音频设置
+        </div>
+        <div className="gp-row2">
+          <div style={{ flex: 1.4, minWidth: 0 }}>
+            <ModelPicker role="audio" value={d.modelId} onChange={(v) => upd(selId, { modelId: v })} />
+          </div>
+          <input
+            className="input nodrag"
+            style={{ flex: 1 }}
+            placeholder="音色（如 alloy）"
+            title="openai 协议 = voice 字段（alloy/echo/nova…）；自定义协议用 {{voice}} 占位"
+            value={d.voice ?? ""}
+            onChange={(e) => upd(selId, { voice: e.target.value || undefined })}
+          />
+        </div>
       </div>
     </div>
   );

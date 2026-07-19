@@ -1,9 +1,11 @@
+/**
+ * 生成视频 — LibLib 式精简节点：画布上只留结果；
+ * 描述/模型/时长/分辨率等全部在选中后的底部生成面板里编辑。
+ */
 import { memo } from "react";
 import type { NodeProps } from "@xyflow/react";
 import { NodeShell, PortAudioIn, PortImageIn, PortOut, PortTextIn, PortVideoIn } from "../NodeShell";
-import { IcGear } from "../../../ui/icons";
 import { IcDownload, IcLoading, IcVideo } from "../../../ui/icons";
-import { ModelPicker } from "../../../ui/ModelPicker";
 import { useBoard } from "../../../core/stores/boardStore";
 import { resolveModelCard, useSettings } from "../../../core/stores/settingsStore";
 import { toast } from "../../../core/stores/uiStore";
@@ -11,15 +13,13 @@ import { collectUpstream, runFlow } from "../../../core/runner";
 import { saveVideoAs } from "../../../core/services/imageSaver";
 import { errMsg } from "../../../core/utils";
 import { VideoThumb } from "../../../ui/VideoThumb";
-import { PromptHistoryBtn } from "../../../ui/PromptHistory";
 import type { VideoGenData } from "../../../core/types";
 
 export const VideoGenNode = memo(function VideoGenNode({ id, data, selected }: NodeProps) {
   const d = data as VideoGenData;
-  const upd = useBoard((s) => s.updateData);
-  // 上游已接入文本 → 描述框隐藏（运行时自动取上游；已手写的优先级更高，保留显示）
   const hasUpText = useBoard(() => collectUpstream(id).texts.length > 0);
   const running = d.status === "running";
+  const preview = (d.prompt ?? "").trim();
 
   const save = async () => {
     if (!d.resultUrl) return;
@@ -57,50 +57,27 @@ export const VideoGenNode = memo(function VideoGenNode({ id, data, selected }: N
       }
     >
       <div className="mnode-body">
-        <div style={{ display: "flex", gap: 7 }}>
-          <div style={{ flex: 1 }}>
-            <ModelPicker role="video" value={d.modelId} onChange={(v) => upd(id, { modelId: v })} />
+        {running ? (
+          <div className="skeleton">
+            <span>{d.progress || "正在生成视频…"}</span>
           </div>
-          <div className="lang-seg nodrag" title="提示词语言：中文直发 / 生成前译成英文">
-            <button className={(d.lang ?? "zh") === "zh" ? "on" : ""} onClick={() => upd(id, { lang: "zh" })}>
-              中
-            </button>
-            <button className={d.lang === "en" ? "on" : ""} onClick={() => upd(id, { lang: "en" })}>
-              EN
-            </button>
-          </div>
-        </div>
-        {hasUpText && !(d.prompt ?? "").trim() ? null : (
-          <div style={{ position: "relative" }}>
-            <textarea
-              className="textarea nodrag nowheel"
-              rows={3}
-              placeholder="视频描述（第 1 路上游图 = 首帧，第 2 路 = 尾帧）"
-              value={d.prompt}
-              onChange={(e) => upd(id, { prompt: e.target.value })}
-            />
-            <div style={{ position: "absolute", right: 5, bottom: 5 }}>
-              <PromptHistoryBtn onPick={(t) => upd(id, { prompt: t })} />
-            </div>
+        ) : d.resultUrl ? (
+          <VideoThumb className="img-main nodrag" src={d.resultUrl} />
+        ) : (
+          <div className="gen-empty">
+            <IcVideo size={24} />
+            <span>选中节点，在底部面板输入描述</span>
           </div>
         )}
-        <div className="gen-sum nodrag" title="选中节点后，在画布左下角的「生成设置」面板中调整时长/分辨率/比例/音频等参数">
-          <IcGear size={13} />
-          <span>
-            {[d.duration ? `${d.duration}s` : null, d.resolution, d.aspect].filter(Boolean).join(" · ") || "生成参数：选中节点后在左下面板调整"}
+        <div className="gen-foot nodrag">
+          <span className="gf-prompt" title={preview || undefined}>
+            {preview || (hasUpText ? "使用上游文本" : "未填描述")}
           </span>
+          <button className="btn sm primary" disabled={running} onClick={() => void runFlow(id)}>
+            {running ? <IcLoading size={15} /> : <IcVideo size={15} />}
+            {running ? "生成中" : "生成"}
+          </button>
         </div>
-        <button className="btn primary nodrag" disabled={running} onClick={() => void runFlow(id)}>
-          {running ? <IcLoading size={17} /> : <IcVideo size={17} />}
-          {running ? "生成中…" : "生成视频"}
-        </button>
-        {running && d.progress ? (
-          <div className="progress-line">
-            <IcLoading size={14} />
-            {d.progress}
-          </div>
-        ) : null}
-        {d.resultUrl ? <VideoThumb className="img-main nodrag" src={d.resultUrl} /> : null}
       </div>
       <PortTextIn />
       <PortImageIn />

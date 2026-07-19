@@ -2392,3 +2392,155 @@
   stroke: var(--port-audio);
   opacity: 0.75;
 }
+
+/* ============ 生成面板提示词栏（LibLib 式：提示词/参考图/发送集中在面板顶部一整行） ============ */
+.gen-panel {
+  flex-wrap: wrap;
+  row-gap: 10px;
+}
+.gd-prompt {
+  flex: 1 1 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  min-width: 0;
+}
+.gd-refs {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.gd-ref {
+  position: relative;
+  width: 46px;
+  height: 46px;
+  flex: none;
+  border-radius: 10px;
+  overflow: hidden;
+  border: 1px solid var(--input-border);
+  padding: 0;
+  background: var(--input-bg);
+  cursor: pointer;
+  transition: border-color var(--t-fast), transform var(--t-fast);
+}
+.gd-ref:hover {
+  border-color: var(--accent);
+  transform: translateY(-1px);
+}
+.gd-ref.static {
+  cursor: default;
+}
+.gd-ref.static:hover {
+  border-color: var(--input-border);
+  transform: none;
+}
+.gd-ref img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.gd-ref b {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.62);
+  color: #fff;
+  font-size: 10.5px;
+  line-height: 16px;
+  text-align: center;
+}
+.gd-ref .gd-tag {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  font-size: 10px;
+  line-height: 15px;
+  text-align: center;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.55);
+}
+.gd-hint {
+  font-size: 11.5px;
+  color: var(--text-3);
+}
+.gd-row {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+}
+.gd-row .at-edit {
+  flex: 1;
+  min-width: 0;
+}
+.gd-side {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 6px;
+}
+.gd-send {
+  width: 40px;
+  height: 40px;
+  flex: none;
+  margin-top: auto;
+  border-radius: 50%;
+  border: none;
+  background: var(--accent);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: filter var(--t-fast), transform var(--t-fast);
+}
+.gd-send:hover {
+  filter: brightness(1.08);
+}
+.gd-send:active {
+  transform: scale(0.94);
+}
+.gd-send:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+/* 精简生成节点：无结果时的占位框 + 底部一行（提示词预览 + 生成按钮） */
+.gen-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-height: 108px;
+  border: 1.5px dashed var(--input-border);
+  border-radius: var(--r-md);
+  color: var(--text-3);
+  font-size: 12px;
+  background: var(--input-bg);
+}
+.gen-empty.sm {
+  min-height: 56px;
+  flex-direction: row;
+}
+.gen-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.gf-prompt {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--text-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}

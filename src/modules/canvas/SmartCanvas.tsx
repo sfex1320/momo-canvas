@@ -22,7 +22,7 @@ import {
 import "@xyflow/react/dist/style.css";
 import "./canvas.css";
 
-import { useBoard, outPortType, findProximityPair, wouldCycle } from "../../core/stores/boardStore";
+import { useBoard, outPortType, findProximityPair, wouldCycle, NODE_INPUTS } from "../../core/stores/boardStore";
 import { useTemplates } from "../../core/stores/templateStore";
 import { getNativeDragAsset } from "../assets/dragState";
 import { toast, useUi } from "../../core/stores/uiStore";
@@ -30,8 +30,8 @@ import { useSettings } from "../../core/stores/settingsStore";
 import { useAssets } from "../../core/stores/assetStore";
 import { assetToDataUrl, assetUrl } from "../../core/services/assetFiles";
 import { videoDuration } from "../../core/videoEdit";
-import { GenConfigPanel, VideoConfigPanel } from "./GenConfigPanel";
-import type { AppNode, BoardTemplate, NodeKind } from "../../core/types";
+import { AudioConfigPanel, GenConfigPanel, VideoConfigPanel } from "./GenConfigPanel";
+import type { AppNode, BoardTemplate, NodeKind, PortType } from "../../core/types";
 import { errMsg, fileToDataUrl, matchHotkey } from "../../core/utils";
 import { NODE_CATALOG } from "./nodeCatalog";
 import { AddNodeMenu } from "./AddNodeMenu";
@@ -171,6 +171,54 @@ function EdgeBoxSelect() {
   return null;
 }
 
+/** 拖线松手命中节点时的强吸附连接：按线头类型接到目标节点匹配的端口（查重、防环），不必对准端口点 */
+function snapConnection(
+  from: AppNode,
+  fromHandle: { id?: string | null; type?: string | null },
+  hit: AppNode,
+  nodes: AppNode[],
+  edges: Edge[],
+): Connection | null {
+  const IN_PORT: Record<string, PortType> = { "in-text": "text", "in-image": "image", "in-video": "video", "in-audio": "audio" };
+  if (fromHandle.type === "source") {
+    if (hit.type === "group" || hit.type === "note") return null; // 组/备注不能作下游
+    const pt =
+      from.type === "group"
+        ? fromHandle.id === "out-image"
+          ? ("image" as const)
+          : fromHandle.id === "out-video"
+            ? ("video" as const)
+            : ("text" as const)
+        : outPortType(from.type as NodeKind, from.data as Record<string, unknown>);
+    if (!pt) return null;
+    const ins = NODE_INPUTS[hit.type as NodeKind] ?? {};
+    const targetHandle =
+      pt === "image" ? (ins.image ? "in-image" : null)
+      : pt === "video" ? (ins.video ? "in-video" : null)
+      : pt === "audio" ? (ins.audio ? "in-audio" : null)
+      : ins.text ? "in-text" : null;
+    if (!targetHandle) return null;
+    if (edges.some((e) => e.source === from.id && e.target === hit.id && e.targetHandle === targetHandle)) return null;
+    if (wouldCycle(edges, from.id, hit.id)) return null;
+    return { source: from.id, target: hit.id, sourceHandle: fromHandle.id ?? "out", targetHandle };
+  }
+  // 从输入口反向拖线：命中的节点作上游
+  const want = fromHandle.id ? IN_PORT[fromHandle.id] : undefined;
+  if (!want) return null;
+  let sourceHandle = "out";
+  if (hit.type === "group") {
+    if (want === "audio") return null; // 组框没有音频出口
+    const members = nodes.filter((n) => n.parentId === hit.id);
+    if (!members.some((m) => outPortType(m.type as NodeKind, m.data as Record<string, unknown>) === want)) return null;
+    sourceHandle = `out-${want}`;
+  } else if (outPortType(hit.type as NodeKind, hit.data as Record<string, unknown>) !== want) {
+    return null;
+  }
+  if (edges.some((e) => e.source === hit.id && e.target === from.id && e.targetHandle === fromHandle.id)) return null;
+  if (wouldCycle(edges, hit.id, from.id)) return null;
+  return { source: hit.id, target: from.id, sourceHandle, targetHandle: fromHandle.id ?? null };
+}
+
 export function SmartCanvas() {
   const nodes = useBoard((s) => s.nodes);
   const edges = useBoard((s) => s.edges);
@@ -202,7 +250,7 @@ export function SmartCanvas() {
   const hotkeys = useSettings((s) => s.settings.hotkeys);
   const dockShift = galleryOpen && !zen ? 304 : 0;
 
-  const { screenToFlowPosition, zoomIn, zoomOut, fitView, setViewport: applyViewport } = useReactFlow();
+  const { screenToFlowPosition, getIntersectingNodes, zoomIn, zoomOut, fitView, setViewport: applyViewport } = useReactFlow();
   const activeId = useBoard((s) => s.activeId);
   const [zoomPct, setZoomPct] = useState(100);
 
@@ -265,10 +313,29 @@ export function SmartCanvas() {
     return true;
   }, []);
 
-  /* ---- 拖线到空白 → 快速添加并自动连线 ---- */
+  /* ---- 拖线松手：落在节点身上 → 强吸附自动连线；落在空白 → 快速添加并自动连线 ---- */
   const onConnectEnd = useCallback(
     (event: MouseEvent | TouchEvent, state: FinalConnectionState) => {
-      if (state.isValid || !state.fromNode || state.fromHandle?.type !== "source") return;
+      if (state.isValid || !state.fromNode || !state.fromHandle) return;
+      const client =
+        "clientX" in event
+          ? { x: event.clientX, y: event.clientY }
+          : { x: event.changedTouches[0].clientX, y: event.changedTouches[0].clientY };
+      const flow = screenToFlowPosition(client);
+
+      // 强吸附：线头落在目标节点范围内即自动接到匹配类型的端口，不必对准端口点（组内成员优先于组框）
+      const s = useBoard.getState();
+      const hits = getIntersectingNodes({ x: flow.x - 1, y: flow.y - 1, width: 2, height: 2 }).filter(
+        (n) => n.id !== state.fromNode!.id,
+      ) as AppNode[];
+      const hit = hits.find((n) => n.type !== "group" && n.type !== "note") ?? hits.find((n) => n.type === "group");
+      if (hit) {
+        const conn = snapConnection(state.fromNode as AppNode, state.fromHandle, hit, s.nodes, s.edges);
+        if (conn) s.onConnect(conn);
+        return; // 命中节点：能连就连；连不上也不在节点上叠加添加菜单
+      }
+
+      if (state.fromHandle.type !== "source") return;
       const pt =
         state.fromNode.type === "group"
           ? state.fromHandle.id === "out-image"
@@ -278,11 +345,6 @@ export function SmartCanvas() {
               : ("text" as const)
           : outPortType(state.fromNode.type as NodeKind, state.fromNode.data as Record<string, unknown>);
       if (!pt) return;
-      const client =
-        "clientX" in event
-          ? { x: event.clientX, y: event.clientY }
-          : { x: event.changedTouches[0].clientX, y: event.changedTouches[0].clientY };
-      const flow = screenToFlowPosition(client);
       setAddMenu({
         flowX: flow.x,
         flowY: flow.y,
@@ -292,7 +354,7 @@ export function SmartCanvas() {
         sourcePort: pt,
       });
     },
-    [screenToFlowPosition, setAddMenu],
+    [screenToFlowPosition, getIntersectingNodes, setAddMenu],
   );
 
   /* ---- 双击空白 → 添加菜单 ---- */
@@ -318,6 +380,7 @@ export function SmartCanvas() {
 
       const kind = e.dataTransfer.getData("momo/node-kind") as NodeKind | "";
       if (kind) {
+        useUi.getState().setGenPanelSuppressed(false);
         autoLink(addNode(kind, pos));
         return;
       }
@@ -472,6 +535,8 @@ export function SmartCanvas() {
       const rect = wrapRef.current?.getBoundingClientRect();
       const cx = (rect?.left ?? 0) + (rect?.width ?? window.innerWidth) / 2;
       const cy = (rect?.top ?? 0) + (rect?.height ?? window.innerHeight) / 2;
+      // 新节点会被自动选中：解除面板抑制，生成类节点的底部面板立即可用
+      useUi.getState().setGenPanelSuppressed(false);
       addNode(kind, screenToFlowPosition({ x: cx, y: cy }));
     },
     [addNode, screenToFlowPosition],
@@ -632,7 +697,7 @@ export function SmartCanvas() {
         onNodeDrag={onNodeDrag}
         onNodeDragStop={onNodeDragStop}
         isValidConnection={isValidConnection}
-        connectionRadius={36}
+        connectionRadius={64}
         proOptions={{ hideAttribution: true }}
         minZoom={0.15}
         maxZoom={2.5}
@@ -805,6 +870,7 @@ export function SmartCanvas() {
 
       {!zen ? <GenConfigPanel /> : null}
       {!zen ? <VideoConfigPanel /> : null}
+      {!zen ? <AudioConfigPanel /> : null}
 
       <AddNodeMenu />
       <CanvasSearch />
