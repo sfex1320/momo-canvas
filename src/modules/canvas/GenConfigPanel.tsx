@@ -9,7 +9,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useBoard } from "../../core/stores/boardStore";
 import { modelKey, providersOfRole, resolveModelCard, useSettings } from "../../core/stores/settingsStore";
 import { toast, useUi } from "../../core/stores/uiStore";
-import { runBatchPrompts, runModelCompare } from "../../core/runner";
+import { runBatchImages, runBatchPrompts, runModelCompare } from "../../core/runner";
 import {
   BANANA_ASPECTS,
   BANANA_SIZES,
@@ -77,8 +77,8 @@ function ComparePicker({ nodeId, currentModel }: { nodeId: string; currentModel?
   );
 }
 
-/** 批量出图：一行一条提示词 → 克隆节点并行生成（继承参数与上游参考图） */
-function BatchPicker({ nodeId }: { nodeId: string }) {
+/** 批量出图：一行一条提示词并行克隆生成；≥2 路参考图时还可按图批量（每张单独处理一遍） */
+function BatchPicker({ nodeId, refCount }: { nodeId: string; refCount: number }) {
   const [open, setOpen] = useState(false);
   const [text, setText] = useState("");
   const lines = text.split("\n").map((l) => l.trim()).filter(Boolean);
@@ -90,7 +90,7 @@ function BatchPicker({ nodeId }: { nodeId: string }) {
   };
   return (
     <div className="cmp-wrap nodrag">
-      <button className="btn" onClick={() => setOpen(!open)} title="一行一条提示词，批量克隆生成节点并行出图（继承当前参数与上游参考图连线）">
+      <button className="btn" onClick={() => setOpen(!open)} title="一行一条提示词并行出图；节点/上游里的提示词会作为共用风格附加到每一条">
         <IcRows size={15} /> 批量出图
       </button>
       {open ? (
@@ -103,9 +103,24 @@ function BatchPicker({ nodeId }: { nodeId: string }) {
             value={text}
             onChange={(e) => setText(e.target.value)}
           />
-          <button className="btn primary" disabled={!lines.length} style={{ opacity: lines.length ? 1 : 0.5, marginTop: 8 }} onClick={run}>
+          <div className="cmp-note">
+            共用风格/定调：写在本节点提示词框或接一个上游提示词节点，会自动附加到每一条前面；上游参考图各条共用。
+          </div>
+          <button className="btn primary" disabled={!lines.length} style={{ opacity: lines.length ? 1 : 0.5 }} onClick={run}>
             并行生成（{lines.length} 个节点）
           </button>
+          {refCount >= 2 ? (
+            <button
+              className="btn"
+              title="每路上游图片各克隆一个生成节点单独处理（提示词连线全部继承），并行运行"
+              onClick={() => {
+                setOpen(false);
+                void runBatchImages(nodeId);
+              }}
+            >
+              按参考图批量（{refCount} 路各出一遍）
+            </button>
+          ) : null}
         </div>
       ) : null}
     </div>
@@ -230,41 +245,37 @@ export function GenConfigPanel() {
         <div className="gp-head">
           <IcGear size={15} />
           生成设置
+          <span className="gp-fam">{FAMILY_LABEL[family]}</span>
         </div>
-        <span className="gp-fam">{FAMILY_LABEL[family]}</span>
-        <div className="gp-sec">
-          <div className="gp-lab">模型</div>
-          <ModelPicker role="image" value={d.modelId} onChange={(v) => patch({ modelId: v })} />
-        </div>
-        <div className="gp-sec">
-          <div className="gp-lab">提示词语言</div>
-          <div className="gp-seg">
-            <button className={(d.lang ?? "zh") === "zh" ? "on" : ""} title="中文原文直接发给模型" onClick={() => patch({ lang: "zh" })}>
+        <ModelPicker role="image" value={d.modelId} onChange={(v) => patch({ modelId: v })} />
+        <div className="gp-row2">
+          <div className="gp-seg" style={{ flex: 1 }} title="提示词语言：中文原文直发 / 生成前先译成英文">
+            <button className={(d.lang ?? "zh") === "zh" ? "on" : ""} onClick={() => patch({ lang: "zh" })}>
               中文
             </button>
-            <button className={d.lang === "en" ? "on" : ""} title="生成前先用对话模型译成英文" onClick={() => patch({ lang: "en" })}>
+            <button className={d.lang === "en" ? "on" : ""} onClick={() => patch({ lang: "en" })}>
               译英
             </button>
           </div>
-        </div>
-        {refCount > 0 ? (
-          <div className="gp-sec" title="仅图生图生效：低 = 忠于参考图微调；高 = 大胆重新演绎（会转译成模型能懂的力度描述附加到提示词）">
-            <div className="gp-lab">
-              创意度
-              <span className="gp-hint">{creativityLabel(d.creativity ?? 50)}</span>
+          {refCount > 0 ? (
+            <div
+              className="gp-cre"
+              title={`创意度 ${d.creativity ?? 50}（${creativityLabel(d.creativity ?? 50)}）：低 = 忠于参考图微调；高 = 大胆重新演绎`}
+            >
+              <span className="gp-lab" style={{ margin: 0 }}>创意度</span>
+              <input
+                type="range"
+                className="range nodrag"
+                min={0}
+                max={100}
+                step={5}
+                value={d.creativity ?? 50}
+                onChange={(e) => patch({ creativity: +e.target.value })}
+              />
             </div>
-            <input
-              type="range"
-              className="range nodrag"
-              min={0}
-              max={100}
-              step={5}
-              value={d.creativity ?? 50}
-              onChange={(e) => patch({ creativity: +e.target.value })}
-            />
-          </div>
-        ) : null}
-        <div className="gp-sec">
+          ) : null}
+        </div>
+        <div className="gp-row2">
           <ComparePicker nodeId={selId} currentModel={(() => {
             try {
               const c = resolveModelCard("image", d.modelId);
@@ -273,9 +284,7 @@ export function GenConfigPanel() {
               return undefined;
             }
           })()} />
-        </div>
-        <div className="gp-sec">
-          <BatchPicker nodeId={selId} />
+          <BatchPicker nodeId={selId} refCount={refCount} />
         </div>
         <div className="gp-foot">
           参考图：已接入 {refCount} 路 · 最多 {familyMaxRef(family)} 张

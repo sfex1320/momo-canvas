@@ -618,23 +618,43 @@
   left: 50%;
   transform: translateX(-50%);
   bottom: 118px;
-  width: min(1080px, calc(100% - 120px));
+  width: min(1400px, calc(100% - 120px));
   display: flex;
   align-items: stretch;
-  gap: 16px;
-  padding: 13px 16px 12px;
+  gap: 14px;
+  padding: 9px 14px 8px;
   z-index: 70;
   animation: popIn 150ms var(--ease);
 }
 .gen-panel .gp-col {
   display: flex;
   flex-direction: column;
-  gap: 7px;
+  gap: 5px;
   min-width: 0;
 }
 .gen-panel .gp-col-info {
-  width: 178px;
+  width: 236px;
   flex: none;
+}
+.gen-panel .gp-row2 {
+  display: flex;
+  gap: 5px;
+  align-items: center;
+}
+.gen-panel .gp-row2 .cmp-wrap {
+  flex: 1;
+  min-width: 0;
+}
+.gen-panel .gp-cre {
+  flex: 1.1;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.gen-panel .gp-cre .range {
+  flex: 1;
+  min-width: 0;
 }
 .gen-panel .gp-col-main {
   flex: 1;
@@ -658,6 +678,9 @@
   font-weight: 700;
   font-size: var(--fs-base);
 }
+.gen-panel .gp-head .gp-fam {
+  margin-left: auto;
+}
 .gen-panel .gp-fam {
   align-self: flex-start;
   font-size: 11px;
@@ -671,10 +694,10 @@
   margin-bottom: 0;
 }
 .gen-panel .gp-lab {
-  font-size: 12px;
+  font-size: 11.5px;
   font-weight: 600;
   color: var(--text-2);
-  margin-bottom: 6px;
+  margin-bottom: 4px;
   display: flex;
   align-items: baseline;
   gap: 6px;
@@ -687,7 +710,7 @@
 .gen-panel .gp-grid {
   display: grid;
   grid-template-columns: repeat(6, 1fr);
-  gap: 5px;
+  gap: 4px;
 }
 .gen-panel .gp-grid.n {
   grid-template-columns: repeat(5, 1fr);
@@ -698,10 +721,12 @@
 }
 .gen-panel .gp-cell {
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
   align-items: center;
-  gap: 3px;
-  padding: 6px 2px 5px;
+  justify-content: center;
+  gap: 4px;
+  height: 28px;
+  padding: 0 3px;
   border-radius: var(--r-sm);
   border: 1px solid var(--input-border);
   background: var(--input-bg);
@@ -729,7 +754,8 @@
   color: var(--accent-2);
 }
 .ar-ic {
-  height: 16px;
+  height: 12px;
+  transform: scale(0.85);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -753,7 +779,7 @@
 }
 .gen-panel .gp-seg button {
   flex: 1;
-  min-height: 30px;
+  min-height: 26px;
   border-radius: var(--r-sm);
   border: 1px solid var(--input-border);
   background: var(--input-bg);
@@ -807,7 +833,7 @@
   color: var(--text-3);
 }
 .gen-panel .gp-wh .input {
-  min-height: 30px;
+  min-height: 26px;
   padding: 3px 8px;
   font-size: 12.5px;
 }
@@ -2040,8 +2066,15 @@
 }
 .gen-panel .cmp-wrap > .btn {
   width: 100%;
-  height: 30px;
-  font-size: 12.5px;
+  height: 28px;
+  font-size: 12px;
+  white-space: nowrap;
+  padding: 0 6px;
+}
+.gen-panel .cmp-note {
+  font-size: 11px;
+  color: var(--text-3);
+  line-height: 1.55;
 }
 .gen-panel .cmp-pop {
   position: absolute;

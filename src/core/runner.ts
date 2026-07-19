@@ -514,35 +514,77 @@ export async function runModelCompare(id: string, keys: string[]) {
   notifyDone("多模型对比");
 }
 
-/** 批量出图：每行提示词克隆一个生成节点（继承参数与上游连线），并行运行 */
+/**
+ * 批量出图（按提示词）：每行克隆一个生成节点并行运行。
+ * 共用前缀：节点自己的提示词 + 上游文本（风格/定调）会附加到每一条前面——
+ * 「1 条共用 + N 条细节」场景直接把共用的写在节点/上游，细节逐行贴进来。
+ */
 export async function runBatchPrompts(id: string, lines: string[]) {
   const s = useBoard.getState();
   const node = s.nodes.find((n) => n.id === id);
   const prompts = lines.map((l) => l.trim()).filter(Boolean);
   if (!node || node.type !== "imageGen" || !prompts.length) return;
   const base = node.data as ImageGenData;
+  // 共用前缀 = 节点提示词 + 上游文本（尺寸指令除外）
+  const upTexts = collectUpstream(id).texts.filter((t) => !isSizeDirective(t));
+  const shared = [(base.prompt ?? "").trim(), ...upTexts].filter(Boolean).join("\n");
   const parent = node.parentId ? s.nodes.find((n) => n.id === node.parentId) : undefined;
   const baseX = node.position.x + (parent?.position.x ?? 0);
   const baseY = node.position.y + (parent?.position.y ?? 0);
   const w = node.measured?.width ?? 310;
   const h = node.measured?.height ?? 320;
-  // 只继承图片连线（提示词各行自带；再连上游文本会覆盖批量内容）
+  // 继承图片连线（参考图共用）；文本已物化进各条提示词，不再连文本边
   const inEdges = s.edges.filter((e) => e.target === id && e.targetHandle === "in-image");
   const ids: string[] = [];
   const COLS = 4;
-  prompts.forEach((prompt, i) => {
+  prompts.forEach((line, i) => {
     const bs = useBoard.getState();
     const nid = bs.addNode(
       "imageGen",
       { x: baseX + (w + 70) * ((i % COLS) + 1), y: baseY + Math.floor(i / COLS) * (h + 90) },
-      { ...base, prompt, status: "idle", error: undefined, results: [], picked: 0 },
+      { ...base, prompt: shared ? `${shared}\n${line}` : line, status: "idle", error: undefined, results: [], picked: 0 },
     );
     for (const e of inEdges) bs.connectNodes(e.source, nid, e.targetHandle ?? "in-image", e.sourceHandle ?? "out");
     ids.push(nid);
   });
-  toast(`批量出图：已建立 ${prompts.length} 个生成节点，并行生成中…`, "info");
+  toast(`批量出图：已建立 ${prompts.length} 个生成节点，并行生成中…${shared ? "（共用提示词已附加到每条）" : ""}`, "info");
   await Promise.all(ids.map((nid) => runImageGen(nid)));
   notifyDone("批量出图");
+}
+
+/** 批量出图（按参考图）：每路上游图片克隆一个生成节点单独处理（文本连线全部继承），并行运行 */
+export async function runBatchImages(id: string) {
+  const s = useBoard.getState();
+  const node = s.nodes.find((n) => n.id === id);
+  if (!node || node.type !== "imageGen") return;
+  const imgEdges = s.edges.filter((e) => e.target === id && e.targetHandle === "in-image");
+  if (imgEdges.length < 2) {
+    toast("按参考图批量需要接入至少 2 路上游图片", "err");
+    return;
+  }
+  const base = node.data as ImageGenData;
+  const parent = node.parentId ? s.nodes.find((n) => n.id === node.parentId) : undefined;
+  const baseX = node.position.x + (parent?.position.x ?? 0);
+  const baseY = node.position.y + (parent?.position.y ?? 0);
+  const w = node.measured?.width ?? 310;
+  const h = node.measured?.height ?? 320;
+  const textEdges = s.edges.filter((e) => e.target === id && e.targetHandle !== "in-image");
+  const ids: string[] = [];
+  const COLS = 4;
+  imgEdges.forEach((imgEdge, i) => {
+    const bs = useBoard.getState();
+    const nid = bs.addNode(
+      "imageGen",
+      { x: baseX + (w + 70) * ((i % COLS) + 1), y: baseY + Math.floor(i / COLS) * (h + 90) },
+      { ...base, status: "idle", error: undefined, results: [], picked: 0 },
+    );
+    bs.connectNodes(imgEdge.source, nid, imgEdge.targetHandle ?? "in-image", imgEdge.sourceHandle ?? "out");
+    for (const e of textEdges) bs.connectNodes(e.source, nid, e.targetHandle ?? "in-text", e.sourceHandle ?? "out");
+    ids.push(nid);
+  });
+  toast(`按参考图批量：${imgEdges.length} 路图片各建一个生成节点，并行生成中…`, "info");
+  await Promise.all(ids.map((nid) => runImageGen(nid)));
+  notifyDone("按参考图批量");
 }
 
 /* ---------- 生成视频 ---------- */
