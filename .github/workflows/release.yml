@@ -1,0 +1,61 @@
+# 发版流水线：推送 v* 标签（如 v0.3.1）即自动构建并发布 Release
+#  产物：NSIS 安装包 + 更新包签名 + latest.json（应用内自动更新用）+ 便携版 zip
+#  依赖仓库 Secret：TAURI_SIGNING_PRIVATE_KEY（更新包签名私钥，本机备份在 ~/.tauri/momo-canvas.key）
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - run: pnpm install --frozen-lockfile
+
+      # 构建 + 创建 Release + 上传安装包/更新包/latest.json
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: "MOMO 智能画布 ${{ github.ref_name }}"
+          releaseBody: "自动构建发布。安装版下载 .exe 安装包；便携版下载 *_portable.zip 解压即用（应用内均可自动更新到后续版本）。"
+          releaseDraft: false
+          prerelease: false
+
+      # 便携版：裸 exe + portable.txt 标记（应用据此走 zip 替换式更新）
+      - name: 打包并上传便携版
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $ver = "${{ github.ref_name }}"
+          $dir = "portable-pack"
+          New-Item -ItemType Directory -Force $dir | Out-Null
+          Copy-Item "src-tauri/target/release/MOMO-Canvas.exe" $dir/
+          Set-Content -Path "$dir/portable.txt" -Value "portable" -Encoding ascii
+          $zip = "MOMO-Canvas_${ver}_portable.zip"
+          Compress-Archive -Path "$dir/*" -DestinationPath $zip -Force
+          gh release upload "$ver" $zip --clobber
