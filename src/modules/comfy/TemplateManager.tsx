@@ -4,10 +4,17 @@
  *  → 指定输出节点 → 保存为模板；模板可单个/批量导出为模板包，再导入即恢复
  */
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Modal, Field, Row } from "../../ui/kit";
+import { Modal, Field, Row, Switch } from "../../ui/kit";
 import { useComfy } from "../../core/stores/comfyStore";
 import { toast, useUi } from "../../core/stores/uiStore";
-import { guessOutputNode, isApiWorkflow, listWorkflowInputs, type WfInputInfo } from "../../core/services/comfy";
+import {
+  analyzeCaps,
+  canDisable,
+  guessOutputNode,
+  isApiWorkflow,
+  listWorkflowInputs,
+} from "../../core/services/comfy";
+import { layoutWorkflow, zhInput, zhNode, WFG_H, WFG_W } from "./wfGraph";
 import { errMsg, uid } from "../../core/utils";
 import { IcDownload, IcEdit, IcFlow, IcTrash, IcUpload } from "../../ui/icons";
 import {
@@ -19,7 +26,7 @@ import {
   templatesFromJson,
   type ExposeMap,
 } from "./templateIO";
-import type { ComfyParamKind, ComfyTemplate } from "../../core/types";
+import type { ComfyParamKind, ComfyTemplate, ComfyWfNode } from "../../core/types";
 
 type Draft = {
   id: string;
@@ -27,12 +34,20 @@ type Draft = {
   workflow: ComfyTemplate["workflow"];
   outputNodeId?: string;
   expose: ExposeMap;
+  disabledNodes: string[];
 };
 
 function draftFromTemplate(t: ComfyTemplate): Draft {
   const expose: ExposeMap = {};
   for (const p of t.params) expose[p.key] = { label: p.label, kind: p.kind };
-  return { id: t.id, name: t.name, workflow: t.workflow, outputNodeId: t.outputNodeId, expose };
+  return {
+    id: t.id,
+    name: t.name,
+    workflow: t.workflow,
+    outputNodeId: t.outputNodeId,
+    expose,
+    disabledNodes: t.disabledNodes ?? [],
+  };
 }
 
 export function TemplateManager() {
@@ -64,6 +79,7 @@ export function TemplateManager() {
         workflow: json,
         outputNodeId: guessOutputNode(json),
         expose: autoExposeMap(listWorkflowInputs(json)),
+        disabledNodes: [],
       });
       return { drafted: true, saved: 0 };
     }
@@ -145,6 +161,7 @@ export function TemplateManager() {
       workflow: draft.workflow,
       params,
       outputNodeId: draft.outputNodeId,
+      disabledNodes: draft.disabledNodes.length ? draft.disabledNodes : undefined,
       createdAt: Date.now(),
     });
     toast(`模板「${draft.name.trim()}」已保存（${params.length} 个参数）`, "ok");
@@ -155,7 +172,7 @@ export function TemplateManager() {
     <Modal
       title={draft ? `编辑模板 · ${draft.name || "未命名"}` : "ComfyUI 工作流模板"}
       onClose={() => (draft ? setDraft(null) : close())}
-      width={880}
+      width={draft ? 1120 : 880}
       footer={
         draft ? (
           <>
@@ -275,110 +292,285 @@ export function TemplateManager() {
 }
 
 function TemplateEditor({ draft, setDraft }: { draft: Draft; setDraft: (d: Draft) => void }) {
-  const inputs = useMemo(() => listWorkflowInputs(draft.workflow), [draft.workflow]);
-  const byNode = useMemo(() => {
-    const m = new Map<string, WfInputInfo[]>();
-    for (const i of inputs) {
-      const arr = m.get(i.nodeId) ?? [];
-      arr.push(i);
-      m.set(i.nodeId, arr);
-    }
-    return m;
-  }, [inputs]);
-
+  const layout = useMemo(() => layoutWorkflow(draft.workflow), [draft.workflow]);
+  const caps = useMemo(() => analyzeCaps(draft.workflow), [draft.workflow]);
+  const [sel, setSel] = useState<string | null>(() => caps.imageEntries[0] ?? Object.keys(draft.workflow)[0] ?? null);
+  const off = new Set(draft.disabledNodes);
   const exposedCount = Object.keys(draft.expose).length;
+  const positives = caps.textEntries.filter((t) => !t.negative);
 
-  const toggle = (i: WfInputInfo) => {
-    const key = `${i.nodeId}.${i.input}`;
-    const expose = { ...draft.expose };
-    if (expose[key]) delete expose[key];
-    else expose[key] = { label: `${i.nodeTitle} · ${i.input}`, kind: i.kind };
-    setDraft({ ...draft, expose });
+  const toggleDisable = (nodeId: string) => {
+    if (off.has(nodeId)) {
+      setDraft({ ...draft, disabledNodes: draft.disabledNodes.filter((x) => x !== nodeId) });
+      return;
+    }
+    const chk = canDisable(draft.workflow, nodeId);
+    if (!chk.ok) {
+      toast(chk.why ?? "该节点无法忽略", "err");
+      return;
+    }
+    setDraft({
+      ...draft,
+      disabledNodes: [...draft.disabledNodes, nodeId],
+      // 忽略的是当前输出节点 → 输出改回自动
+      outputNodeId: draft.outputNodeId === nodeId ? undefined : draft.outputNodeId,
+    });
   };
 
   return (
     <>
-      <Row gap={12} style={{ marginBottom: 14 }}>
-        <div style={{ flex: 1.4 }}>
+      <Row gap={12} style={{ marginBottom: 10 }}>
+        <div style={{ flex: 1 }}>
           <Field label="模板名称">
             <input className="input" value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} />
           </Field>
         </div>
-        <div style={{ flex: 1 }}>
-          <Field label="输出节点（取图位置）">
-            <select
-              className="select"
-              value={draft.outputNodeId ?? ""}
-              onChange={(e) => setDraft({ ...draft, outputNodeId: e.target.value || undefined })}
-            >
-              <option value="">自动（所有输出）</option>
-              {Object.entries(draft.workflow).map(([id, n]) => (
-                <option key={id} value={id}>
-                  #{id} {n._meta?.title ?? n.class_type}
-                </option>
-              ))}
-            </select>
-          </Field>
+        <div className="wfge-caps">
+          <span className={`wfge-chip img ${caps.imageEntries.length ? "" : "warn"}`}
+            title={caps.imageEntries.length ? `图片入口：${caps.imageEntries.map((i) => "#" + i).join(" ")}` : "没有加载图片节点：运行时若连了上游图片，会尝试自动注入一个（需 ComfyUI 在线）"}>
+            图片入口 ×{caps.imageEntries.length}
+          </span>
+          <span className="wfge-chip txt" title={positives.map((t) => `#${t.nodeId}.${t.input}`).join(" ") || "没有识别到提示词输入"}>
+            提示词入口 ×{positives.length}
+          </span>
+          <span className="wfge-chip out" title="在右侧详情里可改任意节点为输出">
+            输出 {draft.outputNodeId ? `#${draft.outputNodeId}` : "自动"}
+          </span>
+          {draft.disabledNodes.length ? <span className="wfge-chip off">已忽略 ×{draft.disabledNodes.length}</span> : null}
+          <span className="wfge-chip">已暴露参数 ×{exposedCount}</span>
         </div>
       </Row>
-      <p className="sec-desc" style={{ marginBottom: 12 }}>
-        勾选要在画布节点上显示的参数（已选 {exposedCount} 个）。文本参数可接收上游提示词，图片参数自动接收上游图片。
-      </p>
-      {Array.from(byNode.entries()).map(([nodeId, list]) => {
-        const node = draft.workflow[nodeId];
-        const anyOn = list.some((i) => draft.expose[`${nodeId}.${i.input}`]);
-        return (
-          <details key={nodeId} className="wf-node" open={anyOn}>
-            <summary>
-              #{nodeId} {node._meta?.title ?? node.class_type}
-              <span className="ct">{node.class_type}</span>
-            </summary>
-            {list.map((i) => {
-              const key = `${i.nodeId}.${i.input}`;
-              const ex = draft.expose[key];
+      <div className="wfge">
+        <div className="wfge-graph">
+          <div className="wfge-canvas" style={{ width: layout.width, height: layout.height }}>
+            <svg className="wfge-edges" width={layout.width} height={layout.height}>
+              {layout.edges.map((e, i) => {
+                const a = layout.pos[e.from];
+                const b = layout.pos[e.to];
+                if (!a || !b) return null;
+                const x1 = a.x + WFG_W;
+                const y1 = a.y + WFG_H / 2;
+                const x2 = b.x;
+                const y2 = b.y + WFG_H / 2;
+                const hot = sel === e.from || sel === e.to;
+                const dim = off.has(e.from) || off.has(e.to);
+                return (
+                  <path
+                    key={i}
+                    className={`wfge-edge ${hot ? "hot" : ""} ${dim ? "dim" : ""}`}
+                    d={`M ${x1} ${y1} C ${x1 + 34} ${y1}, ${x2 - 34} ${y2}, ${x2} ${y2}`}
+                  />
+                );
+              })}
+            </svg>
+            {Object.entries(draft.workflow).map(([id, n]) => {
+              const p = layout.pos[id];
+              if (!p) return null;
+              const nExposed = Object.keys(draft.expose).filter((k) => k.startsWith(`${id}.`)).length;
               return (
-                <div key={key} className="wf-input-row">
-                  <input type="checkbox" checked={!!ex} onChange={() => toggle(i)} />
-                  <span style={{ width: 110, fontWeight: 600 }}>{i.input}</span>
-                  {ex ? (
-                    <>
-                      <input
-                        type="text"
-                        className="input"
-                        value={ex.label}
-                        title="在节点上显示的参数名"
-                        onChange={(e) =>
-                          setDraft({ ...draft, expose: { ...draft.expose, [key]: { ...ex, label: e.target.value } } })
-                        }
-                      />
-                      <select
-                        className="select"
-                        value={ex.kind}
-                        onChange={(e) =>
-                          setDraft({
-                            ...draft,
-                            expose: { ...draft.expose, [key]: { ...ex, kind: e.target.value as ComfyParamKind } },
-                          })
-                        }
-                      >
-                        <option value="text">文本</option>
-                        <option value="number">数值</option>
-                        <option value="seed">种子</option>
-                        <option value="image">图片</option>
-                        <option value="toggle">开关</option>
-                      </select>
-                    </>
-                  ) : (
-                    <span className="val" style={{ flex: 1 }}>
-                      {String(i.value).slice(0, 60)}
-                    </span>
-                  )}
-                </div>
+                <button
+                  key={id}
+                  type="button"
+                  className={[
+                    "wfge-node",
+                    sel === id ? "sel" : "",
+                    off.has(id) ? "off" : "",
+                    draft.outputNodeId === id ? "isout" : "",
+                  ].join(" ")}
+                  style={{ left: p.x, top: p.y, width: WFG_W, height: WFG_H }}
+                  onClick={() => setSel(id)}
+                  title={`${n.class_type}${off.has(id) ? "（已忽略）" : ""}`}
+                >
+                  <span className="wfge-nid">#{id}</span>
+                  <span className="wfge-nname">{zhNode(n)}</span>
+                  <span className="wfge-badges">
+                    {caps.imageEntries.includes(id) ? <i className="b-img">图</i> : null}
+                    {caps.textEntries.some((t) => t.nodeId === id && !t.negative) ? <i className="b-txt">文</i> : null}
+                    {caps.textEntries.some((t) => t.nodeId === id && t.negative) ? <i className="b-neg">负</i> : null}
+                    {draft.outputNodeId === id || (!draft.outputNodeId && caps.outputs.includes(id)) ? (
+                      <i className="b-out">出</i>
+                    ) : null}
+                    {nExposed ? <i className="b-exp">{nExposed}参</i> : null}
+                  </span>
+                </button>
               );
             })}
-          </details>
-        );
-      })}
+          </div>
+        </div>
+        <NodeDetail draft={draft} setDraft={setDraft} sel={sel} off={off} onToggleDisable={toggleDisable} />
+      </div>
+      <p className="sec-desc" style={{ marginTop: 10 }}>
+        点击示意图中的节点查看/编辑：勾选参数会显示在画布节点上；「图」=图片入口（自动接收上游图片）、「文」=提示词入口（自动接收上游文本）、「出」=取图位置。
+      </p>
     </>
   );
+}
+
+/** 右侧详情面板：所选节点的输入编辑 / 暴露 / 忽略 / 设为输出 */
+function NodeDetail({
+  draft,
+  setDraft,
+  sel,
+  off,
+  onToggleDisable,
+}: {
+  draft: Draft;
+  setDraft: (d: Draft) => void;
+  sel: string | null;
+  off: Set<string>;
+  onToggleDisable: (id: string) => void;
+}) {
+  const node: ComfyWfNode | undefined = sel ? draft.workflow[sel] : undefined;
+  if (!sel || !node) {
+    return <div className="wfge-side empty">点击左侧示意图中的节点，在这里编辑它的参数、默认值与暴露状态。</div>;
+  }
+  const disabled = off.has(sel);
+  const chk = canDisable(draft.workflow, sel);
+  const isConn = (v: unknown): v is [string, number] => Array.isArray(v) && v.length === 2 && typeof v[0] === "string";
+
+  const setVal = (input: string, v: unknown) => {
+    setDraft({
+      ...draft,
+      workflow: {
+        ...draft.workflow,
+        [sel]: { ...node, inputs: { ...node.inputs, [input]: v } },
+      },
+    });
+  };
+  const toggleExpose = (input: string, value: unknown) => {
+    const key = `${sel}.${input}`;
+    const expose = { ...draft.expose };
+    if (expose[key]) delete expose[key];
+    else {
+      const kind: ComfyParamKind =
+        /loadimage/i.test(node.class_type) && input === "image"
+          ? "image"
+          : input.toLowerCase().includes("seed")
+            ? "seed"
+            : typeof value === "boolean"
+              ? "toggle"
+              : typeof value === "number"
+                ? "number"
+                : "text";
+      expose[key] = { label: `${zhNode(node)} · ${zhInput(input)}`, kind };
+    }
+    setDraft({ ...draft, expose });
+  };
+
+  const entries = Object.entries(node.inputs ?? {});
+  const conns = entries.filter(([, v]) => isConn(v)) as [string, [string, number]][];
+  const widgets = entries.filter(([, v]) => !isConn(v));
+
+  return (
+    <div className="wfge-side">
+      <div className="wfge-title">
+        <b>
+          #{sel} {zhNode(node)}
+        </b>
+        <span className="ct">{node.class_type}</span>
+      </div>
+      <Row gap={7} style={{ marginBottom: 10, flexWrap: "wrap" }}>
+        <button
+          className={`btn sm ${draft.outputNodeId === sel ? "primary" : ""}`}
+          onClick={() => setDraft({ ...draft, outputNodeId: draft.outputNodeId === sel ? undefined : sel })}
+        >
+          {draft.outputNodeId === sel ? "✓ 输出节点（点击取消）" : "设为输出节点"}
+        </button>
+        <button
+          className={`btn sm ${disabled ? "primary" : ""}`}
+          title={disabled ? "恢复该节点" : chk.ok ? chk.why ?? "运行时跳过该节点" : chk.why}
+          disabled={!disabled && !chk.ok}
+          onClick={() => onToggleDisable(sel)}
+        >
+          {disabled ? "已忽略（点击恢复）" : "忽略此节点"}
+        </button>
+      </Row>
+      {conns.length ? (
+        <div className="wfge-conns">
+          {conns.map(([input, v]) => {
+            const srcNode = draft.workflow[v[0]];
+            return (
+              <div key={input} className="wfge-conn">
+                <span className="k">{zhInput(input)}</span>
+                <span className="v">
+                  ← #{v[0]} {srcNode ? zhNode(srcNode) : "（缺失）"}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      ) : null}
+      {widgets.length ? (
+        <div className="wfge-widgets">
+          {widgets.map(([input, value]) => {
+            const key = `${sel}.${input}`;
+            const ex = draft.expose[key];
+            return (
+              <div key={input} className="wfge-widget">
+                <div className="wfge-wrow">
+                  <label className="wfge-check" title="勾选后显示在画布节点上，可被上游自动填充">
+                    <input type="checkbox" checked={!!ex} onChange={() => toggleExpose(input, value)} />
+                    <span className="k">{zhInput(input)}</span>
+                    {zhInput(input) !== input ? <span className="raw">{input}</span> : null}
+                  </label>
+                  <WidgetValue value={value} onChange={(v) => setVal(input, v)} />
+                </div>
+                {ex ? (
+                  <div className="wfge-wrow sub">
+                    <input
+                      type="text"
+                      className="input"
+                      value={ex.label}
+                      title="在画布节点上显示的参数名"
+                      onChange={(e) =>
+                        setDraft({ ...draft, expose: { ...draft.expose, [key]: { ...ex, label: e.target.value } } })
+                      }
+                    />
+                    <select
+                      className="select"
+                      value={ex.kind}
+                      onChange={(e) =>
+                        setDraft({
+                          ...draft,
+                          expose: { ...draft.expose, [key]: { ...ex, kind: e.target.value as ComfyParamKind } },
+                        })
+                      }
+                    >
+                      <option value="text">文本</option>
+                      <option value="number">数值</option>
+                      <option value="seed">种子</option>
+                      <option value="image">图片</option>
+                      <option value="toggle">开关</option>
+                    </select>
+                  </div>
+                ) : null}
+              </div>
+            );
+          })}
+        </div>
+      ) : (
+        <p className="sec-desc">该节点没有可编辑的参数（输入全部来自上游连线）。</p>
+      )}
+    </div>
+  );
+}
+
+/** 按值类型渲染默认值编辑控件（改的是模板里的默认值） */
+function WidgetValue({ value, onChange }: { value: unknown; onChange: (v: unknown) => void }) {
+  if (typeof value === "boolean") return <Switch on={value} onChange={(b) => onChange(b)} />;
+  if (typeof value === "number") {
+    return (
+      <input
+        className="input num"
+        type="number"
+        value={value}
+        onChange={(e) => onChange(e.target.value === "" ? 0 : Number(e.target.value))}
+      />
+    );
+  }
+  const s = String(value ?? "");
+  if (s.length > 42 || s.includes("\n")) {
+    return <textarea className="textarea" rows={2} value={s} onChange={(e) => onChange(e.target.value)} />;
+  }
+  return <input className="input" type="text" value={s} onChange={(e) => onChange(e.target.value)} />;
 }

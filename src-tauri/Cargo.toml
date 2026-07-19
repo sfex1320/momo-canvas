@@ -29,6 +29,9 @@ tauri-plugin-http = { version = "2", features = ["unsafe-headers"] }
 tauri-plugin-store = "2"
 tauri-plugin-window-state = "2"
 tauri-plugin-drag = "2"
+# 自动更新：安装版走 updater（GitHub Releases latest.json），便携版由前端下载 zip 替换
+tauri-plugin-updater = "2"
+tauri-plugin-process = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 

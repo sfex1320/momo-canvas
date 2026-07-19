@@ -6,10 +6,12 @@ import { useBoard } from "../../core/stores/boardStore";
 import { resolveModelCard, useSettings } from "../../core/stores/settingsStore";
 import { toast, useUi, type ErrLogItem } from "../../core/stores/uiStore";
 import { useAssets } from "../../core/stores/assetStore";
+import { useRunLog, type RunLogEntry } from "../../core/stores/logStore";
 import { chatStream } from "../../core/services/llm";
 import { ERR_ANALYZE_SYSTEM, buildErrContext, extractProtocolFix } from "../../core/errorHelp";
 import { errMsg, isTauri } from "../../core/utils";
 import {
+  IcActivity,
   IcBell,
   IcCheck,
   IcClose,
@@ -288,6 +290,139 @@ function ErrCenter() {
   );
 }
 
+/** 单条运行日志：一行摘要，点开看请求体/响应体 */
+function RunLogRow({ e }: { e: RunLogEntry }) {
+  const [open, setOpen] = useState(false);
+  let host = e.url;
+  let path = "";
+  try {
+    const u = new URL(e.url);
+    host = u.host;
+    path = u.pathname + (u.search.length > 1 ? "?…" : "");
+  } catch {
+    /* 保持原样 */
+  }
+  const bad = e.error !== undefined || e.ok === false;
+  const copy = (text: string) => {
+    void navigator.clipboard.writeText(text).then(() => toast("已复制", "ok"));
+  };
+  return (
+    <div className={`rl-item ${bad ? "bad" : ""}`}>
+      <div className="rl-line" onClick={() => setOpen(!open)}>
+        <span className={`rl-status ${bad ? "bad" : "ok"}`}>{e.status ?? "网络错误"}</span>
+        <span className="rl-method">{e.method}</span>
+        <span className="rl-url" title={e.url}>
+          <b>{host}</b>
+          {path}
+        </span>
+        {e.count > 1 ? <span className="rl-count">×{e.count}</span> : null}
+        <span className="rl-dur">{e.durMs >= 1000 ? `${(e.durMs / 1000).toFixed(1)}s` : `${e.durMs}ms`}</span>
+        <span className="rl-time">
+          {new Date(e.ts).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
+        </span>
+      </div>
+      {open ? (
+        <div className="rl-detail">
+          {e.error ? <div className="rl-err">{e.error}</div> : null}
+          {e.reqBody ? (
+            <>
+              <div className="rl-cap">
+                请求体
+                <button className="btn sm" onClick={() => copy(e.reqBody!)}>复制</button>
+              </div>
+              <pre>{e.reqBody}</pre>
+            </>
+          ) : null}
+          {e.respBody ? (
+            <>
+              <div className="rl-cap">
+                响应体
+                <button className="btn sm" onClick={() => copy(e.respBody!)}>复制</button>
+              </div>
+              <pre>{e.respBody}</pre>
+            </>
+          ) : null}
+          {!e.reqBody && !e.respBody && !e.error ? <div className="rl-cap">（无正文记录）</div> : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/** 运行日志中心：所有对外请求的流水（脱敏），排查中转站问题第一入口 */
+function RunLogCenter() {
+  const entries = useRunLog((s) => s.entries);
+  const [open, setOpen] = useState(false);
+  const [onlyBad, setOnlyBad] = useState(false);
+  const [kw, setKw] = useState("");
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    void useRunLog.getState().init();
+  }, []);
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => {
+      if (!ref.current?.contains(e.target as Node)) setOpen(false);
+    };
+    window.addEventListener("mousedown", onDown);
+    return () => window.removeEventListener("mousedown", onDown);
+  }, [open]);
+
+  const list = entries.filter((e) => {
+    if (onlyBad && !(e.error !== undefined || e.ok === false)) return false;
+    if (kw && !`${e.url} ${e.reqBody ?? ""} ${e.respBody ?? ""} ${e.error ?? ""}`.toLowerCase().includes(kw.toLowerCase()))
+      return false;
+    return true;
+  });
+
+  return (
+    <div className="err-center" ref={ref}>
+      <button
+        className={`icon-btn ${open ? "on" : ""}`}
+        title="运行日志：每次生成的实际请求与响应（已脱敏），排查中转站问题先看这里"
+        onClick={() => setOpen(!open)}
+      >
+        <IcActivity size={19} />
+      </button>
+      {open ? (
+        <div className="err-pop glass rl-pop">
+          <div className="ep-head">
+            <b>运行日志</b>
+            <span className="ep-sub">已脱敏：不记录密钥，正文截断</span>
+            <span style={{ flex: 1 }} />
+            <input
+              className="input rl-kw"
+              placeholder="搜索 URL / 正文…"
+              value={kw}
+              onChange={(e) => setKw(e.target.value)}
+            />
+            <button className={`btn sm ${onlyBad ? "primary" : ""}`} onClick={() => setOnlyBad(!onlyBad)}>
+              仅失败
+            </button>
+            {entries.length ? (
+              <button className="btn sm" onClick={() => useRunLog.getState().clear()}>
+                清空
+              </button>
+            ) : null}
+          </div>
+          {list.length === 0 ? (
+            <div className="ep-empty">
+              {entries.length ? "没有匹配的日志" : "暂无请求记录——运行任意生成节点后，这里会出现每次请求的完整流水"}
+            </div>
+          ) : (
+            <div className="ep-list rl-list">
+              {list.map((e) => (
+                <RunLogRow key={e.id} e={e} />
+              ))}
+            </div>
+          )}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 export function Titlebar() {
   const theme = useSettings((s) => s.settings.theme);
   const update = useSettings((s) => s.update);
@@ -311,6 +446,7 @@ export function Titlebar() {
       </div>
       <BoardTabs />
       <div className="spacer" data-tauri-drag-region />
+      <RunLogCenter />
       <ErrCenter />
       <button
         className={`icon-btn ${charLibOpen ? "on" : ""}`}

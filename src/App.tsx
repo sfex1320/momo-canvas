@@ -12,7 +12,8 @@ import { useBoard } from "./core/stores/boardStore";
 import { useComfy } from "./core/stores/comfyStore";
 import { useAssets } from "./core/stores/assetStore";
 import { useTemplates } from "./core/stores/templateStore";
-import { useUi } from "./core/stores/uiStore";
+import { toast, useUi } from "./core/stores/uiStore";
+import { autoCheckOnStart } from "./core/services/updater";
 import { IcLogo } from "./ui/icons";
 
 function Toasts() {
@@ -34,13 +35,57 @@ function Toasts() {
   );
 }
 
+/** 前后对比：拖动分割线擦看原图 ↔ 结果 */
+function CompareWipe({ before, after }: { before: string; after: string }) {
+  const [pos, setPos] = useState(50);
+  const move = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (e.buttons !== 1) return;
+    const r = e.currentTarget.getBoundingClientRect();
+    setPos(Math.max(0, Math.min(100, ((e.clientX - r.left) / r.width) * 100)));
+  };
+  return (
+    <div
+      className="cmp-wipe"
+      onClick={(e) => e.stopPropagation()}
+      onPointerDown={(e) => {
+        e.currentTarget.setPointerCapture(e.pointerId);
+        const r = e.currentTarget.getBoundingClientRect();
+        setPos(Math.max(0, Math.min(100, ((e.clientX - r.left) / r.width) * 100)));
+      }}
+      onPointerMove={move}
+    >
+      <img src={after} alt="" draggable={false} />
+      <img src={before} alt="" draggable={false} className="cw-before" style={{ clipPath: `inset(0 ${100 - pos}% 0 0)` }} />
+      <div className="cw-bar" style={{ left: `${pos}%` }}>
+        <i>⟷</i>
+      </div>
+      <span className="cw-tag l">原图</span>
+      <span className="cw-tag r">结果</span>
+    </div>
+  );
+}
+
 function Lightbox() {
   const src = useUi((s) => s.lightbox);
+  const before = useUi((s) => s.lightboxBefore);
   const set = useUi((s) => s.setLightbox);
+  const [comparing, setComparing] = useState(false);
+  useEffect(() => setComparing(false), [src]);
   if (!src) return null;
   return (
     <div className="lightbox" onClick={() => set(null)}>
-      <img src={src} alt="" />
+      {before && comparing ? <CompareWipe before={before} after={src} /> : <img src={src} alt="" />}
+      {before ? (
+        <button
+          className="btn lb-cmp"
+          onClick={(e) => {
+            e.stopPropagation();
+            setComparing(!comparing);
+          }}
+        >
+          {comparing ? "退出对比" : "⟷ 对比原图"}
+        </button>
+      ) : null}
     </div>
   );
 }
@@ -56,6 +101,13 @@ export default function App() {
       useAssets.getState().init(),
       useTemplates.getState().init(),
     ]).then(() => setReady(true));
+    // 启动 5 秒后静默检查一次更新（失败不打扰）
+    const t = setTimeout(() => {
+      void autoCheckOnStart((info) => {
+        toast(`发现新版本 v${info.version} —— 到「设置 → 关于与更新」一键升级`, "info");
+      });
+    }, 5000);
+    return () => clearTimeout(t);
   }, []);
 
   /* 屏蔽 webview 默认右键菜单（右键用于平移画布）与 Ctrl+滚轮页面缩放 */

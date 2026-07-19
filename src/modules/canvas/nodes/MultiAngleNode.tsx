@@ -142,7 +142,7 @@ export const MultiAngleNode = memo(function MultiAngleNode({ id, data, selected 
                 <span>正在移动机位重拍…</span>
               </div>
             ) : main ? (
-              <Thumb className="img-main nodrag" src={main} alt="" res onClick={() => setLightbox(main)} />
+              <Thumb className="img-main nodrag" src={main} alt="" res onClick={() => setLightbox(main, upImage)} />
             ) : null}
           </>
         ) : (

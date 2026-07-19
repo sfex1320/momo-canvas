@@ -117,7 +117,7 @@ export const OutpaintNode = memo(function OutpaintNode({ id, data, selected }: N
           </div>
         ) : main ? (
           <>
-            <Thumb className="img-main nodrag" src={main} alt="" res onClick={() => setLightbox(main)} />
+            <Thumb className="img-main nodrag" src={main} alt="" res onClick={() => setLightbox(main, upImage)} />
             {d.results.length > 1 ? (
               <div className="thumbs nodrag">
                 {d.results.map((s, i) => (

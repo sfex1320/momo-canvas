@@ -152,6 +152,11 @@ export async function runCustomFlow(
         }
       }
     }
+    // 拿不到任务 ID 但提交响应里已经有结果 → 服务商这次走了同步通道，直接收货
+    if (!taskId && extractResultStrings(final, proto.resultPath, proto.role === "video" ? "video" : "image").length) {
+      traceAdd(trace, "同步返回", "提交响应已含结果，跳过轮询", vars.apiKey);
+      return final;
+    }
     if (!taskId)
       throw new Error(`未取到任务 ID（路径 ${proto.taskIdPath}，常见字段兜底也未命中）。响应：${JSON.stringify(final).slice(0, 250)}`);
     vars.taskId = taskId;

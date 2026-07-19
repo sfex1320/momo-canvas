@@ -10,6 +10,7 @@ import { collectUpstream, runFlow } from "../../../core/runner";
 import { saveImageAs } from "../../../core/services/imageSaver";
 import { errMsg } from "../../../core/utils";
 import { Thumb } from "../../../ui/Thumb";
+import { PromptHistoryBtn } from "../../../ui/PromptHistory";
 import type { ImageGenData } from "../../../core/types";
 
 export const ImageGenNode = memo(function ImageGenNode({ id, data, selected }: NodeProps) {
@@ -78,13 +79,18 @@ export const ImageGenNode = memo(function ImageGenNode({ id, data, selected }: N
     >
       <div className="mnode-body">
         {hasUpText && !(d.prompt ?? "").trim() ? null : (
-          <textarea
-            className="textarea nodrag nowheel"
-            rows={3}
-            placeholder="提示词（留空则自动使用上游提示词/对话结果）"
-            value={d.prompt}
-            onChange={(e) => upd(id, { prompt: e.target.value })}
-          />
+          <div style={{ position: "relative" }}>
+            <textarea
+              className="textarea nodrag nowheel"
+              rows={3}
+              placeholder="提示词（留空则自动使用上游提示词/对话结果）"
+              value={d.prompt}
+              onChange={(e) => upd(id, { prompt: e.target.value })}
+            />
+            <div style={{ position: "absolute", right: 5, bottom: 5 }}>
+              <PromptHistoryBtn onPick={(t) => upd(id, { prompt: t })} />
+            </div>
+          </div>
         )}
         <div className="gen-sum nodrag" title="选中节点后，在画布左下角的「生成设置」面板中调整模型/尺寸/数量">
           <IcGear size={13} />

@@ -10,6 +10,9 @@ pub fn run() {
         .plugin(tauri_plugin_window_state::Builder::default().build())
         // 资产原生拖出（拖到资源管理器/第三方软件）
         .plugin(tauri_plugin_drag::init())
+        // 自动更新（安装版）+ 进程重启
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

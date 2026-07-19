@@ -9,8 +9,66 @@
  * 禁用系统代理，noProxy 又命中目标主机，实际效果 = 直连。
  */
 import { isTauri } from "../utils";
+import { sanitizeBody, shouldSkipLog, useRunLog } from "../stores/logStore";
 
 let tauriFetch: typeof fetch | null = null;
+
+/** 请求体转日志文本（FormData/二进制不展开） */
+function bodyForLog(body: BodyInit | null | undefined): string | undefined {
+  if (body == null) return undefined;
+  if (typeof body === "string") return sanitizeBody(body);
+  if (body instanceof FormData) {
+    const parts: string[] = [];
+    body.forEach((v, k) => parts.push(v instanceof Blob ? `${k}=<二进制 ${v.size} 字节>` : `${k}=${sanitizeBody(String(v))}`));
+    return `FormData: ${parts.join(" · ")}`;
+  }
+  return "<二进制请求体>";
+}
+
+/** 异步读响应体副本进日志（流式/超大响应只记录说明，不消费正文） */
+async function respForLog(resp: Response): Promise<string | undefined> {
+  try {
+    const ct = resp.headers.get("content-type") ?? "";
+    if (/event-stream/.test(ct)) return "(流式响应 SSE)";
+    const len = Number(resp.headers.get("content-length") ?? 0);
+    if (len > 3_000_000) return `(响应约 ${(len / 1024 / 1024).toFixed(1)} MB，未记录正文)`;
+    if (!/json|text|xml/.test(ct) && ct) return `(${ct}${len ? ` · ${len} 字节` : ""})`;
+    return sanitizeBody(await resp.clone().text());
+  } catch {
+    return undefined;
+  }
+}
+
+/** 上报一次请求到运行日志（失败也绝不影响业务请求本身） */
+function report(
+  input: string | URL,
+  init: RequestInit | undefined,
+  started: number,
+  resp: Response | null,
+  err?: unknown,
+) {
+  try {
+    const url = String(input);
+    if (shouldSkipLog(url)) return;
+    const entry = {
+      ts: Date.now(),
+      method: (init?.method ?? "GET").toUpperCase(),
+      url,
+      status: resp?.status,
+      ok: resp?.ok,
+      durMs: Math.round(performance.now() - started),
+      reqBody: bodyForLog(init?.body),
+      error: err ? (err instanceof Error ? err.message : String(err)) : undefined,
+    };
+    if (resp) {
+      void respForLog(resp).then((respBody) => useRunLog.getState().push({ ...entry, respBody }));
+    } else {
+      useRunLog.getState().push(entry);
+    }
+  } catch {
+    /* 日志失败不影响请求 */
+  }
+}
 
 /** 本机/局域网主机 → 返回主机名（作 noProxy 用）；公网主机 → null（照常走系统代理） */
 function privateHost(input: string | URL): string | null {
@@ -28,25 +86,36 @@ function privateHost(input: string | URL): string | null {
 }
 
 export async function xfetch(input: string | URL, init?: RequestInit): Promise<Response> {
-  if (isTauri) {
-    if (!tauriFetch) {
-      const mod = await import("@tauri-apps/plugin-http");
-      tauriFetch = mod.fetch as unknown as typeof fetch;
+  const started = performance.now();
+  try {
+    let resp: Response;
+    if (isTauri) {
+      if (!tauriFetch) {
+        const mod = await import("@tauri-apps/plugin-http");
+        tauriFetch = mod.fetch as unknown as typeof fetch;
+      }
+      const host = privateHost(input);
+      if (host) {
+        // ① 摘掉 Origin：ComfyUI 等本地服务默认开 DNS-rebinding 防护，见到与 Host 不一致的
+        //    Origin 直接 403；插件会强塞 webview 的 Origin，传空串是官方留的"显式移除"口子
+        //    （需 Cargo.toml 里给 tauri-plugin-http 开 unsafe-headers 特性）。
+        // ② 显式代理 + noProxy 命中目标 = 强制直连，防止系统/环境变量代理截胡本机地址。
+        const headers = new Headers(init?.headers);
+        headers.set("Origin", "");
+        const bypass = { proxy: { all: { url: "http://127.0.0.1:1", noProxy: host } } };
+        resp = await tauriFetch(input as string, { ...init, headers, ...bypass } as RequestInit);
+      } else {
+        resp = await tauriFetch(input as string, init);
+      }
+    } else {
+      resp = await fetch(input, init);
     }
-    const host = privateHost(input);
-    if (host) {
-      // ① 摘掉 Origin：ComfyUI 等本地服务默认开 DNS-rebinding 防护，见到与 Host 不一致的
-      //    Origin 直接 403；插件会强塞 webview 的 Origin，传空串是官方留的"显式移除"口子
-      //    （需 Cargo.toml 里给 tauri-plugin-http 开 unsafe-headers 特性）。
-      // ② 显式代理 + noProxy 命中目标 = 强制直连，防止系统/环境变量代理截胡本机地址。
-      const headers = new Headers(init?.headers);
-      headers.set("Origin", "");
-      const bypass = { proxy: { all: { url: "http://127.0.0.1:1", noProxy: host } } };
-      return tauriFetch(input as string, { ...init, headers, ...bypass } as RequestInit);
-    }
-    return tauriFetch(input as string, init);
+    report(input, init, started, resp);
+    return resp;
+  } catch (e) {
+    report(input, init, started, null, e);
+    throw e;
   }
-  return fetch(input, init);
 }
 
 /** 去尾斜杠 */

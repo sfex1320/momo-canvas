@@ -9,12 +9,12 @@ import { useEffect, useMemo, useState } from "react";
 import { useBoard } from "../../core/stores/boardStore";
 import { modelKey, providersOfRole, resolveModelCard, useSettings } from "../../core/stores/settingsStore";
 import { toast, useUi } from "../../core/stores/uiStore";
-import { runModelCompare } from "../../core/runner";
+import { runBatchPrompts, runModelCompare } from "../../core/runner";
 import {
   BANANA_ASPECTS,
   BANANA_SIZES,
   FAMILY_LABEL,
-  GENERIC_PRESETS,
+  familyPresets,
   GPT_RATIOS,
   GPT_TIERS,
   GPT_QUALITIES,
@@ -25,7 +25,7 @@ import {
   type ImageFamily,
 } from "../../core/modelMeta";
 import { ModelPicker } from "../../ui/ModelPicker";
-import { IcGear, IcLayers } from "../../ui/icons";
+import { IcGear, IcLayers, IcRows } from "../../ui/icons";
 import type { ImageGenData } from "../../core/types";
 
 /** 创意度档位说明 */
@@ -70,6 +70,41 @@ function ComparePicker({ nodeId, currentModel }: { nodeId: string; currentModel?
           </div>
           <button className="btn primary" disabled={!sel.length} style={{ opacity: sel.length ? 1 : 0.5 }} onClick={run}>
             生成对比（{sel.length}）
+          </button>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/** 批量出图：一行一条提示词 → 克隆节点并行生成（继承参数与上游参考图） */
+function BatchPicker({ nodeId }: { nodeId: string }) {
+  const [open, setOpen] = useState(false);
+  const [text, setText] = useState("");
+  const lines = text.split("\n").map((l) => l.trim()).filter(Boolean);
+  const run = () => {
+    if (!lines.length) return;
+    setOpen(false);
+    void runBatchPrompts(nodeId, lines);
+    setText("");
+  };
+  return (
+    <div className="cmp-wrap nodrag">
+      <button className="btn" onClick={() => setOpen(!open)} title="一行一条提示词，批量克隆生成节点并行出图（继承当前参数与上游参考图连线）">
+        <IcRows size={15} /> 批量出图
+      </button>
+      {open ? (
+        <div className="cmp-pop glass nowheel">
+          <div className="cmp-head">一行一条提示词（当前 {lines.length} 条）</div>
+          <textarea
+            className="textarea nodrag nowheel"
+            rows={6}
+            placeholder={"赛博朋克霓虹街头，雨夜\n水彩风格的山谷清晨\n宇航员在花田里野餐"}
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+          />
+          <button className="btn primary" disabled={!lines.length} style={{ opacity: lines.length ? 1 : 0.5, marginTop: 8 }} onClick={run}>
+            并行生成（{lines.length} 个节点）
           </button>
         </div>
       ) : null}
@@ -239,6 +274,9 @@ export function GenConfigPanel() {
             }
           })()} />
         </div>
+        <div className="gp-sec">
+          <BatchPicker nodeId={selId} />
+        </div>
         <div className="gp-foot">
           参考图：已接入 {refCount} 路 · 最多 {familyMaxRef(family)} 张
         </div>
@@ -352,7 +390,7 @@ export function GenConfigPanel() {
             </label>
           </div>
           <div className="gp-grid">
-            {GENERIC_PRESETS.map((p) => {
+            {familyPresets(family).map((p) => {
               const on = d.width === p.w && d.height === p.h;
               return (
                 <button key={`${p.w}x${p.h}`} className={`gp-cell ${on ? "on" : ""}`} title={`${p.w} × ${p.h}`}

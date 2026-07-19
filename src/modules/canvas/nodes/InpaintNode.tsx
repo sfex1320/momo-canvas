@@ -102,7 +102,7 @@ export const InpaintNode = memo(function InpaintNode({ id, data, selected }: Nod
           </div>
         ) : main ? (
           <>
-            <Thumb className="img-main nodrag" src={main} alt="" res onClick={() => setLightbox(main)} />
+            <Thumb className="img-main nodrag" src={main} alt="" res onClick={() => setLightbox(main, upImage)} />
             {d.results.length > 1 ? (
               <div className="thumbs nodrag">
                 {d.results.map((s, i) => (

@@ -715,6 +715,8 @@ export type ComfyTemplate = {
   workflow: Record<string, ComfyWfNode>;
   params: ComfyExposedParam[];
   outputNodeId?: string;
+  /** 被忽略的节点：运行时剔除，下游自动跨接到其上游 */
+  disabledNodes?: string[];
   createdAt: number;
 };
 

@@ -5,6 +5,7 @@ import { IcLoading, IcSparkles, IcText } from "../../../ui/icons";
 import { useBoard } from "../../../core/stores/boardStore";
 import { optimizePrompt, orderedInEdges } from "../../../core/runner";
 import { Thumb } from "../../../ui/Thumb";
+import { PromptHistoryBtn } from "../../../ui/PromptHistory";
 import type { PromptData } from "../../../core/types";
 
 /** 与本提示词共同接入同一个下游生成节点的上游图片（供 @ 引用） */
@@ -90,8 +91,9 @@ export const PromptNode = memo(function PromptNode({ id, data, selected }: NodeP
           value={d.text}
           onChange={(e) => upd(id, { text: e.target.value })}
         />
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-          <span style={{ fontSize: 12.5, color: "var(--text-3)" }}>{d.text.length} 字</span>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6 }}>
+          <span style={{ fontSize: 12.5, color: "var(--text-3)", flex: 1 }}>{d.text.length} 字</span>
+          <PromptHistoryBtn onPick={(t) => upd(id, { text: t })} />
           <button className="btn sm nodrag" disabled={!!d.optimizing} onClick={() => void optimizePrompt(id)}>
             {d.optimizing ? <IcLoading size={15} /> : <IcSparkles size={15} />}
             AI 扩写优化

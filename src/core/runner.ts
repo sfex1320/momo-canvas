@@ -6,11 +6,12 @@ import { useSettings, resolveModelCard, modelKey } from "./stores/settingsStore"
 import { useComfy } from "./stores/comfyStore";
 import { pushError, toast, useUi } from "./stores/uiStore";
 import { useAssets } from "./stores/assetStore";
+import { usePromptHist } from "./stores/promptHistStore";
 import { chatStream, chatOnce, OPTIMIZE_SYSTEM } from "./services/llm";
 import { generateImage } from "./services/imageGen";
 import { generateVideo } from "./services/videoGen";
 import { webSearch, searchContext } from "./services/webSearch";
-import { runComfyTemplate, uploadImageToComfy } from "./services/comfy";
+import { runComfyTemplate } from "./services/comfy";
 import { autoSaveImage } from "./services/imageSaver";
 import { gptSize, imageFamily, nearestAspect, parseRatio } from "./modelMeta";
 import { imageDims } from "./imageInfo";
@@ -458,6 +459,7 @@ export async function runImageGen(id: string) {
       quality: family === "gpt" ? data.quality : undefined,
     });
     upd(id, { status: "done", results, picked: 0 });
+    usePromptHist.getState().record(prompt);
     for (const src of results) {
       useUi.getState().addGallery({ kind: "image", src, prompt, model: card.model, nodeId: id });
     }
@@ -512,6 +514,37 @@ export async function runModelCompare(id: string, keys: string[]) {
   notifyDone("多模型对比");
 }
 
+/** 批量出图：每行提示词克隆一个生成节点（继承参数与上游连线），并行运行 */
+export async function runBatchPrompts(id: string, lines: string[]) {
+  const s = useBoard.getState();
+  const node = s.nodes.find((n) => n.id === id);
+  const prompts = lines.map((l) => l.trim()).filter(Boolean);
+  if (!node || node.type !== "imageGen" || !prompts.length) return;
+  const base = node.data as ImageGenData;
+  const parent = node.parentId ? s.nodes.find((n) => n.id === node.parentId) : undefined;
+  const baseX = node.position.x + (parent?.position.x ?? 0);
+  const baseY = node.position.y + (parent?.position.y ?? 0);
+  const w = node.measured?.width ?? 310;
+  const h = node.measured?.height ?? 320;
+  // 只继承图片连线（提示词各行自带；再连上游文本会覆盖批量内容）
+  const inEdges = s.edges.filter((e) => e.target === id && e.targetHandle === "in-image");
+  const ids: string[] = [];
+  const COLS = 4;
+  prompts.forEach((prompt, i) => {
+    const bs = useBoard.getState();
+    const nid = bs.addNode(
+      "imageGen",
+      { x: baseX + (w + 70) * ((i % COLS) + 1), y: baseY + Math.floor(i / COLS) * (h + 90) },
+      { ...base, prompt, status: "idle", error: undefined, results: [], picked: 0 },
+    );
+    for (const e of inEdges) bs.connectNodes(e.source, nid, e.targetHandle ?? "in-image", e.sourceHandle ?? "out");
+    ids.push(nid);
+  });
+  toast(`批量出图：已建立 ${prompts.length} 个生成节点，并行生成中…`, "info");
+  await Promise.all(ids.map((nid) => runImageGen(nid)));
+  notifyDone("批量出图");
+}
+
 /* ---------- 生成视频 ---------- */
 export async function runVideoGen(id: string) {
   const node = useBoard.getState().nodes.find((n) => n.id === id);
@@ -534,6 +567,7 @@ export async function runVideoGen(id: string) {
       onProgress: (m) => upd(id, { progress: m }),
     });
     upd(id, { status: "done", resultUrl: url, progress: undefined });
+    usePromptHist.getState().record(prompt);
     useUi.getState().addGallery({ kind: "video", src: url, prompt, model: card.model, nodeId: id });
     collectToLibrary("video", [url], {
       prompt,
@@ -561,35 +595,19 @@ export async function runComfy(id: string) {
   const { texts, images } = collectUpstream(id);
   upd(id, { status: "running", error: undefined, progress: "准备参数…", progressPct: undefined });
   try {
+    // 只收集用户在节点上手填的值；上游图/文交给服务层自动识别入口（图片参数 → LoadImage → 缺失图片输入自动注入）
     const values: Record<string, string | number | boolean> = {};
-    let imgIdx = 0;
-    let firstTextFilled = false;
     for (const p of tpl.params) {
       const own = data.params?.[p.key];
-      if (p.kind === "image") {
-        if (imgIdx < images.length) {
-          upd(id, { progress: `上传参考图 ${imgIdx + 1}…` });
-          values[p.key] = await uploadImageToComfy(settings.comfy.host, images[imgIdx]);
-          imgIdx++;
-        } else if (own !== undefined && own !== "") {
-          values[p.key] = own;
-        } else {
-          throw new Error(`图片参数「${p.label}」缺少输入：请连接上游图片节点`);
-        }
-        continue;
-      }
-      if (p.kind === "text" && !firstTextFilled && texts.length && (own === undefined || own === "")) {
-        values[p.key] = texts.join("\n");
-        firstTextFilled = true;
-        continue;
-      }
-      values[p.key] = own !== undefined ? own : (p.value as string | number | boolean);
+      if (own !== undefined && own !== "") values[p.key] = own;
     }
     const { images: results } = await runComfyTemplate(settings.comfy.host, tpl, values, {
       onProgress: (m, pct) => upd(id, { progress: m, ...(pct !== undefined ? { progressPct: pct } : {}) }),
+      upstreamImages: images,
+      upstreamTexts: texts,
     });
     upd(id, { status: "done", results, picked: 0, progress: undefined, progressPct: undefined });
-    const promptText = String(values[tpl.params.find((p) => p.kind === "text")?.key ?? ""] ?? "");
+    const promptText = String(values[tpl.params.find((p) => p.kind === "text")?.key ?? ""] ?? texts.join("\n") ?? "");
     for (const src of results) {
       useUi.getState().addGallery({ kind: "image", src, prompt: promptText, model: tpl.name, nodeId: id });
     }
@@ -981,27 +999,11 @@ async function runEditViaComfy(
     return null;
   }
   const settings = useSettings.getState().settings;
-  const values: Record<string, string | number | boolean> = {};
-  let imgFilled = false;
-  let textFilled = false;
-  for (const p of tpl.params) {
-    if (p.kind === "image" && !imgFilled) {
-      upd(id, { progress: "上传图片到 ComfyUI…" });
-      values[p.key] = await uploadImageToComfy(settings.comfy.host, src);
-      imgFilled = true;
-      continue;
-    }
-    if (p.kind === "text" && !textFilled && fillText) {
-      values[p.key] = fillText;
-      textFilled = true;
-      continue;
-    }
-    values[p.key] = p.value as string | number | boolean;
-  }
-  if (!imgFilled)
-    throw new Error(`模板「${tpl.name}」没有暴露图片输入参数：请在模板管理器里勾选一个图片（LoadImage）参数`);
-  const { images } = await runComfyTemplate(settings.comfy.host, tpl, values, {
+  // 图片/文本交给服务层自动喂入（图片参数 → LoadImage → 缺失图片输入自动注入），其余参数用模板默认值
+  const { images } = await runComfyTemplate(settings.comfy.host, tpl, {}, {
     onProgress: (m, pct) => upd(id, { progress: pct !== undefined ? `${m} ${pct}%` : m }),
+    upstreamImages: [src],
+    upstreamTexts: fillText ? [fillText] : undefined,
   });
   return { images, name: tpl.name };
 }

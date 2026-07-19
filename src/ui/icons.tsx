@@ -455,6 +455,20 @@ export const IcHistory = (p: IconProps) => (
   </I>
 );
 
+export const IcActivity = (p: IconProps) => (
+  <I {...p}>
+    <path d="M3 12h3.5l2.5-6 4 12 2.5-6H21" />
+  </I>
+);
+
+export const IcRows = (p: IconProps) => (
+  <I {...p}>
+    <path d="M4 6h16" />
+    <path d="M4 12h12" />
+    <path d="M4 18h16" />
+  </I>
+);
+
 export const IcCursor = (p: IconProps) => (
   <I {...p} fill>
     <path d="M6.2 3.6a.8.8 0 0 1 1.3-.6l11.2 8.7a.8.8 0 0 1-.4 1.4l-4.8.6 2.7 5.4a.8.8 0 0 1-.35 1.07l-1.6.8a.8.8 0 0 1-1.07-.36l-2.7-5.4-3.5 3.4a.8.8 0 0 1-1.35-.55L6.2 3.6Z" />

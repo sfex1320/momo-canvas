@@ -156,7 +156,7 @@ export const RelightNode = memo(function RelightNode({ id, data, selected }: Nod
                 <span>正在重新布光…</span>
               </div>
             ) : main ? (
-              <Thumb className="img-main nodrag" src={main} alt="" res onClick={() => setLightbox(main)} />
+              <Thumb className="img-main nodrag" src={main} alt="" res onClick={() => setLightbox(main, upImage)} />
             ) : null}
           </>
         ) : (

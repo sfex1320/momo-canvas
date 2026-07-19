@@ -34,6 +34,8 @@ type UiState = {
   /** 角色库弹层（人物预设） */
   charLibOpen: boolean;
   lightbox: string | null;
+  /** 灯箱对比模式的「原图」：非空时灯箱显示前后对比滑块 */
+  lightboxBefore: string | null;
   addMenu: AddMenuState;
   gallery: GalleryItem[];
   toasts: Toast[];
@@ -76,7 +78,7 @@ type UiState = {
   setSideEditorOpen: (v: boolean) => void;
   setTemplateMgr: (v: boolean, editId?: string | null) => void;
   setCharLibOpen: (v: boolean) => void;
-  setLightbox: (src: string | null) => void;
+  setLightbox: (src: string | null, before?: string | null) => void;
   setAddMenu: (v: AddMenuState) => void;
   setProxHint: (ids: string[] | null) => void;
   toggleTool: () => void;
@@ -100,6 +102,7 @@ export const useUi = create<UiState>((set) => ({
   templateMgrEdit: null,
   charLibOpen: false,
   lightbox: null,
+  lightboxBefore: null,
   addMenu: null,
   gallery: [],
   toasts: [],
@@ -134,7 +137,7 @@ export const useUi = create<UiState>((set) => ({
   setSideEditorOpen: (v) => set({ sideEditorOpen: v }),
   setTemplateMgr: (v, editId) => set({ templateMgrOpen: v, templateMgrEdit: v ? (editId ?? null) : null }),
   setCharLibOpen: (v) => set({ charLibOpen: v }),
-  setLightbox: (src) => set({ lightbox: src }),
+  setLightbox: (src, before) => set({ lightbox: src, lightboxBefore: src ? (before ?? null) : null }),
   setAddMenu: (v) => set({ addMenu: v }),
 
   setProxHint: (ids) =>

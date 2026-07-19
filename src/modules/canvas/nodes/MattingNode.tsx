@@ -3,7 +3,7 @@
  *  ComfyUI 模板（推荐）：rembg / BiRefNet 等真·抠图，发丝级、真透明
  *  绘画模型：重绘式换底（GPT Image 可出透明 PNG；其余模型只能纯色底）
  */
-import { memo } from "react";
+import { memo, useMemo } from "react";
 import type { NodeProps } from "@xyflow/react";
 import { NodeShell, PortImageIn, PortOut } from "../NodeShell";
 import { IcLoading, IcScissors } from "../../../ui/icons";
@@ -11,7 +11,7 @@ import { ModelPicker } from "../../../ui/ModelPicker";
 import { useBoard } from "../../../core/stores/boardStore";
 import { useComfy } from "../../../core/stores/comfyStore";
 import { useUi } from "../../../core/stores/uiStore";
-import { runFlow } from "../../../core/runner";
+import { collectUpstream, runFlow } from "../../../core/runner";
 import { MATTING_BG_LABEL } from "../../../core/editPrompts";
 import { Thumb } from "../../../ui/Thumb";
 import type { EditEngine, MattingBg, MattingData } from "../../../core/types";
@@ -24,6 +24,10 @@ export const MattingNode = memo(function MattingNode({ id, data, selected }: Nod
   const setLightbox = useUi((s) => s.setLightbox);
   const templates = useComfy((s) => s.templates);
   const setTemplateMgr = useUi((s) => s.setTemplateMgr);
+  const nodes = useBoard((s) => s.nodes);
+  const edges = useBoard((s) => s.edges);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const upImage = useMemo(() => collectUpstream(id).images[0], [nodes, edges, id]);
   const running = d.status === "running";
   const main = d.results?.[d.picked ?? 0];
   const engine: EditEngine = d.engine ?? "model";
@@ -94,7 +98,7 @@ export const MattingNode = memo(function MattingNode({ id, data, selected }: Nod
             <span>{d.progress || "正在分离主体…"}</span>
           </div>
         ) : main ? (
-          <Thumb className="img-main checker nodrag" src={main} alt="" res onClick={() => setLightbox(main)} />
+          <Thumb className="img-main checker nodrag" src={main} alt="" res onClick={() => setLightbox(main, upImage)} />
         ) : null}
       </div>
       <PortImageIn top={26} />

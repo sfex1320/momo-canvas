@@ -3,7 +3,7 @@
  *  ComfyUI 模板（推荐）：UltimateSDUpscale / 放大模型等专业放大工作流
  *  绘画模型：重绘式增强（模型按原图重画一张更高分辨率的，细节可能有偏差）
  */
-import { memo } from "react";
+import { memo, useMemo } from "react";
 import type { NodeProps } from "@xyflow/react";
 import { NodeShell, PortImageIn, PortOut } from "../NodeShell";
 import { IcEnhance, IcLoading } from "../../../ui/icons";
@@ -11,7 +11,7 @@ import { ModelPicker } from "../../../ui/ModelPicker";
 import { useBoard } from "../../../core/stores/boardStore";
 import { useComfy } from "../../../core/stores/comfyStore";
 import { useUi } from "../../../core/stores/uiStore";
-import { runFlow } from "../../../core/runner";
+import { collectUpstream, runFlow } from "../../../core/runner";
 import { Thumb } from "../../../ui/Thumb";
 import type { EditEngine, EnhanceData } from "../../../core/types";
 
@@ -27,6 +27,10 @@ export const EnhanceNode = memo(function EnhanceNode({ id, data, selected }: Nod
   const setLightbox = useUi((s) => s.setLightbox);
   const templates = useComfy((s) => s.templates);
   const setTemplateMgr = useUi((s) => s.setTemplateMgr);
+  const nodes = useBoard((s) => s.nodes);
+  const edges = useBoard((s) => s.edges);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const upImage = useMemo(() => collectUpstream(id).images[0], [nodes, edges, id]);
   const running = d.status === "running";
   const main = d.results?.[d.picked ?? 0];
   const engine: EditEngine = d.engine ?? "model";
@@ -101,7 +105,7 @@ export const EnhanceNode = memo(function EnhanceNode({ id, data, selected }: Nod
             <span>{d.progress || "正在增强细节…"}</span>
           </div>
         ) : main ? (
-          <Thumb className="img-main nodrag" src={main} alt="" res onClick={() => setLightbox(main)} />
+          <Thumb className="img-main nodrag" src={main} alt="" res onClick={() => setLightbox(main, upImage)} />
         ) : null}
       </div>
       <PortImageIn top={26} />
