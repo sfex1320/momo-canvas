@@ -120,6 +120,17 @@ export const ComfyNode = memo(function ComfyNode({ id, data, selected }: NodePro
             ) : null}
           </>
         ) : null}
+        {d.textOut && !running ? (
+          <div className="comfy-textout nodrag">
+            <pre>{d.textOut}</pre>
+            <button
+              className="btn sm"
+              onClick={() => void navigator.clipboard.writeText(d.textOut!).then(() => toast("已复制文本 ✓", "ok"))}
+            >
+              复制文本输出
+            </button>
+          </div>
+        ) : null}
       </div>
       <PortTextIn />
       <PortImageIn />

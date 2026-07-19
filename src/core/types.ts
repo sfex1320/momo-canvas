@@ -103,6 +103,8 @@ export type ComfyData = {
   params: Record<string, string | number>;
   results: string[];
   picked: number;
+  /** 工作流的文本输出（ShowText 等节点），多段用空行分隔 */
+  textOut?: string;
   progress?: string;
   /** 实时进度百分比 0-100（WebSocket 可用时才有） */
   progressPct?: number;

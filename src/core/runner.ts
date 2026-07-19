@@ -601,18 +601,27 @@ export async function runComfy(id: string) {
       const own = data.params?.[p.key];
       if (own !== undefined && own !== "") values[p.key] = own;
     }
-    const { images: results } = await runComfyTemplate(settings.comfy.host, tpl, values, {
+    const { images: results, texts: outTexts } = await runComfyTemplate(settings.comfy.host, tpl, values, {
       onProgress: (m, pct) => upd(id, { progress: m, ...(pct !== undefined ? { progressPct: pct } : {}) }),
       upstreamImages: images,
       upstreamTexts: texts,
     });
-    upd(id, { status: "done", results, picked: 0, progress: undefined, progressPct: undefined });
+    upd(id, {
+      status: "done",
+      results,
+      picked: 0,
+      textOut: outTexts.length ? outTexts.join("\n\n") : undefined,
+      progress: undefined,
+      progressPct: undefined,
+    });
     const promptText = String(values[tpl.params.find((p) => p.kind === "text")?.key ?? ""] ?? texts.join("\n") ?? "");
-    for (const src of results) {
-      useUi.getState().addGallery({ kind: "image", src, prompt: promptText, model: tpl.name, nodeId: id });
+    if (results.length) {
+      for (const src of results) {
+        useUi.getState().addGallery({ kind: "image", src, prompt: promptText, model: tpl.name, nodeId: id });
+      }
+      collectToLibrary("image", results, { prompt: promptText, model: `ComfyUI · ${tpl.name}` });
+      void maybeAutoSave(results, { prompt: promptText, model: tpl.name });
     }
-    collectToLibrary("image", results, { prompt: promptText, model: `ComfyUI · ${tpl.name}` });
-    void maybeAutoSave(results, { prompt: promptText, model: tpl.name });
   } catch (e) {
     upd(id, { status: "error", error: errMsg(e), progress: undefined, progressPct: undefined });
     pushError("ComfyUI", errMsg(e));
@@ -1005,6 +1014,7 @@ async function runEditViaComfy(
     upstreamImages: [src],
     upstreamTexts: fillText ? [fillText] : undefined,
   });
+  if (!images.length) throw new Error(`模板「${tpl.name}」运行完成但没有输出图片，请检查输出节点设置`);
   return { images, name: tpl.name };
 }
 

@@ -639,14 +639,14 @@ export function SmartCanvas() {
           >
             <IcPlay size={15} /> 运行全部
           </button>
-          <div style={{ width: 1, alignSelf: "stretch", background: "var(--panel-border)", margin: "5px 3px" }} />
+          <div className="vc-sep" />
           <button className="icon-btn" title="撤销 (Ctrl+Z)" disabled={!canUndo} style={{ opacity: canUndo ? 1 : 0.35 }} onClick={undo}>
             <IcUndo size={17} />
           </button>
           <button className="icon-btn" title="重做 (Ctrl+Y)" disabled={!canRedo} style={{ opacity: canRedo ? 1 : 0.35 }} onClick={redo}>
             <IcRedo size={17} />
           </button>
-          <div style={{ width: 1, alignSelf: "stretch", background: "var(--panel-border)", margin: "5px 3px" }} />
+          <div className="vc-sep" />
           <button className="icon-btn" title="放大" onClick={() => void zoomIn({ duration: 150 })}>
             <IcPlus size={17} />
           </button>

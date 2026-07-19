@@ -5,7 +5,7 @@
  */
 import type { ComfyExposedParam, ComfyParamKind, ComfyTemplate, ComfyWfNode } from "../types";
 import { xfetch, trimBase, readErrorBody } from "./http";
-import { dataUrlToBlob, uid } from "../utils";
+import { dataUrlToBlob, toDataUrl, uid } from "../utils";
 
 export function normalizeHost(host: string): string {
   let h = host.trim();
@@ -218,7 +218,8 @@ export async function uploadImageToComfy(host: string, dataUrl: string): Promise
   return j.subfolder ? `${j.subfolder}/${j.name}` : j.name;
 }
 
-export type ComfyRunResult = { images: string[] }; // /view 直链
+/** images 已回传为 dataURL（显示/下游/资产收录全链路统一）；texts 为 ShowText 等节点的文本输出 */
+export type ComfyRunResult = { images: string[]; texts: string[] };
 
 /** WebSocket 实时进度：按已完成节点数 + 当前节点采样步数换算百分比，报给 onProgress */
 function openProgressSocket(
@@ -495,8 +496,9 @@ export async function runComfyTemplate(
         const msg = JSON.stringify(entry.status?.messages ?? []).slice(0, 300);
         throw new Error(`ComfyUI 执行出错: ${msg}`);
       }
-      // 收集输出图片
-      const images: string[] = [];
+      // 收集输出：图片取指定输出节点（未指定则全部）；文本一律扫全部输出节点（ShowText 等）
+      const urls: string[] = [];
+      const texts: string[] = [];
       const outputs = entry.outputs ?? {};
       const nodeIds = tpl.outputNodeId && outputs[tpl.outputNodeId] ? [tpl.outputNodeId] : Object.keys(outputs);
       for (const nid of nodeIds) {
@@ -506,11 +508,29 @@ export async function runComfyTemplate(
             subfolder: img.subfolder ?? "",
             type: img.type ?? "output",
           });
-          images.push(`${base}/view?${q.toString()}`);
+          urls.push(`${base}/view?${q.toString()}`);
         }
       }
-      if (!images.length) throw new Error("工作流执行完成，但未在输出节点找到图片");
-      return { images };
+      for (const nid of Object.keys(outputs)) {
+        const out = outputs[nid] ?? {};
+        for (const t of [...(out.text ?? []), ...(out.string ?? []), ...(out.strings ?? [])]) {
+          if (typeof t === "string" && t.trim()) texts.push(t.trim());
+        }
+      }
+      if (!urls.length && !texts.length) throw new Error("工作流执行完成，但未在输出节点找到图片或文本");
+
+      // /view 是临时直链（ComfyUI 重启即失效），回传成 dataURL 才能进入统一管线
+      // （节点显示、下游图生图、资产收录、自动保存都按 dataURL 设计）
+      const images: string[] = [];
+      for (const [i, u] of urls.entries()) {
+        opts.onProgress?.(urls.length > 1 ? `回传生成结果 ${i + 1}/${urls.length}…` : "回传生成结果…");
+        try {
+          images.push(await toDataUrl(u, (i, init) => xfetch(i as string, init)));
+        } catch {
+          images.push(u); // 回传失败保底用直链，至少当场能预览
+        }
+      }
+      return { images, texts };
     }
     throw new Error("ComfyUI 执行超时");
   } finally {
