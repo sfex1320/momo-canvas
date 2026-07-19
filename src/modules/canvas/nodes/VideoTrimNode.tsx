@@ -12,6 +12,7 @@ import { toast } from "../../../core/stores/uiStore";
 import { runFlow } from "../../../core/runner";
 import { saveVideoAs } from "../../../core/services/imageSaver";
 import { errMsg } from "../../../core/utils";
+import { VideoThumb } from "../../../ui/VideoThumb";
 import type { VideoTrimData } from "../../../core/types";
 
 export const VideoTrimNode = memo(function VideoTrimNode({ id, data, selected }: NodeProps) {
@@ -85,7 +86,7 @@ export const VideoTrimNode = memo(function VideoTrimNode({ id, data, selected }:
             {d.progress}
           </div>
         ) : null}
-        {d.resultUrl && !running ? <video className="img-main nodrag" src={d.resultUrl} controls style={{ cursor: "default" }} /> : null}
+        {d.resultUrl && !running ? <VideoThumb className="img-main nodrag" src={d.resultUrl} /> : null}
       </div>
       <PortVideoIn top={26} />
       <PortOut kind="video" />

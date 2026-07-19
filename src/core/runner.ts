@@ -29,7 +29,8 @@ import {
   outpaintInstruct,
   outpaintMaskPrompt,
 } from "./editPrompts";
-import { errMsg, parseJsonLoose } from "./utils";
+import { errMsg, isTauri, parseJsonLoose } from "./utils";
+import { assetUrl } from "./services/assetFiles";
 import { notifyDone } from "./sound";
 import { concatVideos, grabFrame, trimVideo } from "./videoEdit";
 import type {
@@ -210,6 +211,11 @@ function nodeOutput(
       if (g.shots?.length) texts.push(g.shots.map((sh) => `【${sh.time}】${sh.prompt}`).join("\n"));
       break;
     }
+    case "video": {
+      const s = (d as { src?: string }).src;
+      if (s) videos.push(s);
+      break;
+    }
     case "videoGen":
     case "videoTrim":
     case "videoConcat": {
@@ -275,8 +281,8 @@ export function collectUpstream(
       for (const m of members) {
         const o = nodeOutput(m, visited);
         if (e.sourceHandle === "out-image") images.push(...o.images);
+        else if (e.sourceHandle === "out-video") videos.push(...o.videos);
         else texts.push(...o.texts);
-        videos.push(...o.videos);
       }
       continue;
     }
@@ -663,20 +669,25 @@ export async function runVideoGen(id: string) {
       lastFrame,
       refImages: useRef ? images.slice(0, meta.maxRef) : undefined,
       video: videos[0],
-      duration: data.duration,
-      resolution: data.resolution,
-      aspect: data.aspect,
-      audio: meta.audioToggle ? data.audio : undefined,
+      // 与左下面板显示的默认档保持一致：没手动调过也按家族默认值真实发送（此前是不发，所见 ≠ 所发）
+      duration: data.duration ?? meta.defaultDuration,
+      resolution: data.resolution ?? meta.defaultResolution,
+      aspect: data.aspect ?? meta.aspects[0],
+      audio: meta.audioToggle ? (data.audio ?? true) : undefined,
       onProgress: (m) => upd(id, { progress: m }),
     });
     upd(id, { status: "done", resultUrl: url, progress: undefined });
     usePromptHist.getState().record(prompt);
     useUi.getState().addGallery({ kind: "video", src: url, prompt, model: card.model, nodeId: id });
-    collectToLibrary("video", [url], {
+    // 收录资产库后把节点地址换成本地文件：blob URL 重启即失效、中转站直链一般 24 小时过期
+    const saved = await useAssets.getState().collect({
+      src: url,
+      kind: "video",
       prompt,
       model: card.name,
       gen: { nodeKind: "videoGen", prompt: (data.prompt ?? "").trim() || prompt, modelId: modelKey(card.id, card.model), lang: data.lang },
     });
+    if (saved && isTauri) upd(id, { resultUrl: assetUrl(saved.path) });
   } catch (e) {
     upd(id, { status: "error", error: errMsg(e), progress: undefined });
     pushError("生成视频", errMsg(e));
@@ -720,6 +731,17 @@ export async function runComfy(id: string) {
       progressPct: undefined,
     });
     const promptText = String(values[tpl.params.find((p) => p.kind === "text")?.key ?? ""] ?? texts.join("\n") ?? "");
+    if (outVideos.length) {
+      // 视频结果落盘换持久地址（/view 转出的 blob URL 活不过重启），并进画廊/资产库
+      const savedUrls: string[] = [];
+      for (const v of outVideos) {
+        const it = await useAssets.getState().collect({ src: v, kind: "video", prompt: promptText, model: `ComfyUI · ${tpl.name}` });
+        const stable = it && isTauri ? assetUrl(it.path) : v;
+        savedUrls.push(stable);
+        useUi.getState().addGallery({ kind: "video", src: stable, prompt: promptText, model: tpl.name, nodeId: id });
+      }
+      upd(id, { videoResults: savedUrls });
+    }
     if (results.length) {
       for (const src of results) {
         useUi.getState().addGallery({ kind: "image", src, prompt: promptText, model: tpl.name, nodeId: id });
@@ -1504,6 +1526,9 @@ export async function runVideoTrim(id: string) {
   try {
     const url = await trimVideo(src, data.start ?? 0, data.end, (m) => upd(id, { progress: m }));
     upd(id, { status: "done", resultUrl: url, progress: undefined });
+    // 落进资产库换持久地址：本地重编码出的 blob URL 重启即失效
+    const saved = await useAssets.getState().collect({ src: url, kind: "video", name: "视频取段", model: "本地处理" });
+    if (saved && isTauri) upd(id, { resultUrl: assetUrl(saved.path) });
     notifyDone("视频取段");
   } catch (e) {
     upd(id, { status: "error", error: errMsg(e), progress: undefined });
@@ -1525,6 +1550,9 @@ export async function runVideoConcat(id: string) {
   try {
     const url = await concatVideos(videos, (m) => upd(id, { progress: m }));
     upd(id, { status: "done", resultUrl: url, progress: undefined });
+    // 拼接成片是最终交付物，必须落盘：blob URL 重启即失效
+    const saved = await useAssets.getState().collect({ src: url, kind: "video", name: "视频拼接成片", model: "本地处理" });
+    if (saved && isTauri) upd(id, { resultUrl: assetUrl(saved.path) });
     notifyDone("视频拼接");
   } catch (e) {
     upd(id, { status: "error", error: errMsg(e), progress: undefined });

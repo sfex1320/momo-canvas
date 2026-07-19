@@ -11,6 +11,7 @@ import { runFlow } from "../../../core/runner";
 import { saveImageAs } from "../../../core/services/imageSaver";
 import { errMsg } from "../../../core/utils";
 import { Thumb } from "../../../ui/Thumb";
+import { VideoThumb } from "../../../ui/VideoThumb";
 import type { ComfyData, ComfyExposedParam } from "../../../core/types";
 
 export const ComfyNode = memo(function ComfyNode({ id, data, selected }: NodeProps) {
@@ -121,7 +122,7 @@ export const ComfyNode = memo(function ComfyNode({ id, data, selected }: NodePro
           </>
         ) : null}
         {d.videoResults?.length && !running ? (
-          <video className="img-main nodrag" src={d.videoResults[0]} controls style={{ cursor: "default" }} />
+          <VideoThumb className="img-main nodrag" src={d.videoResults[0]} />
         ) : null}
         {d.textOut && !running ? (
           <div className="comfy-textout nodrag">

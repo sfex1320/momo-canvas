@@ -20,6 +20,7 @@ import {
   IcScan,
   IcScissors,
   IcSparkles,
+  IcMerge,
   IcText,
   IcVideo,
   IcWand,
@@ -44,12 +45,14 @@ export type CatalogItem = {
 /** 按类型分组：输入（素材/文字）→ 智能（LLM 加工）→ 生成（从无到有）→ 编辑（改已有图片）→ 角色 */
 export const NODE_CATALOG: CatalogItem[] = [
   { kind: "image", label: "图片", desc: "导入 / 拖入 / 粘贴一张图片", icon: <IcImage size={18} />, group: "输入", hotkey: "addImage" },
+  { kind: "video", label: "视频", desc: "导入 / 拖入一段视频：接取帧、取段、拼接、生成视频参考、ComfyUI", icon: <IcVideo size={18} />, group: "输入", hotkey: "addVideo" },
   { kind: "prompt", label: "提示词", desc: "编写提示词，可 AI 扩写优化", icon: <IcText size={18} />, group: "输入", hotkey: "addPrompt" },
   { kind: "stylePreset", label: "风格预设", desc: "内置风格片段库，点选叠加输出", icon: <IcPalette size={18} />, group: "输入", hotkey: "addStylePreset" },
   { kind: "note", label: "备注", desc: "画布便签，整理思路", icon: <IcNote size={18} />, group: "输入", hotkey: "addNote" },
   { kind: "chat", label: "对话", desc: "多模态对话 · 思考 · 联网搜索", icon: <IcChat size={18} />, group: "智能", hotkey: "addChat" },
   { kind: "caption", label: "反推描述", desc: "图片 → 视觉模型 → 提示词/描述", icon: <IcScan size={18} />, group: "智能", hotkey: "addCaption" },
   { kind: "llmText", label: "文本处理", desc: "优化 / 翻译 / 扩写 / 自定义指令", icon: <IcWand size={18} />, group: "智能", hotkey: "addLlmText" },
+  { kind: "combine", label: "拼接文本", desc: "多路上游文本按位置顺序合并输出（逗号/换行/空格）", icon: <IcMerge size={18} />, group: "智能", hotkey: "addCombine", dockHidden: true },
   { kind: "storyboard", label: "分镜", desc: "故事→完善→按风格定调拆分镜（带时间轴），逐镜输出口 + 一键铺生成节点", icon: <IcClapper size={18} />, group: "智能", hotkey: "addStoryboard" },
   { kind: "imageGen", label: "生成图像", desc: "调用绘画模型文生图 / 图生图", icon: <IcSparkles size={18} />, group: "生成", hotkey: "addImageGen" },
   { kind: "videoGen", label: "生成视频", desc: "调用视频模型生成短片", icon: <IcVideo size={18} />, group: "生成", hotkey: "addVideoGen" },

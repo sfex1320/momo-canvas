@@ -10,6 +10,7 @@ import { toast } from "../../../core/stores/uiStore";
 import { collectUpstream, runFlow } from "../../../core/runner";
 import { saveVideoAs } from "../../../core/services/imageSaver";
 import { errMsg } from "../../../core/utils";
+import { VideoThumb } from "../../../ui/VideoThumb";
 import type { VideoGenData } from "../../../core/types";
 
 export const VideoGenNode = memo(function VideoGenNode({ id, data, selected }: NodeProps) {
@@ -93,9 +94,7 @@ export const VideoGenNode = memo(function VideoGenNode({ id, data, selected }: N
             {d.progress}
           </div>
         ) : null}
-        {d.resultUrl ? (
-          <video className="img-main nodrag" src={d.resultUrl} controls style={{ cursor: "default" }} />
-        ) : null}
+        {d.resultUrl ? <VideoThumb className="img-main nodrag" src={d.resultUrl} /> : null}
       </div>
       <PortTextIn />
       <PortImageIn />

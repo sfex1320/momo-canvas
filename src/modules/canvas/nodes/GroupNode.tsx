@@ -73,6 +73,7 @@ export const GroupNode = memo(function GroupNode({ id, selected }: NodeProps) {
       </div>
       <Handle type="source" position={Position.Right} id="out-text" data-lab="文本出（按序组合）" title="成员文本按位置顺序组合输出" className="port port-text" style={{ top: 26 }} />
       <Handle type="source" position={Position.Right} id="out-image" data-lab="图片出（按序传入）" title="成员图片按位置顺序依次输出" className="port port-image" style={{ top: 58 }} />
+      <Handle type="source" position={Position.Right} id="out-video" data-lab="视频出（按序传入）" title="成员视频按位置顺序依次输出" className="port port-video" style={{ top: 90 }} />
     </div>
   );
 });

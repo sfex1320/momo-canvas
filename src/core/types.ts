@@ -3,6 +3,7 @@ import type { Node } from "@xyflow/react";
 /* ---------------- 节点 ---------------- */
 export type NodeKind =
   | "image"
+  | "video"
   | "prompt"
   | "chat"
   | "imageGen"
@@ -45,6 +46,16 @@ export type ImageData = {
   error?: string;
   src?: string;
   name?: string;
+};
+
+/** 视频源节点：承载本地/生成的视频（对标图片节点）。src 在 Tauri 下为资产文件的 asset: URL（跨重启有效），浏览器预览为 blob URL（会话内有效） */
+export type VideoData = {
+  status: RunStatus;
+  error?: string;
+  src?: string;
+  name?: string;
+  /** 时长（秒，导入时测得，供角标显示） */
+  dur?: number;
 };
 
 export type PromptData = {
@@ -588,12 +599,14 @@ export type HotkeyAction =
   | "spotlight"
   // 下方工具坞：添加各类节点到视图中心（与 nodeCatalog 的条目一一对应）
   | "addImage"
+  | "addVideo"
   | "addPrompt"
   | "addStylePreset"
   | "addNote"
   | "addChat"
   | "addCaption"
   | "addLlmText"
+  | "addCombine"
   | "addImageGen"
   | "addVideoGen"
   | "addComfy"
@@ -630,12 +643,14 @@ export const HOTKEY_LABEL: Record<HotkeyAction, string> = {
   delete: "删除所选（请绑定单键）",
   runAll: "运行全部工作流",
   addImage: "添加节点：图片",
+  addVideo: "添加节点：视频",
   addPrompt: "添加节点：提示词",
   addStylePreset: "添加节点：风格预设",
   addNote: "添加节点：备注",
   addChat: "添加节点：对话",
   addCaption: "添加节点：反推描述",
   addLlmText: "添加节点：文本处理",
+  addCombine: "添加节点：拼接文本",
   addImageGen: "添加节点：生成图像",
   addVideoGen: "添加节点：生成视频",
   addComfy: "添加节点：ComfyUI",
@@ -675,12 +690,14 @@ export const DEFAULT_HOTKEYS: Record<HotkeyAction, string> = {
   spotlight: "ctrl+k",
   // 工具坞按排列顺序对应 1~9、0，编辑/角色类用 Alt+数字
   addImage: "1",
+  addVideo: "",
   addPrompt: "2",
   addStylePreset: "3",
   addNote: "4",
   addChat: "5",
   addCaption: "6",
   addLlmText: "7",
+  addCombine: "",
   addImageGen: "8",
   addVideoGen: "9",
   addComfy: "0",

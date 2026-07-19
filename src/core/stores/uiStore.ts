@@ -36,6 +36,8 @@ type UiState = {
   lightbox: string | null;
   /** 灯箱对比模式的「原图」：非空时灯箱显示前后对比滑块 */
   lightboxBefore: string | null;
+  /** 灯箱内容类型：video 时用 <video> 播放（节点上只显示封面帧，点开才真正播放） */
+  lightboxKind: "image" | "video";
   addMenu: AddMenuState;
   gallery: GalleryItem[];
   toasts: Toast[];
@@ -78,7 +80,7 @@ type UiState = {
   setSideEditorOpen: (v: boolean) => void;
   setTemplateMgr: (v: boolean, editId?: string | null) => void;
   setCharLibOpen: (v: boolean) => void;
-  setLightbox: (src: string | null, before?: string | null) => void;
+  setLightbox: (src: string | null, before?: string | null, kind?: "image" | "video") => void;
   setAddMenu: (v: AddMenuState) => void;
   setProxHint: (ids: string[] | null) => void;
   toggleTool: () => void;
@@ -103,6 +105,7 @@ export const useUi = create<UiState>((set) => ({
   charLibOpen: false,
   lightbox: null,
   lightboxBefore: null,
+  lightboxKind: "image",
   addMenu: null,
   gallery: [],
   toasts: [],
@@ -137,7 +140,8 @@ export const useUi = create<UiState>((set) => ({
   setSideEditorOpen: (v) => set({ sideEditorOpen: v }),
   setTemplateMgr: (v, editId) => set({ templateMgrOpen: v, templateMgrEdit: v ? (editId ?? null) : null }),
   setCharLibOpen: (v) => set({ charLibOpen: v }),
-  setLightbox: (src, before) => set({ lightbox: src, lightboxBefore: src ? (before ?? null) : null }),
+  setLightbox: (src, before, kind) =>
+    set({ lightbox: src, lightboxBefore: src ? (before ?? null) : null, lightboxKind: src ? (kind ?? "image") : "image" }),
   setAddMenu: (v) => set({ addMenu: v }),
 
   setProxHint: (ids) =>

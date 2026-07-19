@@ -11,12 +11,14 @@ import {
 import type { AppNode, BoardMeta, NodeKind, PortType } from "../types";
 import { uid } from "../utils";
 import { loadJSON, saveJSON } from "../persist";
+import { externalizeBoards, gcBlobs, hydrateBoards } from "../blobStore";
 import { STYLE_CATEGORIES } from "../stylePresets";
 
 /* ---------- 节点默认数据 ---------- */
 export function defaultData(kind: NodeKind): Record<string, unknown> {
   switch (kind) {
     case "image":
+    case "video":
       return { status: "idle" };
     case "prompt":
       return { status: "idle", text: "" };
@@ -110,6 +112,7 @@ export function outPortType(kind: NodeKind, data?: Record<string, unknown>): Por
     case "stylePreset":
     case "storyboard":
       return "text";
+    case "video":
     case "videoGen":
     case "videoTrim":
     case "videoConcat":
@@ -125,6 +128,7 @@ export function outPortType(kind: NodeKind, data?: Record<string, unknown>): Por
 /** 各节点的输入端口能力（自动连线 / 快速添加过滤共用） */
 export const NODE_INPUTS: Record<NodeKind, { text?: boolean; image?: boolean; video?: boolean }> = {
   image: {},
+  video: {},
   prompt: {},
   stylePreset: {},
   note: {},
@@ -154,6 +158,7 @@ export const NODE_INPUTS: Record<NodeKind, { text?: boolean; image?: boolean; vi
 /** 成组自动排布时的类别顺序：输入 → 智能处理 → 生成 → 备注 */
 const KIND_RANK: Record<NodeKind, number> = {
   image: 0,
+  video: 0.5,
   prompt: 1,
   stylePreset: 2,
   chat: 3,
@@ -185,6 +190,7 @@ function kindRank(kind: NodeKind): number {
 
 export const NODE_LABEL: Record<NodeKind, string> = {
   image: "图片",
+  video: "视频",
   prompt: "提示词",
   chat: "对话",
   imageGen: "生成图像",
@@ -302,6 +308,12 @@ function sanitizeNodes(nodes: AppNode[]): AppNode[] {
     d.progress = undefined;
     d.progressPct = undefined;
     if (typeof d.resultUrl === "string" && d.resultUrl.startsWith("blob:")) d.resultUrl = undefined;
+    // 视频节点的 blob 源 / ComfyUI 的 blob 视频结果同样跨会话失效
+    if (n.type === "video" && typeof d.src === "string" && d.src.startsWith("blob:")) d.src = undefined;
+    if (Array.isArray(d.videoResults)) {
+      const keep = (d.videoResults as string[]).filter((u) => typeof u === "string" && !u.startsWith("blob:"));
+      d.videoResults = keep.length ? keep : undefined;
+    }
     return { ...n, data: d };
   });
 }
@@ -374,13 +386,16 @@ function linkHandles(
   let sourceHandle = "out";
   let targetHandle: string | null = null;
   if (up.type === "group") {
-    // 组：按成员构成与下游能力选择文本/图片出口
+    // 组：按成员构成与下游能力选择文本/图片/视频出口
     const members = nodes.filter((n) => n.parentId === up.id);
-    const hasText = members.some((m) => outPortType(m.type as NodeKind, m.data as Record<string, unknown>) === "text");
-    const hasImage = members.some((m) => outPortType(m.type as NodeKind, m.data as Record<string, unknown>) === "image");
-    targetHandle = ins.text && hasText ? "in-text" : ins.image && hasImage ? "in-image" : null;
+    const pt = (m: AppNode) => outPortType(m.type as NodeKind, m.data as Record<string, unknown>);
+    const hasText = members.some((m) => pt(m) === "text");
+    const hasImage = members.some((m) => pt(m) === "image");
+    const hasVideo = members.some((m) => pt(m) === "video");
+    targetHandle =
+      ins.text && hasText ? "in-text" : ins.image && hasImage ? "in-image" : ins.video && hasVideo ? "in-video" : null;
     if (!targetHandle) return null;
-    sourceHandle = targetHandle === "in-text" ? "out-text" : "out-image";
+    sourceHandle = targetHandle === "in-text" ? "out-text" : targetHandle === "in-image" ? "out-image" : "out-video";
   } else {
     const pt = outPortType(up.type as NodeKind, up.data as Record<string, unknown>);
     if (!pt) return null;
@@ -458,7 +473,8 @@ export const useBoard = create<BoardState>((set, get) => {
         boards: { ...boards, [activeId]: { ...cur, meta: { ...cur.meta, updatedAt: Date.now() }, nodes, edges } },
       };
       set({ boards: next.boards });
-      void saveJSON("boards.json", "v1", next);
+      // 大 dataURL 外置成文件引用后再落盘：否则 4K 图内联进 JSON，每次保存都全量序列化几十 MB 卡死主线程
+      void externalizeBoards(next).then((out) => saveJSON("boards.json", "v1", out));
     }, 700);
   };
 
@@ -493,7 +509,10 @@ export const useBoard = create<BoardState>((set, get) => {
     // StrictMode 下 App 会挂载两次：init 必须单例，否则并发创建两个画布互相覆盖
     init: () =>
       (initOnce ??= (async () => {
-        const saved = await loadJSON<PersistShape>("boards.json", "v1");
+        const raw = await loadJSON<PersistShape>("boards.json", "v1");
+        // 外置的大图引用回填；并顺手清理不再被引用的外置文件
+        const saved = raw ? await hydrateBoards(raw) : null;
+        if (raw) void gcBlobs(raw);
         if (saved && saved.order?.length && saved.boards) {
           const activeId = saved.boards[saved.activeId] ? saved.activeId : saved.order[0];
           const cur = saved.boards[activeId];
@@ -595,7 +614,9 @@ export const useBoard = create<BoardState>((set, get) => {
         src?.type === "group"
           ? conn.sourceHandle === "out-image"
             ? ("image" as const)
-            : ("text" as const)
+            : conn.sourceHandle === "out-video"
+              ? ("video" as const)
+              : ("text" as const)
           : src
             ? outPortType(src.type as NodeKind, src.data as Record<string, unknown>)
             : null;
@@ -611,7 +632,9 @@ export const useBoard = create<BoardState>((set, get) => {
         src?.type === "group"
           ? sourceHandle === "out-image"
             ? ("image" as const)
-            : ("text" as const)
+            : sourceHandle === "out-video"
+              ? ("video" as const)
+              : ("text" as const)
           : src
             ? outPortType(src.type as NodeKind, src.data as Record<string, unknown>)
             : null;

@@ -9,6 +9,7 @@ import { errMsg } from "../../core/utils";
 import { useAssets } from "../../core/stores/assetStore";
 import { IcClose, IcDownload, IcFit, IcGallery, IcLibrary } from "../../ui/icons";
 import { Thumb } from "../../ui/Thumb";
+import { VideoThumb } from "../../ui/VideoThumb";
 
 export function GalleryDock() {
   const open = useUi((s) => s.galleryOpen);
@@ -63,7 +64,7 @@ export function GalleryDock() {
         ) : (
           items.map((it) => (
             <div key={it.id} className="g-item" title={it.prompt} onClick={() => it.kind === "image" && setLightbox(it.src)}>
-              {it.kind === "video" ? <video src={it.src} muted /> : <Thumb src={it.src} alt="" />}
+              {it.kind === "video" ? <VideoThumb src={it.src} /> : <Thumb src={it.src} alt="" />}
               {it.kind === "video" ? <span className="g-badge">视频</span> : null}
               <div className="g-acts" onClick={(e) => e.stopPropagation()}>
                 <button className="icon-btn" title="定位到节点" onClick={() => locate(it.nodeId)}>

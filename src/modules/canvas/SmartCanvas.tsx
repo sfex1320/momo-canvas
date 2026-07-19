@@ -28,7 +28,8 @@ import { getNativeDragAsset } from "../assets/dragState";
 import { toast, useUi } from "../../core/stores/uiStore";
 import { useSettings } from "../../core/stores/settingsStore";
 import { useAssets } from "../../core/stores/assetStore";
-import { assetToDataUrl } from "../../core/services/assetFiles";
+import { assetToDataUrl, assetUrl } from "../../core/services/assetFiles";
+import { videoDuration } from "../../core/videoEdit";
 import { GenConfigPanel, VideoConfigPanel } from "./GenConfigPanel";
 import type { AppNode, BoardTemplate, NodeKind } from "../../core/types";
 import { errMsg, fileToDataUrl, matchHotkey } from "../../core/utils";
@@ -64,6 +65,7 @@ import { FrameNode } from "./nodes/FrameNode";
 import { VideoTrimNode } from "./nodes/VideoTrimNode";
 import { VideoConcatNode } from "./nodes/VideoConcatNode";
 import { StoryboardNode } from "./nodes/StoryboardNode";
+import { VideoNode, importVideoFile } from "./nodes/VideoNode";
 
 /** 一键清空画布：首次点击进入确认态（2.5 秒内再点执行），入撤销历史可 Ctrl+Z 恢复 */
 function ClearAllBtn() {
@@ -93,6 +95,7 @@ function ClearAllBtn() {
 
 const nodeTypes: NodeTypes = {
   image: ImageNode,
+  video: VideoNode,
   prompt: PromptNode,
   chat: ChatNode,
   imageGen: ImageGenNode,
@@ -231,9 +234,11 @@ export function SmartCanvas() {
       src.type === "group"
         ? conn.sourceHandle === "out-image"
           ? "image"
-          : conn.sourceHandle === "out-text"
-            ? "text"
-            : null
+          : conn.sourceHandle === "out-video"
+            ? "video"
+            : conn.sourceHandle === "out-text"
+              ? "text"
+              : null
         : outPortType(src.type as NodeKind, src.data as Record<string, unknown>);
     if (!pt) return false;
     const want =
@@ -254,7 +259,9 @@ export function SmartCanvas() {
         state.fromNode.type === "group"
           ? state.fromHandle.id === "out-image"
             ? ("image" as const)
-            : ("text" as const)
+            : state.fromHandle.id === "out-video"
+              ? ("video" as const)
+              : ("text" as const)
           : outPortType(state.fromNode.type as NodeKind, state.fromNode.data as Record<string, unknown>);
       if (!pt) return;
       const client =
@@ -307,13 +314,19 @@ export function SmartCanvas() {
       if (assetId) {
         const it = useAssets.getState().items.find((x) => x.id === assetId);
         if (!it) return;
-        if (it.kind !== "image") {
-          toast("目前仅支持把图片资产拖入画布", "err");
+        if (it.kind !== "image" && it.kind !== "video") {
+          toast("目前仅支持把图片/视频资产拖入画布", "err");
           return;
         }
         try {
-          const src = await assetToDataUrl(it.path, it.mime);
-          autoLink(addNode("image", pos, { src, name: it.name, status: "done" }));
+          if (it.kind === "video") {
+            // 视频资产 → 视频节点（直接用磁盘文件的 asset: URL，重启依然有效）
+            const src = assetUrl(it.path);
+            autoLink(addNode("video", pos, { src, name: it.name, status: "done", dur: await videoDuration(src) }));
+          } else {
+            const src = await assetToDataUrl(it.path, it.mime);
+            autoLink(addNode("image", pos, { src, name: it.name, status: "done" }));
+          }
           // 落到画布成功 → 收起资产库，让用户看到新节点
           useAssets.getState().setOpen(false);
         } catch (err) {
@@ -322,7 +335,24 @@ export function SmartCanvas() {
         return;
       }
 
-      const files = Array.from(e.dataTransfer.files ?? []).filter((f) => f.type.startsWith("image/"));
+      // 拖入视频文件 → 视频节点（先落进资产库拿持久地址）
+      const allFiles = Array.from(e.dataTransfer.files ?? []);
+      const videoFiles = allFiles.filter((f) => f.type.startsWith("video/") || /\.(mp4|webm|mov|mkv|m4v)$/i.test(f.name));
+      if (videoFiles.length) {
+        for (let i = 0; i < videoFiles.length; i++) {
+          const nid = addNode("video", { x: pos.x + i * 36, y: pos.y + i * 36 }, { status: "running", name: videoFiles[i].name });
+          try {
+            const { src, dur } = await importVideoFile(videoFiles[i]);
+            useBoard.getState().updateData(nid, { src, dur, status: "done" });
+            autoLink(nid);
+          } catch (err) {
+            useBoard.getState().updateData(nid, { status: "error", error: errMsg(err) });
+          }
+        }
+        return;
+      }
+
+      const files = allFiles.filter((f) => f.type.startsWith("image/"));
       if (files.length) {
         // 落点在一个空的图片节点上 → 直接放进该节点，而不是新建
         const s = useBoard.getState();
@@ -578,7 +608,8 @@ export function SmartCanvas() {
         <Background variant={BackgroundVariant.Dots} gap={24} size={1.6} color="var(--dot)" />
         <EdgeBoxSelect />
         {!zen && nodes.length > 3 ? (
-          <MiniMap pannable zoomable position="bottom-right" style={{ marginBottom: 74, marginRight: 10 + dockShift }} />
+          // 右移距离要让开右侧竖向工具条（运行全部/缩放列，约 60px 宽），底部让开工具坞，避免重叠
+          <MiniMap pannable zoomable position="bottom-right" style={{ marginBottom: 84, marginRight: 64 + dockShift }} />
         ) : null}
       </ReactFlow>
 

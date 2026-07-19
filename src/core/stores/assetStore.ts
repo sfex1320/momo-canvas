@@ -24,10 +24,12 @@ type AssetState = {
 
   init: () => Promise<void>;
   setOpen: (v: boolean) => void;
-  /** 画布生成内容自动收录 */
-  collect: (input: CollectInput) => Promise<void>;
+  /** 画布生成内容自动收录；返回落盘后的资产项（失败返回 null），视频结果靠它换成持久地址 */
+  collect: (input: CollectInput) => Promise<AssetItem | null>;
   /** 导入外部文件（File 对象，来自文件选择或拖放） */
   importFiles: (files: File[]) => Promise<void>;
+  /** 导入单个文件并返回资产项（视频节点等需要拿到落盘路径时用） */
+  importFileGetItem: (f: File) => Promise<AssetItem | null>;
   removeMany: (ids: string[]) => Promise<void>;
   moveTo: (ids: string[], folderId: string | null) => void;
   rename: (id: string, name: string) => void;
@@ -101,45 +103,50 @@ export const useAssets = create<AssetState>((set, get) => {
         };
         set((s) => ({ items: [item, ...s.items] }));
         persist();
+        return item;
       } catch (e) {
         console.warn("[assets] collect failed", e);
+        return null;
+      }
+    },
+
+    importFileGetItem: async (f) => {
+      try {
+        const bytes = new Uint8Array(await f.arrayBuffer());
+        let ext = f.name.includes(".") ? f.name.split(".").pop()! : extFromMime(f.type);
+        // 扩展名认不出来（无后缀 / .bin 等）→ 按文件头识别，别一律归入「其他」
+        if (kindFromExt(ext) === "other") ext = sniffExt(bytes) ?? ext;
+        const kind = kindFromExt(ext);
+        const stored = await storeAssetFile(bytes, ext, kind);
+        const item: AssetItem = {
+          id: uid(),
+          kind,
+          name: f.name.replace(/\.[^.]+$/, ""),
+          path: stored.path,
+          thumb: stored.thumb,
+          mime: f.type || mimeFromExt(ext),
+          size: stored.size,
+          width: stored.width,
+          height: stored.height,
+          folderId: null,
+          source: "import",
+          createdAt: Date.now(),
+        };
+        set((s) => ({ items: [item, ...s.items] }));
+        persist();
+        return item;
+      } catch (e) {
+        toast(`导入「${f.name}」失败：${errMsg(e)}`, "err");
+        return null;
       }
     },
 
     importFiles: async (files) => {
       let ok = 0;
       for (const f of files) {
-        try {
-          const bytes = new Uint8Array(await f.arrayBuffer());
-          let ext = f.name.includes(".") ? f.name.split(".").pop()! : extFromMime(f.type);
-          // 扩展名认不出来（无后缀 / .bin 等）→ 按文件头识别，别一律归入「其他」
-          if (kindFromExt(ext) === "other") ext = sniffExt(bytes) ?? ext;
-          const kind = kindFromExt(ext);
-          const stored = await storeAssetFile(bytes, ext, kind);
-          const item: AssetItem = {
-            id: uid(),
-            kind,
-            name: f.name.replace(/\.[^.]+$/, ""),
-            path: stored.path,
-            thumb: stored.thumb,
-            mime: f.type || mimeFromExt(ext),
-            size: stored.size,
-            width: stored.width,
-            height: stored.height,
-            folderId: null,
-            source: "import",
-            createdAt: Date.now(),
-          };
-          set((s) => ({ items: [item, ...s.items] }));
-          ok++;
-        } catch (e) {
-          toast(`导入「${f.name}」失败：${errMsg(e)}`, "err");
-        }
+        if (await get().importFileGetItem(f)) ok++;
       }
-      if (ok) {
-        toast(`已导入 ${ok} 个文件`, "ok");
-        persist();
-      }
+      if (ok) toast(`已导入 ${ok} 个文件`, "ok");
     },
 
     removeMany: async (ids) => {

@@ -12,6 +12,7 @@ import { toast } from "../../../core/stores/uiStore";
 import { collectUpstream, runFlow } from "../../../core/runner";
 import { saveVideoAs } from "../../../core/services/imageSaver";
 import { errMsg } from "../../../core/utils";
+import { VideoThumb } from "../../../ui/VideoThumb";
 import type { VideoConcatData } from "../../../core/types";
 
 export const VideoConcatNode = memo(function VideoConcatNode({ id, data, selected }: NodeProps) {
@@ -67,7 +68,7 @@ export const VideoConcatNode = memo(function VideoConcatNode({ id, data, selecte
             {d.progress}
           </div>
         ) : null}
-        {d.resultUrl && !running ? <video className="img-main nodrag" src={d.resultUrl} controls style={{ cursor: "default" }} /> : null}
+        {d.resultUrl && !running ? <VideoThumb className="img-main nodrag" src={d.resultUrl} /> : null}
       </div>
       <PortVideoIn top={26} />
       <PortOut kind="video" />

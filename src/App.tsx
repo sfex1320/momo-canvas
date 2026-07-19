@@ -68,10 +68,18 @@ function CompareWipe({ before, after }: { before: string; after: string }) {
 function Lightbox() {
   const src = useUi((s) => s.lightbox);
   const before = useUi((s) => s.lightboxBefore);
+  const kind = useUi((s) => s.lightboxKind);
   const set = useUi((s) => s.setLightbox);
   const [comparing, setComparing] = useState(false);
   useEffect(() => setComparing(false), [src]);
   if (!src) return null;
+  if (kind === "video") {
+    return (
+      <div className="lightbox" onClick={() => set(null)}>
+        <video src={src} controls autoPlay onClick={(e) => e.stopPropagation()} />
+      </div>
+    );
+  }
   return (
     <div className="lightbox" onClick={() => set(null)}>
       {before && comparing ? <CompareWipe before={before} after={src} /> : <img src={src} alt="" />}
