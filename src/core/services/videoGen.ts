@@ -6,6 +6,8 @@
  */
 import type { ModelCard } from "../types";
 import { xfetch, trimBase, readErrorBody } from "./http";
+import { extractResultStrings, resolveCustomProto, runCustomFlow } from "./customProto";
+import { runWithSelfHeal } from "./protoSelfHeal";
 
 export type VideoGenReq = {
   prompt: string;
@@ -23,8 +25,44 @@ const sleep = (ms: number, signal?: AbortSignal) =>
     });
   });
 
+/** 自定义协议（设置 → 协议，用途 = 视频生成）：模板执行器跑提交/轮询，结果按视频地址取用 */
+async function genCustomVideo(card: ModelCard, req: VideoGenReq): Promise<string> {
+  const proto = await resolveCustomProto(card.protocol, "video");
+  // 自愈闭环：运行失败且像协议配置问题时，AI 依据执行现场自动修协议并重试一次
+  return runWithSelfHeal(
+    proto,
+    "生成视频",
+    async (p, trace) => {
+      const vars: Record<string, string> = {
+        baseUrl: trimBase(card.baseUrl),
+        apiKey: card.apiKey,
+        model: card.model,
+        prompt: req.prompt.replace(/"/g, '\\"').replace(/\n/g, "\\n"),
+        size: "",
+        n: "1",
+        taskId: "",
+        // 首帧参考图 dataURL（模板用 {{image}} 占位）
+        image: req.image ?? "",
+      };
+      req.onProgress?.("提交任务…");
+      const final = await runCustomFlow(p, vars, req.onProgress, trace);
+      const raw = extractResultStrings(final, p.resultPath, "video");
+      const v = raw[0];
+      if (!v)
+        throw new Error(
+          `协议「${p.name}」未取到视频（路径 ${p.resultPath}）。响应：${JSON.stringify(final).slice(0, 250)}`,
+        );
+      if (v.startsWith("http") || v.startsWith("data:") || v.startsWith("blob:")) return v;
+      if (v.length > 200) return `data:video/mp4;base64,${v}`;
+      throw new Error(`协议「${p.name}」返回的结果不像视频地址：${v.slice(0, 120)}`);
+    },
+    req.onProgress,
+  );
+}
+
 export async function generateVideo(card: ModelCard, req: VideoGenReq): Promise<string> {
   if (!card.baseUrl || !card.model) throw new Error(`模型「${card.name}」缺少 Base URL 或模型名称`);
+  if (card.protocol.startsWith("custom:")) return genCustomVideo(card, req);
   const base = trimBase(card.baseUrl);
   const headers = {
     "Content-Type": "application/json",

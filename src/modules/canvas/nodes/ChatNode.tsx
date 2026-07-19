@@ -6,6 +6,7 @@ import { ModelPicker } from "../../../ui/ModelPicker";
 import { useBoard } from "../../../core/stores/boardStore";
 import { sendChat } from "../../../core/runner";
 import { openExternal } from "../../../core/external";
+import { Thumb } from "../../../ui/Thumb";
 import type { ChatData } from "../../../core/types";
 
 export const ChatNode = memo(function ChatNode({ id, data, selected }: NodeProps) {
@@ -101,7 +102,7 @@ function MsgView({ m, showThinking }: { m: ChatData["messages"][number]; showThi
           {m.images?.length ? (
             <div className="bimgs">
               {m.images.map((s, i) => (
-                <img key={i} src={s} alt="" />
+                <Thumb key={i} src={s} alt="" />
               ))}
             </div>
           ) : null}

@@ -5,7 +5,7 @@ import { IcFilter, IcLoading, IcScan, IcText } from "../../../ui/icons";
 import { ModelPicker } from "../../../ui/ModelPicker";
 import { OptGrid } from "../../../ui/kit";
 import { useBoard } from "../../../core/stores/boardStore";
-import { runCaption } from "../../../core/runner";
+import { runFlow } from "../../../core/runner";
 import type { CaptionData } from "../../../core/types";
 
 const MODES = [
@@ -32,7 +32,7 @@ export const CaptionNode = memo(function CaptionNode({ id, data, selected }: Nod
       <div className="mnode-body">
         <OptGrid options={MODES} value={d.mode} onChange={(v) => upd(id, { mode: v })} cols={3} />
         <ModelPicker role="chat" value={d.modelId} onChange={(v) => upd(id, { modelId: v })} />
-        <button className="btn primary nodrag" disabled={running} onClick={() => void runCaption(id)}>
+        <button className="btn primary nodrag" disabled={running} onClick={() => void runFlow(id)}>
           {running ? <IcLoading size={17} /> : <IcScan size={17} />}
           {running ? "识别中…" : "反推（需连接上游图片）"}
         </button>

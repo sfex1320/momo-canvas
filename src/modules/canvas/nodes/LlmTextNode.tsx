@@ -5,7 +5,7 @@ import { IcEdit, IcGlobe, IcLoading, IcMin, IcPlus, IcSparkles, IcWand } from ".
 import { ModelPicker } from "../../../ui/ModelPicker";
 import { OptGrid } from "../../../ui/kit";
 import { useBoard } from "../../../core/stores/boardStore";
-import { runLlmText } from "../../../core/runner";
+import { runFlow } from "../../../core/runner";
 import type { LlmTextData } from "../../../core/types";
 
 const OPS = [
@@ -43,7 +43,7 @@ export const LlmTextNode = memo(function LlmTextNode({ id, data, selected }: Nod
           />
         ) : null}
         <ModelPicker role="chat" value={d.modelId} onChange={(v) => upd(id, { modelId: v })} />
-        <button className="btn primary nodrag" disabled={running} onClick={() => void runLlmText(id)}>
+        <button className="btn primary nodrag" disabled={running} onClick={() => void runFlow(id)}>
           {running ? <IcLoading size={17} /> : <IcWand size={17} />}
           {running ? "处理中…" : "处理（读取上游文本）"}
         </button>

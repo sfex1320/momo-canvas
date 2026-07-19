@@ -47,6 +47,50 @@ export const IcLogo = (p: IconProps) => (
   </svg>
 );
 
+/* 局部重绘：画笔 + 虚线选区 */
+export const IcBrush = (p: IconProps) => (
+  <I {...p}>
+    <path d="M14.5 5.5 18.5 9.5 10 18l-4.6 1.1a.6.6 0 0 1-.7-.7L5.8 14z" />
+    <path d="M17 3l4 4" />
+    <path d="M3 9.5V7a2 2 0 0 1 .8-1.6M21 14.5V17a2 2 0 0 1-.8 1.6" strokeDasharray="2.6 2.6" />
+  </I>
+);
+
+/* 扩图：中心画面 + 四角外扩箭头 */
+export const IcExpand = (p: IconProps) => (
+  <I {...p}>
+    <rect x="8.5" y="8.5" width="7" height="7" rx="1.4" />
+    <path d="M3 8V4.5A1.5 1.5 0 0 1 4.5 3H8M16 3h3.5A1.5 1.5 0 0 1 21 4.5V8M21 16v3.5a1.5 1.5 0 0 1-1.5 1.5H16M8 21H4.5A1.5 1.5 0 0 1 3 19.5V16" />
+  </I>
+);
+
+/* 抠图：剪刀 + 主体轮廓 */
+export const IcScissors = (p: IconProps) => (
+  <I {...p}>
+    <circle cx="6" cy="7" r="2.4" />
+    <circle cx="6" cy="17" r="2.4" />
+    <path d="M8.1 8.4 20 17M8.1 15.6 20 7" />
+  </I>
+);
+
+/* 高清增强：向上箭头 + 闪光 */
+export const IcEnhance = (p: IconProps) => (
+  <I {...p}>
+    <rect x="3.5" y="3.5" width="17" height="17" rx="3.5" />
+    <path d="M12 16.5v-8M8.6 11.5 12 8l3.4 3.5" />
+    <path d="M17.6 5.2l.5 1.2 1.2.5-1.2.5-.5 1.2-.5-1.2-1.2-.5 1.2-.5z" fill="currentColor" strokeWidth="0.6" />
+  </I>
+);
+
+/* 聚焦裁剪：裁切框 + 取景角 */
+export const IcCrop = (p: IconProps) => (
+  <I {...p}>
+    <path d="M7 3v12a2 2 0 0 0 2 2h12" />
+    <path d="M3 7h12a2 2 0 0 1 2 2v12" />
+    <circle cx="12" cy="12" r="1.4" fill="currentColor" strokeWidth="0" />
+  </I>
+);
+
 export const IcImage = (p: IconProps) => (
   <I {...p}>
     <rect x="3" y="4" width="18" height="16" rx="3" />
@@ -254,6 +298,15 @@ export const IcFit = (p: IconProps) => (
   </I>
 );
 
+/* 尺寸调整：大框缩小框 + 对角箭头 */
+export const IcResize = (p: IconProps) => (
+  <I {...p}>
+    <path d="M4 4h9v9H4z" />
+    <path d="M20 14v4a2 2 0 0 1-2 2h-4" />
+    <path d="M16.5 10.5 20 7m0 0h-3.2M20 7v3.2" />
+  </I>
+);
+
 export const IcLoading = (p: IconProps) => (
   <I {...p} className={`spin ${p.className ?? ""}`}>
     <path d="M12 3a9 9 0 1 0 9 9" />
@@ -342,6 +395,13 @@ export const IcFile = (p: IconProps) => (
 export const IcFilter = (p: IconProps) => (
   <I {...p}>
     <path d="M4 5.5h16l-6.2 7.4v5.6l-3.6-1.8v-3.8L4 5.5Z" />
+  </I>
+);
+
+export const IcTag = (p: IconProps) => (
+  <I {...p}>
+    <path d="M4 5.5A1.5 1.5 0 0 1 5.5 4h5.4c.4 0 .8.16 1.06.44l7.6 7.6a1.5 1.5 0 0 1 0 2.12l-5.4 5.4a1.5 1.5 0 0 1-2.12 0l-7.6-7.6A1.5 1.5 0 0 1 4 10.9V5.5Z" />
+    <circle cx="8.6" cy="8.6" r="1.3" />
   </I>
 );
 
@@ -435,5 +495,49 @@ export const IcRedo = (p: IconProps) => (
   <I {...p}>
     <path d="M15.5 6 20 10.5 15.5 15" />
     <path d="M20 10.5H10a6 6 0 0 0-6 6v1" />
+  </I>
+);
+
+/* 打光：灯泡 + 光线 */
+export const IcBulb = (p: IconProps) => (
+  <I {...p}>
+    <path d="M12 3.2a5.8 5.8 0 0 1 3.5 10.4c-.8.6-1.1 1.3-1.1 2.1h-4.8c0-.8-.3-1.5-1.1-2.1A5.8 5.8 0 0 1 12 3.2Z" />
+    <path d="M9.6 18.6h4.8M10.4 21h3.2" />
+    <path d="M4.2 5.2l1.4 1.4M19.8 5.2l-1.4 1.4" />
+  </I>
+);
+
+/* 多角度：主体 + 环绕轨道 */
+export const IcOrbit = (p: IconProps) => (
+  <I {...p}>
+    <circle cx="12" cy="12" r="3.1" />
+    <path d="M20.3 9.3c.8 1 .9 2 .3 2.9-1.3 2-5 3.5-9.2 3.7-4.2.2-7.6-.9-8.3-2.6-.4-.9 0-1.9.9-2.8" />
+    <circle cx="18.6" cy="16.2" r="1.5" />
+  </I>
+);
+
+/* 角色卡：证件卡片 */
+export const IcIdCard = (p: IconProps) => (
+  <I {...p}>
+    <rect x="3" y="4.5" width="18" height="15" rx="2.5" />
+    <circle cx="8.6" cy="10.2" r="2" />
+    <path d="M5.6 15.8c.6-1.7 1.7-2.5 3-2.5s2.4.8 3 2.5" />
+    <path d="M14.2 9.2h4.2M14.2 12.2h4.2M14.2 15.2h2.6" />
+  </I>
+);
+
+/* 角色库：两个人物 */
+export const IcUsers = (p: IconProps) => (
+  <I {...p}>
+    <circle cx="9" cy="8.4" r="3.2" />
+    <path d="M3.4 19.2c.7-3 2.9-4.7 5.6-4.7s4.9 1.7 5.6 4.7" />
+    <path d="M15.4 5.6a3.2 3.2 0 0 1 .2 5.9M17.2 14.8c1.9.7 3.1 2.2 3.6 4.4" />
+  </I>
+);
+
+export const IcBell = (p: IconProps) => (
+  <I {...p}>
+    <path d="M18 9a6 6 0 1 0-12 0c0 5-2 6-2 6h16s-2-1-2-6" />
+    <path d="M10 19a2.2 2.2 0 0 0 4 0" />
   </I>
 );

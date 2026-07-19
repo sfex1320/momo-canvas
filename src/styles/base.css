@@ -224,6 +224,11 @@ button {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  transition: margin 220ms var(--ease);
+}
+/* 右侧浮出面板打开时：主窗口左移让位，主窗口 + 浮出面板整体居中 */
+.modal.shifted {
+  margin-right: 464px;
 }
 @keyframes fadeIn {
   from { opacity: 0; }
@@ -257,6 +262,10 @@ button {
   display: flex;
   gap: 8px;
   align-items: center;
+}
+.toast.err {
+  cursor: pointer;
+  pointer-events: auto;
 }
 .toast.err { border-color: rgba(242, 79, 106, 0.5); color: var(--danger); }
 .toast.ok { border-color: rgba(47, 191, 143, 0.5); color: var(--ok); }

@@ -6,6 +6,7 @@
  */
 import type { ChatMsg, ModelCard } from "../types";
 import { xfetch, trimBase, readErrorBody } from "./http";
+import { shrinkForVision } from "../utils";
 
 export type StreamCallbacks = {
   onText?: (full: string, delta: string) => void;
@@ -206,8 +207,14 @@ async function streamGemini(card: ModelCard, msgs: ChatMsg[], opts: StreamOpts):
 export async function chatStream(card: ModelCard, msgs: ChatMsg[], opts: StreamOpts = {}): Promise<StreamResult> {
   if (!card.baseUrl && card.protocol !== "gemini") throw new Error(`模型「${card.name}」缺少 Base URL`);
   if (!card.model) throw new Error(`模型「${card.name}」缺少模型名称`);
+  // 视觉输入压缩：大图先降采样再发，避免触发各协议的图片大小上限（如 10MB 报 400）
+  const shrunk = await Promise.all(
+    msgs.map(async (m) =>
+      m.images?.length ? { ...m, images: await Promise.all(m.images.map((s) => shrinkForVision(s))) } : m,
+    ),
+  );
   const run = card.protocol === "anthropic" ? streamAnthropic : card.protocol === "gemini" ? streamGemini : streamOpenAI;
-  const result = await run(card, msgs, opts);
+  const result = await run(card, shrunk, opts);
   if (!result.text && !result.reasoning)
     throw new Error(`模型「${card.name}」没有返回内容（请检查 Base URL / 模型名 / 协议是否匹配）`);
   return result;

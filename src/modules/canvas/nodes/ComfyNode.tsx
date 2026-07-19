@@ -7,9 +7,10 @@ import { useBoard } from "../../../core/stores/boardStore";
 import { useComfy } from "../../../core/stores/comfyStore";
 import { useSettings } from "../../../core/stores/settingsStore";
 import { toast, useUi } from "../../../core/stores/uiStore";
-import { runComfy } from "../../../core/runner";
+import { runFlow } from "../../../core/runner";
 import { saveImageAs } from "../../../core/services/imageSaver";
 import { errMsg } from "../../../core/utils";
+import { Thumb } from "../../../ui/Thumb";
 import type { ComfyData, ComfyExposedParam } from "../../../core/types";
 
 export const ComfyNode = memo(function ComfyNode({ id, data, selected }: NodeProps) {
@@ -85,7 +86,7 @@ export const ComfyNode = memo(function ComfyNode({ id, data, selected }: NodePro
           </div>
         )}
 
-        <button className="btn primary nodrag" disabled={running || !tpl} onClick={() => void runComfy(id)}>
+        <button className="btn primary nodrag" disabled={running || !tpl} onClick={() => void runFlow(id)}>
           {running ? <IcLoading size={17} /> : <IcPlay size={16} />}
           {running ? "执行中…" : "运行工作流"}
         </button>
@@ -93,15 +94,21 @@ export const ComfyNode = memo(function ComfyNode({ id, data, selected }: NodePro
           <div className="progress-line">
             <IcLoading size={14} />
             {d.progress}
+            {d.progressPct !== undefined ? <b className="pl-pct">{d.progressPct}%</b> : null}
+          </div>
+        ) : null}
+        {running && d.progressPct !== undefined ? (
+          <div className="progress-bar" title={`${d.progressPct}%`}>
+            <i style={{ width: `${d.progressPct}%` }} />
           </div>
         ) : null}
         {main && !running ? (
           <>
-            <img className="img-main nodrag" src={main} alt="" onClick={() => setLightbox(main)} />
+            <Thumb className="img-main nodrag" src={main} alt="" res onClick={() => setLightbox(main)} />
             {d.results.length > 1 ? (
               <div className="thumbs nodrag">
                 {d.results.map((s, i) => (
-                  <img
+                  <Thumb
                     key={i}
                     src={s}
                     className={i === (d.picked ?? 0) ? "on" : ""}

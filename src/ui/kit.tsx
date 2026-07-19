@@ -52,16 +52,18 @@ export function Modal({
   children,
   width = 720,
   footer,
+  className,
 }: {
   title: ReactNode;
   onClose: () => void;
   children: ReactNode;
   width?: number;
   footer?: ReactNode;
+  className?: string;
 }) {
   return (
     <div className="modal-mask" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
-      <div className="modal" style={{ width }}>
+      <div className={`modal ${className ?? ""}`} style={{ width }}>
         <div
           style={{
             display: "flex",

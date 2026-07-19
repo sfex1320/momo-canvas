@@ -11,7 +11,7 @@ type ComfyState = {
   init: () => Promise<void>;
   upsert: (tpl: ComfyTemplate) => void;
   remove: (id: string) => void;
-  test: (host: string) => Promise<boolean>;
+  test: (host: string) => Promise<{ ok: boolean; err?: string }>;
 };
 
 let initOnce: Promise<void> | null = null;
@@ -45,6 +45,6 @@ export const useComfy = create<ComfyState>((set, get) => ({
     set({ online: "unknown", onlineInfo: "" });
     const r = await pingComfy(host);
     set({ online: r.ok ? "ok" : "down", onlineInfo: r.info ?? "" });
-    return r.ok;
+    return { ok: r.ok, err: r.err };
   },
 }));

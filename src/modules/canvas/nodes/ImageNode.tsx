@@ -7,6 +7,7 @@ import { useSettings } from "../../../core/stores/settingsStore";
 import { toast, useUi } from "../../../core/stores/uiStore";
 import { fileToDataUrl, errMsg } from "../../../core/utils";
 import { saveImageAs } from "../../../core/services/imageSaver";
+import { Thumb } from "../../../ui/Thumb";
 import type { ImageData } from "../../../core/types";
 
 export const ImageNode = memo(function ImageNode({ id, data, selected }: NodeProps) {
@@ -55,7 +56,7 @@ export const ImageNode = memo(function ImageNode({ id, data, selected }: NodePro
     >
       <div className="mnode-body">
         {d.src ? (
-          <img className="img-main nodrag" src={d.src} alt={d.name} onClick={() => setLightbox(d.src!)} />
+          <Thumb className="img-main nodrag" src={d.src} alt={d.name} res onClick={() => setLightbox(d.src!)} />
         ) : (
           <div className="img-empty nodrag" onClick={() => fileRef.current?.click()}>
             <IcImage size={26} />

@@ -35,20 +35,62 @@ export const GPT_QUALITIES: { value: string; label: string }[] = [
   { value: "low", label: "低" },
 ];
 
-/** GPT Image 常用尺寸预设（宽高均为 16 的倍数），也可在面板里自定义 */
-export const GPT_PRESETS: { ratio: string; tag?: string; w: number; h: number }[] = [
-  { ratio: "1:1", w: 1024, h: 1024 },
-  { ratio: "3:2", w: 1536, h: 1024 },
-  { ratio: "2:3", w: 1024, h: 1536 },
-  { ratio: "4:3", w: 1360, h: 1024 },
-  { ratio: "3:4", w: 1024, h: 1360 },
-  { ratio: "16:9", w: 1792, h: 1008 },
-  { ratio: "9:16", w: 1008, h: 1792 },
-  { ratio: "1:1", tag: "2K", w: 2048, h: 2048 },
-  { ratio: "16:9", tag: "2K", w: 2560, h: 1440 },
-  { ratio: "9:16", tag: "2K", w: 1440, h: 2560 },
-  { ratio: "16:9", tag: "4K", w: 3840, h: 2160 },
-];
+/** GPT Image 常用宽高比（比例限制 1:3 ~ 3:1），配合分辨率档位换算实际宽高 */
+export const GPT_RATIOS = ["1:1", "3:2", "2:3", "4:3", "3:4", "5:4", "4:5", "16:9", "9:16", "21:9", "2:1", "1:2"];
+/** GPT Image 分辨率档位（按像素总量：1K ≈ 1MP · 2K ≈ 4MP · 4K ≈ 8MP） */
+export const GPT_TIERS = ["1K", "2K", "4K"];
+const TIER_AREA: Record<string, number> = {
+  "1K": 1024 * 1024,
+  "2K": 2048 * 2048,
+  "4K": 3840 * 2160,
+};
+
+/** 解析 "16:9" / "16x9" / "1.85:1" 之类的比例串，返回 w/h 数值比（非法返回 null） */
+export function parseRatio(ratio: string): number | null {
+  const m = ratio.trim().match(/^(\d+(?:\.\d+)?)\s*[:：xX×/]\s*(\d+(?:\.\d+)?)$/);
+  if (!m) return null;
+  const rw = parseFloat(m[1]);
+  const rh = parseFloat(m[2]);
+  if (!rw || !rh) return null;
+  return rw / rh;
+}
+
+/** 比例 + 分辨率档 → 实际宽高（16 的倍数，长边不超过 3840；比例超出 1:3~3:1 返回 null） */
+export function gptSize(ratio: string, tier: string): { w: number; h: number } | null {
+  const r = parseRatio(ratio);
+  if (!r || r < 1 / 3 - 1e-6 || r > 3 + 1e-6) return null;
+  const area = TIER_AREA[tier] ?? TIER_AREA["1K"];
+  let h = Math.sqrt(area / r);
+  let w = h * r;
+  const cap = 3840;
+  if (w > cap) {
+    w = cap;
+    h = w / r;
+  }
+  if (h > cap) {
+    h = cap;
+    w = h * r;
+  }
+  const to16 = (v: number) => Math.max(256, Math.round(v / 16) * 16);
+  return { w: to16(w), h: to16(h) };
+}
+
+/** 给定 w/h 数值比，返回列表中最接近的比例档（默认 Banana 档位，跳过 auto） */
+export function nearestAspect(r: number, list: string[] = BANANA_ASPECTS): string {
+  let best = "1:1";
+  let bestDiff = Infinity;
+  for (const a of list) {
+    const v = parseRatio(a);
+    if (!v) continue;
+    // 用对数距离，避免 16:9 与 9:16 之间不对称
+    const diff = Math.abs(Math.log(v) - Math.log(r));
+    if (diff < bestDiff) {
+      bestDiff = diff;
+      best = a;
+    }
+  }
+  return best;
+}
 
 /** 通用生图预设尺寸 */
 export const GENERIC_PRESETS: { ratio: string; w: number; h: number }[] = [

@@ -1,17 +1,25 @@
 /**
  * ComfyUI 工作流模板管理器
- *  导入 API 格式 JSON → 勾选要暴露的输入/参数 → 指定输出节点 → 保存为模板
+ *  导入 API 格式 JSON（选文件 / 多选批量 / 直接拖入 / Ctrl+V 粘贴）→ 勾选要暴露的输入/参数
+ *  → 指定输出节点 → 保存为模板；模板可单个/批量导出为模板包，再导入即恢复
  */
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Modal, Field, Row } from "../../ui/kit";
 import { useComfy } from "../../core/stores/comfyStore";
 import { toast, useUi } from "../../core/stores/uiStore";
 import { guessOutputNode, isApiWorkflow, listWorkflowInputs, type WfInputInfo } from "../../core/services/comfy";
-import { uid } from "../../core/utils";
-import { IcEdit, IcFlow, IcTrash, IcUpload } from "../../ui/icons";
-import type { ComfyExposedParam, ComfyParamKind, ComfyTemplate } from "../../core/types";
-
-type ExposeMap = Record<string, { label: string; kind: ComfyParamKind }>;
+import { errMsg, uid } from "../../core/utils";
+import { IcDownload, IcEdit, IcFlow, IcTrash, IcUpload } from "../../ui/icons";
+import {
+  autoExposeMap,
+  importTemplateFilesAuto,
+  packTemplates,
+  paramsFromExpose,
+  saveTextFile,
+  templatesFromJson,
+  type ExposeMap,
+} from "./templateIO";
+import type { ComfyParamKind, ComfyTemplate } from "../../core/types";
 
 type Draft = {
   id: string;
@@ -21,19 +29,6 @@ type Draft = {
   expose: ExposeMap;
 };
 
-/** 自动暴露最常用的参数：提示词文本 / 种子 / LoadImage */
-function autoExpose(inputs: WfInputInfo[]): ExposeMap {
-  const map: ExposeMap = {};
-  for (const i of inputs) {
-    const key = `${i.nodeId}.${i.input}`;
-    const label = `${i.nodeTitle} · ${i.input}`;
-    if (i.classType === "CLIPTextEncode" && i.input === "text") map[key] = { label, kind: "text" };
-    else if (i.kind === "seed") map[key] = { label, kind: "seed" };
-    else if (i.kind === "image") map[key] = { label, kind: "image" };
-  }
-  return map;
-}
-
 function draftFromTemplate(t: ComfyTemplate): Draft {
   const expose: ExposeMap = {};
   for (const p of t.params) expose[p.key] = { label: p.label, kind: p.kind };
@@ -42,35 +37,99 @@ function draftFromTemplate(t: ComfyTemplate): Draft {
 
 export function TemplateManager() {
   const open = useUi((s) => s.templateMgrOpen);
+  const editId = useUi((s) => s.templateMgrEdit);
   const close = () => useUi.getState().setTemplateMgr(false);
   const templates = useComfy((s) => s.templates);
   const upsert = useComfy((s) => s.upsert);
   const remove = useComfy((s) => s.remove);
   const [draft, setDraft] = useState<Draft | null>(null);
   const [confirmDel, setConfirmDel] = useState<string | null>(null);
+  const [dragOver, setDragOver] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
+
+  /* 设置页模板卡片点「编辑」→ 打开管理器直接进入对应模板 */
+  useEffect(() => {
+    if (!open || !editId) return;
+    const t = useComfy.getState().templates.find((x) => x.id === editId);
+    if (t) setDraft(draftFromTemplate(t));
+    useUi.setState({ templateMgrEdit: null });
+  }, [open, editId]);
+
+  /** 识别单份 JSON：原始工作流 → 进编辑器勾参数；模板/模板包 → 直接保存 */
+  const routeImport = (json: unknown, nameHint: string): { drafted: boolean; saved: number } => {
+    if (isApiWorkflow(json)) {
+      setDraft({
+        id: uid(8),
+        name: nameHint,
+        workflow: json,
+        outputNodeId: guessOutputNode(json),
+        expose: autoExposeMap(listWorkflowInputs(json)),
+      });
+      return { drafted: true, saved: 0 };
+    }
+    const tpls = templatesFromJson(json);
+    if (!tpls) throw new Error("内容既不是 API 格式工作流，也不是 momo 模板/模板包");
+    for (const t of tpls) upsert(t);
+    return { drafted: false, saved: tpls.length };
+  };
+
+  const importText = (text: string, nameHint = "粘贴的工作流") => {
+    try {
+      const r = routeImport(JSON.parse(text), nameHint);
+      if (r.saved) toast(`已导入 ${r.saved} 个模板 ✓`, "ok");
+      else toast("已读取工作流：勾选要暴露的参数后保存即可", "ok");
+    } catch (e) {
+      toast(`导入失败：${errMsg(e)}`, "err");
+    }
+  };
+
+  /** 文件导入：单个原始工作流走编辑器；多选一律自动建模板（批量） */
+  const importFiles = async (files: Iterable<File>) => {
+    const list = Array.from(files);
+    if (!list.length) return;
+    if (list.length === 1) {
+      try {
+        routeImportFile(list[0]);
+      } catch {
+        /* routeImportFile 内部已 toast */
+      }
+      return;
+    }
+    const { saved, errs } = await importTemplateFilesAuto(list);
+    if (saved) toast(`批量导入完成：${saved} 个模板 ✓（原始工作流已自动暴露常用参数，可再进编辑微调）`, "ok");
+    if (errs.length) toast(`${errs.length} 个文件失败：${errs[0]}`, "err");
+  };
+
+  const routeImportFile = (f: File) => {
+    void f.text().then(
+      (text) => importText(text, f.name.replace(/\.json$/i, "")),
+      (e) => toast(`读取文件失败：${errMsg(e)}`, "err"),
+    );
+  };
+
+  /* 列表视图下 Ctrl+V 直接粘贴导入 */
+  useEffect(() => {
+    if (!open || draft) return;
+    const onPaste = (e: ClipboardEvent) => {
+      const el = document.activeElement as HTMLElement | null;
+      if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable)) return;
+      const text = e.clipboardData?.getData("text")?.trim();
+      if (text) {
+        e.stopPropagation();
+        importText(text);
+      }
+    };
+    window.addEventListener("paste", onPaste, true);
+    return () => window.removeEventListener("paste", onPaste, true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, draft]);
 
   if (!open) return null;
 
-  const importFile = async (f?: File | null) => {
-    if (!f) return;
-    try {
-      const json = JSON.parse(await f.text());
-      if (!isApiWorkflow(json)) {
-        toast("这不是 API 格式的工作流：请在 ComfyUI 中用「导出(API)」保存后再导入", "err");
-        return;
-      }
-      const inputs = listWorkflowInputs(json);
-      setDraft({
-        id: uid(8),
-        name: f.name.replace(/\.json$/i, ""),
-        workflow: json,
-        outputNodeId: guessOutputNode(json),
-        expose: autoExpose(inputs),
-      });
-    } catch {
-      toast("JSON 解析失败，请检查文件内容", "err");
-    }
+  const exportAll = async () => {
+    if (!templates.length) return toast("还没有模板可导出", "err");
+    if (await saveTextFile("momo-comfy-templates.json", packTemplates(templates)))
+      toast(`已导出全部 ${templates.length} 个模板 ✓`, "ok");
   };
 
   const saveDraft = () => {
@@ -79,21 +138,7 @@ export function TemplateManager() {
       toast("请给模板起个名字", "err");
       return;
     }
-    const inputs = listWorkflowInputs(draft.workflow);
-    const params: ComfyExposedParam[] = [];
-    for (const i of inputs) {
-      const key = `${i.nodeId}.${i.input}`;
-      const ex = draft.expose[key];
-      if (!ex) continue;
-      params.push({
-        key,
-        nodeId: i.nodeId,
-        input: i.input,
-        label: ex.label || `${i.nodeTitle} · ${i.input}`,
-        kind: ex.kind,
-        value: i.value as string | number | boolean,
-      });
-    }
+    const params = paramsFromExpose(draft.workflow, draft.expose);
     upsert({
       id: draft.id,
       name: draft.name.trim(),
@@ -121,30 +166,63 @@ export function TemplateManager() {
       }
     >
       {!draft ? (
-        <>
-          <Row style={{ marginBottom: 16 }}>
+        <div
+          className={`tpl-drop ${dragOver ? "on" : ""}`}
+          onDragOver={(e) => {
+            e.preventDefault();
+            setDragOver(true);
+          }}
+          onDragLeave={() => setDragOver(false)}
+          onDrop={(e) => {
+            e.preventDefault();
+            setDragOver(false);
+            if (e.dataTransfer.files.length) void importFiles(e.dataTransfer.files);
+            else {
+              const t = e.dataTransfer.getData("text/plain")?.trim();
+              if (t) importText(t, "拖入的工作流");
+            }
+          }}
+        >
+          <Row style={{ marginBottom: 10, flexWrap: "wrap" }}>
             <button className="btn primary" onClick={() => fileRef.current?.click()}>
-              <IcUpload size={16} /> 导入工作流（API 格式 JSON）
+              <IcUpload size={16} /> 导入工作流 / 模板（可多选）
             </button>
-            <span style={{ fontSize: "var(--fs-sm)", color: "var(--text-3)" }}>
-              ComfyUI 菜单 → 工作流 → 导出（API）
-            </span>
+            <button
+              className="btn"
+              title="读取剪贴板里的 JSON 导入；直接按 Ctrl+V 也可以"
+              onClick={() =>
+                navigator.clipboard
+                  .readText()
+                  .then((t) => (t.trim() ? importText(t) : toast("剪贴板是空的", "err")))
+                  .catch(() => toast("读取剪贴板失败——直接按 Ctrl+V 粘贴也可以", "err"))
+              }
+            >
+              粘贴导入
+            </button>
+            <button className="btn" title="把全部模板导出为一个模板包 JSON，可在其他设备导入恢复" onClick={() => void exportAll()}>
+              <IcDownload size={15} /> 全部导出
+            </button>
             <input
               ref={fileRef}
               type="file"
               accept=".json,application/json"
+              multiple
               hidden
               onChange={(e) => {
-                void importFile(e.target.files?.[0]);
+                if (e.target.files?.length) void importFiles(e.target.files);
                 e.target.value = "";
               }}
             />
           </Row>
+          <p className="sec-desc" style={{ marginBottom: 14 }}>
+            支持：ComfyUI「导出（API）」的工作流 JSON（文件/拖入/粘贴均可）· momo 模板/模板包 JSON。
+            多选文件批量导入时会自动暴露提示词/种子/图片等常用参数，之后可再进编辑微调。
+          </p>
           {templates.length === 0 ? (
             <div style={{ textAlign: "center", color: "var(--text-3)", padding: "48px 0", lineHeight: 2 }}>
               <IcFlow size={36} />
               <br />
-              还没有模板，导入一个工作流开始吧
+              还没有模板：导入 / 拖入 / 粘贴一个工作流开始吧
             </div>
           ) : (
             templates.map((t) => (
@@ -162,6 +240,17 @@ export function TemplateManager() {
                   <IcEdit size={17} />
                 </button>
                 <button
+                  className="icon-btn"
+                  title="导出该模板（含参数配置，可再导入）"
+                  onClick={() =>
+                    void saveTextFile(`${t.name}.momo-tpl.json`, packTemplates([t])).then(
+                      (ok) => ok && toast(`模板「${t.name}」已导出 ✓`, "ok"),
+                    )
+                  }
+                >
+                  <IcDownload size={17} />
+                </button>
+                <button
                   className={`icon-btn danger`}
                   title={confirmDel === t.id ? "再点一次确认删除" : "删除模板"}
                   style={confirmDel === t.id ? { color: "var(--danger)", background: "rgba(242,79,106,.12)" } : undefined}
@@ -177,7 +266,7 @@ export function TemplateManager() {
               </div>
             ))
           )}
-        </>
+        </div>
       ) : (
         <TemplateEditor draft={draft} setDraft={setDraft} />
       )}

@@ -2,7 +2,7 @@
  * 图片/视频保存服务 — 依据「设置 → 图片保存」写入磁盘
  */
 import type { SaveCfg } from "../types";
-import { buildFilename, convertImage, dataUrlToBytes, isTauri, toDataUrl } from "../utils";
+import { buildFilename, convertImage, dataUrlToBytes, imageSizeMeta, isTauri, toDataUrl, type FilenameMeta } from "../utils";
 import { xfetch } from "./http";
 
 export type SaveMeta = { prompt?: string; model?: string; seed?: string | number };
@@ -11,22 +11,30 @@ async function ensureDataUrl(src: string): Promise<string> {
   return toDataUrl(src, (u, i) => xfetch(u as string, i));
 }
 
-/** 自动保存（需已设置保存目录）；返回完整路径 */
+/** 自动保存（需已设置保存目录）；返回完整路径。{n} 序号同前缀依次递增 */
 export async function autoSaveImage(src: string, cfg: SaveCfg, meta: SaveMeta = {}): Promise<string> {
   if (!isTauri) throw new Error("浏览器预览模式不支持写盘保存");
   if (!cfg.dir) throw new Error("请先在「设置 → 图片保存」中选择保存文件夹");
   const { writeFile, mkdir, exists } = await import("@tauri-apps/plugin-fs");
   if (!(await exists(cfg.dir))) await mkdir(cfg.dir, { recursive: true });
   const dataUrl = await convertImage(await ensureDataUrl(src), cfg.format);
+  const full: FilenameMeta = { ...meta, ...(await imageSizeMeta(dataUrl)) };
   const ext = cfg.format === "jpeg" ? "jpg" : cfg.format;
-  let name = `${buildFilename(cfg.pattern, meta)}.${ext}`;
-  let full = `${cfg.dir}\\${name}`;
-  for (let i = 2; await exists(full); i++) {
-    name = `${buildFilename(cfg.pattern, meta)}_${i}.${ext}`;
-    full = `${cfg.dir}\\${name}`;
+  let path = "";
+  if (cfg.pattern.includes("{n}")) {
+    // 显式序号：同前缀找到第一个不存在的编号
+    for (let i = 1; ; i++) {
+      path = `${cfg.dir}\\${buildFilename(cfg.pattern, { ...full, n: i })}.${ext}`;
+      if (!(await exists(path))) break;
+    }
+  } else {
+    path = `${cfg.dir}\\${buildFilename(cfg.pattern, full)}.${ext}`;
+    for (let i = 2; await exists(path); i++) {
+      path = `${cfg.dir}\\${buildFilename(cfg.pattern, full)}_${i}.${ext}`;
+    }
   }
-  await writeFile(full, dataUrlToBytes(dataUrl));
-  return full;
+  await writeFile(path, dataUrlToBytes(dataUrl));
+  return path;
 }
 
 /** 手动另存为（弹出系统保存框）；返回路径，取消返回 null */

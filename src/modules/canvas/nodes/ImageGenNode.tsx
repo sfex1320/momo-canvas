@@ -6,9 +6,10 @@ import { useBoard } from "../../../core/stores/boardStore";
 import { resolveModelCard, useSettings } from "../../../core/stores/settingsStore";
 import { imageFamily } from "../../../core/modelMeta";
 import { toast, useUi } from "../../../core/stores/uiStore";
-import { runImageGen } from "../../../core/runner";
+import { collectUpstream, runFlow } from "../../../core/runner";
 import { saveImageAs } from "../../../core/services/imageSaver";
 import { errMsg } from "../../../core/utils";
+import { Thumb } from "../../../ui/Thumb";
 import type { ImageGenData } from "../../../core/types";
 
 export const ImageGenNode = memo(function ImageGenNode({ id, data, selected }: NodeProps) {
@@ -16,6 +17,8 @@ export const ImageGenNode = memo(function ImageGenNode({ id, data, selected }: N
   const upd = useBoard((s) => s.updateData);
   const models = useSettings((s) => s.settings.models);
   const setLightbox = useUi((s) => s.setLightbox);
+  // 上游已接入文本 → 提示词框隐藏（运行时自动取上游；节点里已手写的提示词优先级更高，保留显示）
+  const hasUpText = useBoard(() => collectUpstream(id).texts.length > 0);
   const running = d.status === "running";
   const main = d.results?.[d.picked ?? 0];
 
@@ -74,18 +77,20 @@ export const ImageGenNode = memo(function ImageGenNode({ id, data, selected }: N
       }
     >
       <div className="mnode-body">
-        <textarea
-          className="textarea nodrag nowheel"
-          rows={3}
-          placeholder="提示词（留空则自动使用上游提示词/对话结果）"
-          value={d.prompt}
-          onChange={(e) => upd(id, { prompt: e.target.value })}
-        />
+        {hasUpText && !(d.prompt ?? "").trim() ? null : (
+          <textarea
+            className="textarea nodrag nowheel"
+            rows={3}
+            placeholder="提示词（留空则自动使用上游提示词/对话结果）"
+            value={d.prompt}
+            onChange={(e) => upd(id, { prompt: e.target.value })}
+          />
+        )}
         <div className="gen-sum nodrag" title="选中节点后，在画布左下角的「生成设置」面板中调整模型/尺寸/数量">
           <IcGear size={13} />
           <span>{summary}</span>
         </div>
-        <button className="btn primary nodrag" disabled={running} onClick={() => void runImageGen(id)}>
+        <button className="btn primary nodrag" disabled={running} onClick={() => void runFlow(id)}>
           {running ? <IcLoading size={17} /> : <IcSparkles size={17} />}
           {running ? "生成中…" : "生成"}
         </button>
@@ -95,11 +100,11 @@ export const ImageGenNode = memo(function ImageGenNode({ id, data, selected }: N
           </div>
         ) : main ? (
           <>
-            <img className="img-main nodrag" src={main} alt="" onClick={() => setLightbox(main)} />
+            <Thumb className="img-main nodrag" src={main} alt="" res onClick={() => setLightbox(main)} />
             {d.results.length > 1 ? (
               <div className="thumbs nodrag">
                 {d.results.map((s, i) => (
-                  <img
+                  <Thumb
                     key={i}
                     src={s}
                     className={i === (d.picked ?? 0) ? "on" : ""}

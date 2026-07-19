@@ -43,6 +43,24 @@ export function extFromMime(mime: string): string {
   return map[mime.split(";")[0]] ?? "bin";
 }
 
+/** 按文件头魔数识别真实格式 —— 中转站常返回 application/octet-stream，不能只信 mime */
+export function sniffExt(bytes: Uint8Array): string | null {
+  const at = (i: number, ...sig: number[]) => sig.every((b, k) => bytes[i + k] === b);
+  if (at(0, 0x89, 0x50, 0x4e, 0x47)) return "png";
+  if (at(0, 0xff, 0xd8, 0xff)) return "jpg";
+  if (at(0, 0x47, 0x49, 0x46, 0x38)) return "gif";
+  if (at(0, 0x52, 0x49, 0x46, 0x46) && at(8, 0x57, 0x45, 0x42, 0x50)) return "webp"; // RIFF....WEBP
+  if (at(0, 0x52, 0x49, 0x46, 0x46) && at(8, 0x57, 0x41, 0x56, 0x45)) return "wav"; // RIFF....WAVE
+  if (at(0, 0x42, 0x4d)) return "bmp";
+  if (at(0, 0x25, 0x50, 0x44, 0x46)) return "pdf"; // %PDF
+  if (at(4, 0x66, 0x74, 0x79, 0x70)) return "mp4"; // ....ftyp（mp4/mov 家族按 mp4 处理）
+  if (at(0, 0x1a, 0x45, 0xdf, 0xa3)) return "webm";
+  if (at(0, 0x49, 0x44, 0x33) || at(0, 0xff, 0xfb)) return "mp3";
+  if (at(0, 0x4f, 0x67, 0x67, 0x53)) return "ogg";
+  if (at(0, 0x66, 0x4c, 0x61, 0x43)) return "flac";
+  return null;
+}
+
 /* ---------------- 磁盘目录 ---------------- */
 let assetsDirCache: string | null = null;
 
@@ -196,4 +214,23 @@ export async function deleteAssetFile(path: string, thumb?: string) {
 export function assetUrl(path: string): string {
   if (!isTauri || path.startsWith("blob:") || path.startsWith("data:") || path.startsWith("http")) return path;
   return convertFileSrc(path);
+}
+
+/** 资产文件 → dataURL（拖入画布建图片节点用；节点 src 全程按 dataURL 约定） */
+export async function assetToDataUrl(path: string, mime?: string): Promise<string> {
+  if (path.startsWith("data:")) return path;
+  let blob: Blob;
+  if (isTauri && !path.startsWith("blob:") && !path.startsWith("http")) {
+    const { readFile } = await import("@tauri-apps/plugin-fs");
+    const bytes = await readFile(path);
+    blob = new Blob([new Uint8Array(bytes)], { type: mime ?? mimeFromExt(path.split(".").pop() ?? "") });
+  } else {
+    blob = await (await fetch(path)).blob();
+  }
+  return await new Promise<string>((res, rej) => {
+    const r = new FileReader();
+    r.onload = () => res(r.result as string);
+    r.onerror = () => rej(new Error("读取资产文件失败"));
+    r.readAsDataURL(blob);
+  });
 }

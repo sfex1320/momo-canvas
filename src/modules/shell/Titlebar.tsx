@@ -3,24 +3,31 @@
  */
 import { useEffect, useRef, useState } from "react";
 import { useBoard } from "../../core/stores/boardStore";
-import { useSettings } from "../../core/stores/settingsStore";
-import { useUi } from "../../core/stores/uiStore";
+import { resolveModelCard, useSettings } from "../../core/stores/settingsStore";
+import { toast, useUi, type ErrLogItem } from "../../core/stores/uiStore";
 import { useAssets } from "../../core/stores/assetStore";
-import { isTauri } from "../../core/utils";
+import { chatStream } from "../../core/services/llm";
+import { ERR_ANALYZE_SYSTEM, buildErrContext, extractProtocolFix } from "../../core/errorHelp";
+import { errMsg, isTauri } from "../../core/utils";
 import {
+  IcBell,
+  IcCheck,
   IcClose,
   IcGallery,
   IcGear,
   IcHistory,
   IcLibrary,
+  IcLoading,
   IcLogo,
   IcMax,
   IcMin,
   IcMoon,
   IcPlus,
   IcRestore,
+  IcSparkles,
   IcSun,
   IcTrash,
+  IcUsers,
 } from "../../ui/icons";
 
 function useWindowControls() {
@@ -131,31 +138,149 @@ function BoardTabs() {
       </button>
       {histOpen ? (
         <div className="board-pop glass">
+          <div className="bp-title">画布历史 · 除非手动删除，永久保留</div>
           {histList.length === 0 ? (
             <div className="brow" style={{ color: "var(--text-3)", cursor: "default" }}>
               暂无历史画布——关闭标签后会收进这里
             </div>
           ) : (
-            histList.map((b) => (
-              <div key={b.meta.id} className="brow" onClick={() => { restoreBoard(b.meta.id); setHistOpen(false); }}>
-                <span className="bn">
-                  {b.meta.name}
-                  <span style={{ color: "var(--text-3)", fontWeight: 500, fontSize: 11.5, marginLeft: 7 }}>
-                    {new Date(b.meta.updatedAt).toLocaleDateString()} · {b.nodes.length} 节点
-                  </span>
-                </span>
-                <button
-                  className="icon-btn danger"
-                  title="彻底删除（不可恢复）"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    purgeBoard(b.meta.id);
+            <div className="bp-grid">
+              {histList.map((b) => (
+                <div
+                  key={b.meta.id}
+                  className="bcard"
+                  title="点击恢复该画布"
+                  onClick={() => {
+                    restoreBoard(b.meta.id);
+                    setHistOpen(false);
                   }}
                 >
-                  <IcTrash size={15} />
-                </button>
-              </div>
-            ))
+                  <span className="bc-ic">
+                    <IcHistory size={18} />
+                  </span>
+                  <b>{b.meta.name}</b>
+                  <span className="bc-meta">
+                    {new Date(b.meta.updatedAt).toLocaleDateString()} · {b.nodes.length} 节点
+                  </span>
+                  <button
+                    className="icon-btn danger bc-del"
+                    title="彻底删除（不可恢复）"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      purgeBoard(b.meta.id);
+                    }}
+                  >
+                    <IcTrash size={14} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/** 报错中心：铃铛按钮 + 历史报错弹层（每条可让 AI 分析并给方案，协议配置类问题可一键应用修复） */
+function ErrCenter() {
+  const errlog = useUi((s) => s.errlog);
+  const open = useUi((s) => s.errlogOpen);
+  const unread = useUi((s) => s.errlogUnread);
+  const setOpen = useUi((s) => s.setErrlogOpen);
+  const clear = useUi((s) => s.clearErrlog);
+  const ref = useRef<HTMLDivElement>(null);
+  /** AI 分析状态：报错条目 id → 流式结果 */
+  const [ana, setAna] = useState<Record<string, { busy: boolean; text: string }>>({});
+
+  const analyze = async (e: ErrLogItem) => {
+    setAna((s) => ({ ...s, [e.id]: { busy: true, text: "" } }));
+    try {
+      const card = resolveModelCard("chat");
+      const user = `报错来源：${e.source}\n报错内容：\n${e.message}\n\n当前配置上下文（不含密钥）：\n${buildErrContext()}`;
+      const { text } = await chatStream(card, [{ role: "user", text: user }], {
+        system: ERR_ANALYZE_SYSTEM,
+        onText: (full) => setAna((s) => ({ ...s, [e.id]: { busy: true, text: full } })),
+      });
+      setAna((s) => ({ ...s, [e.id]: { busy: false, text } }));
+    } catch (err) {
+      setAna((s) => ({ ...s, [e.id]: { busy: false, text: `分析失败：${errMsg(err)}` } }));
+    }
+  };
+
+  const applyFix = (text: string) => {
+    const fix = extractProtocolFix(text);
+    if (!fix) return;
+    const st = useSettings.getState();
+    st.update("customProtocols", [...st.settings.customProtocols.filter((x) => x.id !== fix.id), fix]);
+    toast(`已应用协议修复：「${fix.name}」，重新运行节点即可`, "ok");
+  };
+
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: MouseEvent) => {
+      if (!ref.current?.contains(e.target as Node)) setOpen(false);
+    };
+    window.addEventListener("mousedown", onDown);
+    return () => window.removeEventListener("mousedown", onDown);
+  }, [open, setOpen]);
+
+  return (
+    <div className="err-center" ref={ref}>
+      <button
+        className={`icon-btn ${open ? "on" : ""}`}
+        title={`报错中心${errlog.length ? `（${errlog.length} 条）` : "：暂无报错"}`}
+        onClick={() => setOpen(!open)}
+      >
+        <IcBell size={19} />
+        {unread ? <i className="err-badge">{unread > 9 ? "9+" : unread}</i> : null}
+      </button>
+      {open ? (
+        <div className="err-pop glass">
+          <div className="ep-head">
+            <b>报错历史</b>
+            <span style={{ flex: 1 }} />
+            {errlog.length ? (
+              <button className="btn sm" onClick={clear}>
+                清空
+              </button>
+            ) : null}
+          </div>
+          {errlog.length === 0 ? (
+            <div className="ep-empty">暂无报错记录——任务出错时会收进这里</div>
+          ) : (
+            <div className="ep-list">
+              {errlog.map((e) => {
+                const a = ana[e.id];
+                const fix = a && !a.busy ? extractProtocolFix(a.text) : null;
+                return (
+                  <div key={e.id} className="ep-item">
+                    <div className="ep-meta">
+                      <span className="ep-src">{e.source}</span>
+                      <span className="ep-time">
+                        {new Date(e.time).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
+                      </span>
+                      <button
+                        className="btn sm"
+                        style={{ minHeight: 24, padding: "1px 8px" }}
+                        title="让你配置的默认对话模型分析报错原因并给出解决方案；协议配置类问题可一键修复"
+                        disabled={a?.busy}
+                        onClick={() => void analyze(e)}
+                      >
+                        {a?.busy ? <IcLoading size={13} /> : <IcSparkles size={13} />} AI 分析
+                      </button>
+                    </div>
+                    <div className="ep-msg">{e.message}</div>
+                    {a?.text ? <div className="ep-ana">{a.text}</div> : null}
+                    {fix ? (
+                      <button className="btn sm primary" style={{ marginTop: 6 }} onClick={() => applyFix(a!.text)}>
+                        <IcCheck size={14} /> 一键应用协议修复（{fix.name}）
+                      </button>
+                    ) : null}
+                  </div>
+                );
+              })}
+            </div>
           )}
         </div>
       ) : null}
@@ -172,6 +297,8 @@ export function Titlebar() {
   const galleryCount = useUi((s) => s.gallery.length);
   const libOpen = useAssets((s) => s.open);
   const setLibOpen = useAssets((s) => s.setOpen);
+  const charLibOpen = useUi((s) => s.charLibOpen);
+  const setCharLibOpen = useUi((s) => s.setCharLibOpen);
   const { maximized, call } = useWindowControls();
 
   return (
@@ -184,6 +311,14 @@ export function Titlebar() {
       </div>
       <BoardTabs />
       <div className="spacer" data-tauri-drag-region />
+      <ErrCenter />
+      <button
+        className={`icon-btn ${charLibOpen ? "on" : ""}`}
+        title="角色库：内置人物预设，一键生成整套角色素材"
+        onClick={() => setCharLibOpen(!charLibOpen)}
+      >
+        <IcUsers size={19} />
+      </button>
       <button className={`icon-btn ${libOpen ? "on" : ""}`} title="资产库" onClick={() => setLibOpen(!libOpen)}>
         <IcLibrary size={19} />
       </button>

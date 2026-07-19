@@ -1,14 +1,64 @@
 /**
  * 资产库 — 独立模块
- *  自动收录画布生成内容 + 手动导入；分类 / 文件夹 / 筛选 / 批量操作；
- *  图片、视频、音频、PDF 原生预览
+ *  自动收录画布生成内容 + 手动导入；分类 / 文件夹 / 标签 / 筛选 / 批量操作；
+ *  图片、视频、音频、PDF 原生预览；
+ *  卡片拖拽（Tauri 下走 OS 原生拖拽）：可落到画布（变图片节点）、右侧快捷栏、资源管理器、第三方软件；
+ *  右键卡片有快捷菜单（放入画布 / 发送到快捷方式 / 打开位置 / 另存为 / 删除）
  */
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useReactFlow } from "@xyflow/react";
 import { useAssets } from "../../core/stores/assetStore";
+import { useBoard } from "../../core/stores/boardStore";
+import { useSettings } from "../../core/stores/settingsStore";
 import { toast } from "../../core/stores/uiStore";
-import { assetUrl } from "../../core/services/assetFiles";
+import { assetToDataUrl, assetUrl } from "../../core/services/assetFiles";
 import { errMsg, isTauri } from "../../core/utils";
+import { ShortcutBar, sendAsset } from "./ShortcutBar";
+import { getNativeDragAsset, setNativeDragAsset } from "./dragState";
 import type { AssetItem, AssetKind } from "../../core/types";
+
+/** 原生 OS 拖拽（Tauri 默认）：同一次拖拽可落到画布/快捷栏/资源管理器/第三方软件 */
+async function nativeDragOut(it: AssetItem) {
+  try {
+    const { startDrag } = await import("@crabnebula/tauri-plugin-drag");
+    await startDrag({ item: [it.path], icon: it.thumb || it.path });
+  } catch (e) {
+    toast(`拖出失败：${errMsg(e)}`, "err");
+  }
+}
+
+/** 另存为（预览层与右键菜单共用） */
+async function saveAsAsset(item: AssetItem) {
+  try {
+    if (!isTauri) {
+      const a = document.createElement("a");
+      a.href = assetUrl(item.path);
+      a.download = item.name;
+      a.click();
+      return;
+    }
+    const ext = item.path.split(".").pop() ?? "bin";
+    const { save } = await import("@tauri-apps/plugin-dialog");
+    const dest = await save({ defaultPath: `${item.name}.${ext}` });
+    if (!dest) return;
+    const { copyFile } = await import("@tauri-apps/plugin-fs");
+    await copyFile(item.path, dest);
+    toast(`已保存 → ${dest}`, "ok");
+  } catch (e) {
+    toast(errMsg(e), "err");
+  }
+}
+
+/** 打开文件位置（预览层与右键菜单共用） */
+async function revealAsset(item: AssetItem) {
+  if (!isTauri) return;
+  try {
+    const { revealItemInDir } = await import("@tauri-apps/plugin-opener");
+    await revealItemInDir(item.path);
+  } catch (e) {
+    toast(errMsg(e), "err");
+  }
+}
 import {
   IcArrowL,
   IcArrowR,
@@ -25,6 +75,7 @@ import {
   IcLibrary,
   IcMusic,
   IcSearch,
+  IcTag,
   IcTrash,
   IcUpload,
   IcVideo,
@@ -65,31 +116,72 @@ export function AssetLibrary() {
   const createFolder = useAssets((s) => s.createFolder);
   const renameFolder = useAssets((s) => s.renameFolder);
   const deleteFolder = useAssets((s) => s.deleteFolder);
+  const addTagMany = useAssets((s) => s.addTagMany);
 
   const [kind, setKind] = useState<AssetKind | "all">("all");
   const [folderId, setFolderId] = useState<string | "all">("all");
+  const [tagFilter, setTagFilter] = useState<string | null>(null);
   const [keyword, setKeyword] = useState("");
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [previewIdx, setPreviewIdx] = useState<number | null>(null);
   const [confirmDel, setConfirmDel] = useState(false);
   const [editingFolder, setEditingFolder] = useState<string | null>(null);
+  const [batchTag, setBatchTag] = useState("");
+  /** 拖卡片且指针已移出面板区域：资产库隐身让位（快捷栏保留可落） */
+  const [dragOut, setDragOut] = useState(false);
+  /** 右键菜单：屏幕坐标 + 目标资产 */
+  const [cardMenu, setCardMenu] = useState<{ x: number; y: number; id: string } | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+  const dragTrackStop = useRef<(() => void) | null>(null);
+
+  /** 拖拽期间跟踪指针：留在面板内保持完整可见（方便拖到右侧快捷栏），移出面板才隐身露出画布 */
+  const trackDragOut = () => {
+    const onOver = (e: DragEvent) => {
+      const r = panelRef.current?.getBoundingClientRect();
+      if (!r) return;
+      const inside = e.clientX >= r.left && e.clientX <= r.right && e.clientY >= r.top && e.clientY <= r.bottom;
+      setDragOut(!inside);
+    };
+    window.addEventListener("dragover", onOver);
+    dragTrackStop.current = () => {
+      window.removeEventListener("dragover", onOver);
+      dragTrackStop.current = null;
+      setDragOut(false);
+    };
+  };
+  const endDragTrack = () => dragTrackStop.current?.();
+  useEffect(() => () => dragTrackStop.current?.(), []);
 
   const filtered = useMemo(() => {
     const kw = keyword.trim().toLowerCase();
     return items.filter((i) => {
       if (kind !== "all" && i.kind !== kind) return false;
       if (folderId !== "all" && i.folderId !== folderId) return false;
-      if (kw && !`${i.name} ${i.prompt ?? ""} ${i.model ?? ""}`.toLowerCase().includes(kw)) return false;
+      if (tagFilter && !(i.tags ?? []).includes(tagFilter)) return false;
+      if (kw && !`${i.name} ${i.prompt ?? ""} ${i.model ?? ""} ${(i.tags ?? []).join(" ")}`.toLowerCase().includes(kw))
+        return false;
       return true;
     });
-  }, [items, kind, folderId, keyword]);
+  }, [items, kind, folderId, tagFilter, keyword]);
 
   const counts = useMemo(() => {
     const c: Record<string, number> = { all: items.length };
     for (const i of items) c[i.kind] = (c[i.kind] ?? 0) + 1;
     return c;
   }, [items]);
+
+  /** 全部标签 → 出现次数（按次数降序） */
+  const allTags = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const i of items) for (const t of i.tags ?? []) m.set(t, (m.get(t) ?? 0) + 1);
+    return [...m.entries()].sort((a, b) => b[1] - a[1]);
+  }, [items]);
+
+  /* 筛选中的标签被删光后自动复位 */
+  useEffect(() => {
+    if (tagFilter && !allTags.some(([t]) => t === tagFilter)) setTagFilter(null);
+  }, [tagFilter, allTags]);
 
   /* Esc 关闭 */
   useEffect(() => {
@@ -135,12 +227,18 @@ export function AssetLibrary() {
   const previewItem = previewIdx !== null ? filtered[previewIdx] : null;
 
   return (
-    <div className="assetlib-mask" onMouseDown={(e) => e.target === e.currentTarget && setOpen(false)}>
+    <div
+      className={`assetlib-mask ${dragOut ? "drag-out" : ""}`}
+      onMouseDown={(e) => e.target === e.currentTarget && setOpen(false)}
+    >
       <div
+        ref={panelRef}
         className={`assetlib ${selected.size ? "selecting" : ""}`}
         onDragOver={(e) => e.preventDefault()}
         onDrop={(e) => {
           e.preventDefault();
+          // 拖的是库里自己的资产（原生拖拽落回面板）→ 不是导入外部文件，忽略
+          if (getNativeDragAsset()) return;
           const files = Array.from(e.dataTransfer.files ?? []);
           if (files.length) void importFiles(files);
         }}
@@ -228,6 +326,23 @@ export function AssetLibrary() {
             <IcFolderPlus size={17} />
             新建文件夹
           </button>
+          {allTags.length ? (
+            <>
+              <div className="side-sec">标签</div>
+              {allTags.map(([t, n]) => (
+                <button
+                  key={t}
+                  className={`side-item ${tagFilter === t ? "on" : ""}`}
+                  title={tagFilter === t ? "再点一次取消筛选" : `筛选标签「${t}」`}
+                  onClick={() => setTagFilter(tagFilter === t ? null : t)}
+                >
+                  <IcTag size={16} />
+                  <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{t}</span>
+                  <span className="cnt">{n}</span>
+                </button>
+              ))}
+            </>
+          ) : null}
         </div>
 
         {/* 主区 */}
@@ -295,7 +410,35 @@ export function AssetLibrary() {
                 <div
                   key={it.id}
                   className={`a-card ${selected.has(it.id) ? "sel" : ""}`}
-                  title={it.prompt || it.name}
+                  title={`${it.prompt || it.name}\n拖拽：落到画布 = 图片节点 · 右侧快捷栏 = 发送 · 资源管理器/第三方软件 = 拖出文件\n右键：更多操作`}
+                  draggable
+                  onDragStart={(e) => {
+                    if (isTauri) {
+                      // 原生拖拽：一次拖拽通吃画布 / 快捷栏 / 资源管理器 / 第三方软件
+                      e.preventDefault();
+                      setNativeDragAsset(it.id);
+                      trackDragOut();
+                      void nativeDragOut(it).finally(() => {
+                        setNativeDragAsset(null);
+                        endDragTrack();
+                      });
+                      return;
+                    }
+                    // 浏览器预览：HTML5 拖拽（画布/快捷栏）
+                    e.dataTransfer.setData("momo/asset-id", it.id);
+                    e.dataTransfer.effectAllowed = "copy";
+                    trackDragOut();
+                  }}
+                  onDragEnd={(e) => {
+                    endDragTrack();
+                    // 成功落到画布上就顺手关掉资产库，让用户看到新节点
+                    if (e.dataTransfer.dropEffect !== "none") setOpen(false);
+                  }}
+                  onContextMenu={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    setCardMenu({ x: e.clientX, y: e.clientY, id: it.id });
+                  }}
                   onClick={() => {
                     if (selected.size) toggleSel(it.id);
                     else setPreviewIdx(idx);
@@ -353,6 +496,29 @@ export function AssetLibrary() {
                   </option>
                 ))}
               </select>
+              <div className="batch-tag">
+                <IcTag size={15} />
+                <input
+                  className="input"
+                  style={{ minHeight: 34, width: 130 }}
+                  placeholder="打标签，回车确认"
+                  value={batchTag}
+                  list="al-tag-options"
+                  onChange={(e) => setBatchTag(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && batchTag.trim()) {
+                      addTagMany([...selected], batchTag);
+                      toast(`已为 ${selected.size} 项加上标签「${batchTag.trim()}」`, "ok");
+                      setBatchTag("");
+                    }
+                  }}
+                />
+                <datalist id="al-tag-options">
+                  {allTags.map(([t]) => (
+                    <option key={t} value={t} />
+                  ))}
+                </datalist>
+              </div>
               <button className={`btn sm ${confirmDel ? "primary" : "danger"}`} onClick={() => void batchDelete()}>
                 <IcTrash size={15} /> {confirmDel ? "再点一次确认删除" : "批量删除"}
               </button>
@@ -363,7 +529,15 @@ export function AssetLibrary() {
             </div>
           ) : null}
         </div>
+        <ShortcutBar />
       </div>
+
+      {cardMenu
+        ? (() => {
+            const it = items.find((x) => x.id === cardMenu.id);
+            return it ? <CardMenu item={it} x={cardMenu.x} y={cardMenu.y} onClose={() => setCardMenu(null)} /> : null;
+          })()
+        : null}
 
       {previewItem ? (
         <AssetPreview
@@ -381,6 +555,152 @@ export function AssetLibrary() {
         />
       ) : null}
     </div>
+  );
+}
+
+/* ---------------- 卡片右键菜单 ---------------- */
+function CardMenu({ item, x, y, onClose }: { item: AssetItem; x: number; y: number; onClose: () => void }) {
+  const { screenToFlowPosition } = useReactFlow();
+  const addNode = useBoard((s) => s.addNode);
+  const setOpen = useAssets((s) => s.setOpen);
+  const removeMany = useAssets((s) => s.removeMany);
+  const shortcuts = useSettings((s) => s.settings.shortcuts);
+  const [confirmDel, setConfirmDel] = useState(false);
+
+  const left = Math.min(x, window.innerWidth - 250);
+  const top = Math.min(y, window.innerHeight - 320);
+  const centerPos = () =>
+    screenToFlowPosition({ x: window.innerWidth / 2 - 140, y: window.innerHeight / 2 - 120 });
+
+  const toCanvasImage = async () => {
+    onClose();
+    try {
+      const src = await assetToDataUrl(item.path, item.mime);
+      addNode("image", centerPos(), { src, name: item.name, status: "done" });
+      setOpen(false);
+      toast("已放入画布：图片节点", "ok");
+    } catch (e) {
+      toast(`读取资产失败：${errMsg(e)}`, "err");
+    }
+  };
+
+  const toCanvasPrompt = () => {
+    onClose();
+    addNode("prompt", centerPos(), { text: (item.prompt ?? "").trim() || item.name });
+    setOpen(false);
+    toast("已放入画布：提示词节点", "ok");
+  };
+
+  /** Remix：按资产记录的生成参数还原一个配置好的生成节点（提示词/模型/尺寸等） */
+  const toCanvasRemix = () => {
+    onClose();
+    const g = item.gen;
+    if (!g) return;
+    if (g.nodeKind === "videoGen") {
+      addNode("videoGen", centerPos(), { prompt: g.prompt ?? "", modelId: g.modelId, lang: g.lang });
+    } else {
+      addNode("imageGen", centerPos(), {
+        prompt: g.prompt ?? "",
+        modelId: g.modelId,
+        size: g.size ?? "default",
+        aspect: g.aspect,
+        resolution: g.resolution,
+        quality: g.quality,
+        width: g.width,
+        height: g.height,
+        lang: g.lang,
+        creativity: g.creativity,
+      });
+    }
+    setOpen(false);
+    toast("Remix：已还原生成节点与当时的参数，点「生成」即可复刻/续作", "ok");
+  };
+
+  return (
+    <>
+      <div
+        style={{ position: "fixed", inset: 0, zIndex: 490 }}
+        onMouseDown={onClose}
+        onContextMenu={(e) => {
+          e.preventDefault();
+          onClose();
+        }}
+      />
+      <div className="a-menu glass" style={{ left, top }}>
+        {item.kind === "image" ? (
+          <button className="am-row" onClick={() => void toCanvasImage()}>
+            作为图片节点放入画布
+          </button>
+        ) : null}
+        <button
+          className="am-row"
+          title={item.prompt ? "使用该资产记录的生成提示词" : "该资产没有提示词记录，将使用名称"}
+          onClick={toCanvasPrompt}
+        >
+          作为提示词节点放入画布
+        </button>
+        {item.gen ? (
+          <button
+            className="am-row"
+            title={`按生成时的参数还原节点：\n模型 ${item.gen.modelId ?? "默认"}\n${(item.gen.prompt ?? "").slice(0, 90)}`}
+            onClick={toCanvasRemix}
+          >
+            Remix：还原生成节点与参数
+          </button>
+        ) : null}
+        {isTauri && shortcuts.length ? (
+          <>
+            <div className="am-sep" />
+            {shortcuts.map((s) => (
+              <button
+                key={s.id}
+                className="am-row"
+                onClick={() => {
+                  onClose();
+                  void sendAsset(s, item);
+                }}
+              >
+                发送到「{s.name}」{s.kind === "folder" ? "（复制）" : "（打开）"}
+              </button>
+            ))}
+          </>
+        ) : null}
+        <div className="am-sep" />
+        {isTauri ? (
+          <button
+            className="am-row"
+            onClick={() => {
+              onClose();
+              void revealAsset(item);
+            }}
+          >
+            打开文件位置
+          </button>
+        ) : null}
+        <button
+          className="am-row"
+          onClick={() => {
+            onClose();
+            void saveAsAsset(item);
+          }}
+        >
+          另存为…
+        </button>
+        <button
+          className="am-row danger"
+          onClick={() => {
+            if (!confirmDel) {
+              setConfirmDel(true);
+              return;
+            }
+            onClose();
+            void removeMany([item.id]).then(() => toast("已删除（文件已从磁盘移除）", "ok"));
+          }}
+        >
+          {confirmDel ? "再点一次确认删除" : "删除资产"}
+        </button>
+      </div>
+    </>
   );
 }
 
@@ -403,39 +723,20 @@ function AssetPreview({
   onDelete: () => Promise<void>;
 }) {
   const rename = useAssets((s) => s.rename);
+  const setTags = useAssets((s) => s.setTags);
   const url = assetUrl(item.path);
   const [confirmDel, setConfirmDel] = useState(false);
-  useEffect(() => setConfirmDel(false), [item.id]);
+  const [tagInput, setTagInput] = useState("");
+  useEffect(() => {
+    setConfirmDel(false);
+    setTagInput("");
+  }, [item.id]);
 
-  const saveAs = async () => {
-    try {
-      if (!isTauri) {
-        const a = document.createElement("a");
-        a.href = url;
-        a.download = item.name;
-        a.click();
-        return;
-      }
-      const ext = item.path.split(".").pop() ?? "bin";
-      const { save } = await import("@tauri-apps/plugin-dialog");
-      const dest = await save({ defaultPath: `${item.name}.${ext}` });
-      if (!dest) return;
-      const { copyFile } = await import("@tauri-apps/plugin-fs");
-      await copyFile(item.path, dest);
-      toast(`已保存 → ${dest}`, "ok");
-    } catch (e) {
-      toast(errMsg(e), "err");
-    }
-  };
-
-  const reveal = async () => {
-    if (!isTauri) return;
-    try {
-      const { revealItemInDir } = await import("@tauri-apps/plugin-opener");
-      await revealItemInDir(item.path);
-    } catch (e) {
-      toast(errMsg(e), "err");
-    }
+  const addTag = () => {
+    const t = tagInput.trim();
+    if (!t) return;
+    setTags(item.id, [...(item.tags ?? []), t]);
+    setTagInput("");
   };
 
   return (
@@ -507,13 +808,35 @@ function AssetPreview({
           <span>来源</span>
           <span>{item.source === "canvas" ? "画布生成" : "手动导入"}</span>
         </div>
+        <div className="tag-editor">
+          {(item.tags ?? []).map((t) => (
+            <span key={t} className="tag-chip">
+              <IcTag size={12} />
+              {t}
+              <button
+                title="移除该标签"
+                onClick={() => setTags(item.id, (item.tags ?? []).filter((x) => x !== t))}
+              >
+                <IcClose size={11} />
+              </button>
+            </span>
+          ))}
+          <input
+            className="tag-add"
+            placeholder="+ 标签"
+            value={tagInput}
+            onChange={(e) => setTagInput(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && addTag()}
+            onBlur={addTag}
+          />
+        </div>
         {item.prompt ? <div className="prompt-box">{item.prompt}</div> : null}
         <div style={{ flex: 1 }} />
-        <button className="btn" onClick={() => void saveAs()}>
+        <button className="btn" onClick={() => void saveAsAsset(item)}>
           <IcDownload size={16} /> 另存为…
         </button>
         {isTauri ? (
-          <button className="btn" onClick={() => void reveal()}>
+          <button className="btn" onClick={() => void revealAsset(item)}>
             <IcFolder size={16} /> 打开文件位置
           </button>
         ) : null}

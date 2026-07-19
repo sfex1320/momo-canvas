@@ -6,7 +6,7 @@ import { ModelPicker } from "../../../ui/ModelPicker";
 import { useBoard } from "../../../core/stores/boardStore";
 import { resolveModelCard, useSettings } from "../../../core/stores/settingsStore";
 import { toast } from "../../../core/stores/uiStore";
-import { runVideoGen } from "../../../core/runner";
+import { collectUpstream, runFlow } from "../../../core/runner";
 import { saveVideoAs } from "../../../core/services/imageSaver";
 import { errMsg } from "../../../core/utils";
 import type { VideoGenData } from "../../../core/types";
@@ -14,6 +14,8 @@ import type { VideoGenData } from "../../../core/types";
 export const VideoGenNode = memo(function VideoGenNode({ id, data, selected }: NodeProps) {
   const d = data as VideoGenData;
   const upd = useBoard((s) => s.updateData);
+  // 上游已接入文本 → 描述框隐藏（运行时自动取上游；已手写的优先级更高，保留显示）
+  const hasUpText = useBoard(() => collectUpstream(id).texts.length > 0);
   const running = d.status === "running";
 
   const save = async () => {
@@ -65,14 +67,16 @@ export const VideoGenNode = memo(function VideoGenNode({ id, data, selected }: N
             </button>
           </div>
         </div>
-        <textarea
-          className="textarea nodrag nowheel"
-          rows={3}
-          placeholder="视频描述（可连接上游图片作为首帧参考）"
-          value={d.prompt}
-          onChange={(e) => upd(id, { prompt: e.target.value })}
-        />
-        <button className="btn primary nodrag" disabled={running} onClick={() => void runVideoGen(id)}>
+        {hasUpText && !(d.prompt ?? "").trim() ? null : (
+          <textarea
+            className="textarea nodrag nowheel"
+            rows={3}
+            placeholder="视频描述（可连接上游图片作为首帧参考）"
+            value={d.prompt}
+            onChange={(e) => upd(id, { prompt: e.target.value })}
+          />
+        )}
+        <button className="btn primary nodrag" disabled={running} onClick={() => void runFlow(id)}>
           {running ? <IcLoading size={17} /> : <IcVideo size={17} />}
           {running ? "生成中…" : "生成视频"}
         </button>

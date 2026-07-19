@@ -6,19 +6,27 @@ import { GalleryDock } from "./modules/shell/GalleryDock";
 import { SettingsDialog } from "./modules/settings/SettingsDialog";
 import { TemplateManager } from "./modules/comfy/TemplateManager";
 import { AssetLibrary } from "./modules/assets/AssetLibrary";
+import { CharLibrary } from "./modules/charlib/CharLibrary";
 import { useSettings } from "./core/stores/settingsStore";
 import { useBoard } from "./core/stores/boardStore";
 import { useComfy } from "./core/stores/comfyStore";
 import { useAssets } from "./core/stores/assetStore";
+import { useTemplates } from "./core/stores/templateStore";
 import { useUi } from "./core/stores/uiStore";
 import { IcLogo } from "./ui/icons";
 
 function Toasts() {
   const toasts = useUi((s) => s.toasts);
+  const setErrlogOpen = useUi((s) => s.setErrlogOpen);
   return (
     <div className="toasts">
       {toasts.map((t) => (
-        <div key={t.id} className={`toast ${t.type === "err" ? "err" : t.type === "ok" ? "ok" : ""}`}>
+        <div
+          key={t.id}
+          className={`toast ${t.type === "err" ? "err" : t.type === "ok" ? "ok" : ""}`}
+          title={t.type === "err" ? "点击查看报错历史" : undefined}
+          onClick={t.type === "err" ? () => setErrlogOpen(true) : undefined}
+        >
           {t.msg}
         </div>
       ))}
@@ -46,6 +54,7 @@ export default function App() {
       useBoard.getState().init(),
       useComfy.getState().init(),
       useAssets.getState().init(),
+      useTemplates.getState().init(),
     ]).then(() => setReady(true));
   }, []);
 
@@ -83,6 +92,7 @@ export default function App() {
       <SettingsDialog />
       <TemplateManager />
       <AssetLibrary />
+      <CharLibrary />
       <Lightbox />
       <Toasts />
     </ReactFlowProvider>

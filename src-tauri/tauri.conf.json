@@ -17,10 +17,12 @@
         "height": 900,
         "minWidth": 1024,
         "minHeight": 680,
+        "maximized": true,
         "center": true,
         "decorations": false,
         "shadow": true,
-        "dragDropEnabled": false
+        "dragDropEnabled": false,
+        "additionalBrowserArgs": "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --enable-gpu-rasterization --enable-zero-copy"
       }
     ],
     "security": {

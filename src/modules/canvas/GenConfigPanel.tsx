@@ -5,24 +5,130 @@
  *  - GPT Image：质量四档 + 自定义宽高 + 常用预设
  *  - 通用：预设尺寸 + 自定义宽高
  */
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useBoard } from "../../core/stores/boardStore";
-import { resolveModelCard, useSettings } from "../../core/stores/settingsStore";
+import { modelKey, providersOfRole, resolveModelCard, useSettings } from "../../core/stores/settingsStore";
+import { toast, useUi } from "../../core/stores/uiStore";
+import { runModelCompare } from "../../core/runner";
 import {
   BANANA_ASPECTS,
   BANANA_SIZES,
   FAMILY_LABEL,
   GENERIC_PRESETS,
-  GPT_PRESETS,
+  GPT_RATIOS,
+  GPT_TIERS,
   GPT_QUALITIES,
   familyMaxCount,
   familyMaxRef,
+  gptSize,
   imageFamily,
   type ImageFamily,
 } from "../../core/modelMeta";
 import { ModelPicker } from "../../ui/ModelPicker";
-import { IcGear } from "../../ui/icons";
+import { IcGear, IcLayers } from "../../ui/icons";
 import type { ImageGenData } from "../../core/types";
+
+/** 创意度档位说明 */
+function creativityLabel(v: number): string {
+  if (v <= 15) return "严格还原原图";
+  if (v <= 40) return "贴近原图微调";
+  if (v < 65) return "均衡（默认）";
+  if (v <= 85) return "自由发挥";
+  return "大胆重构";
+}
+
+/** 多模型对比：勾选若干模型 → 克隆节点并行出图 */
+function ComparePicker({ nodeId, currentModel }: { nodeId: string; currentModel?: string }) {
+  const [open, setOpen] = useState(false);
+  const [sel, setSel] = useState<string[]>([]);
+  const options = providersOfRole("image").flatMap((p) =>
+    (p.models.image?.models ?? []).map((m) => ({ key: modelKey(p.id, m), label: `${p.name} · ${m}` })),
+  );
+  const toggle = (k: string) => setSel((s) => (s.includes(k) ? s.filter((x) => x !== k) : [...s, k]));
+  const run = () => {
+    if (!sel.length) return;
+    setOpen(false);
+    void runModelCompare(nodeId, sel);
+    setSel([]);
+  };
+  if (options.length < 2) return null;
+  return (
+    <div className="cmp-wrap nodrag">
+      <button className="btn" onClick={() => setOpen(!open)} title="同一提示词/参考图，用多个模型并排出图对比（自动克隆节点并复制上游连线）">
+        <IcLayers size={15} /> 多模型对比
+      </button>
+      {open ? (
+        <div className="cmp-pop glass nowheel">
+          <div className="cmp-head">勾选要对比的模型（各生成一个节点）</div>
+          <div className="cmp-list">
+            {options.map((o) => (
+              <label key={o.key} className={`cmp-item ${o.key === currentModel ? "cur" : ""}`} title={o.key === currentModel ? "当前节点已在用这个模型" : o.label}>
+                <input type="checkbox" checked={sel.includes(o.key)} onChange={() => toggle(o.key)} />
+                <span>{o.label}</span>
+              </label>
+            ))}
+          </div>
+          <button className="btn primary" disabled={!sel.length} style={{ opacity: sel.length ? 1 : 0.5 }} onClick={run}>
+            生成对比（{sel.length}）
+          </button>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/** 自定义比例输入：宽比、高比各一个数字框（如 16 和 9），两边都填了就生效 */
+function RatioPair({ current, onApply }: { current?: string; onApply: (r: string) => void }) {
+  const parse = (v?: string): [string, string] => {
+    const m = v?.match(/^(\d+(?:\.\d+)?)[:：xX×/](\d+(?:\.\d+)?)$/);
+    return m ? [m[1], m[2]] : ["", ""];
+  };
+  const [a, setA] = useState(() => parse(current)[0]);
+  const [b, setB] = useState(() => parse(current)[1]);
+  useEffect(() => {
+    const [pa, pb] = parse(current);
+    setA(pa);
+    setB(pb);
+  }, [current]);
+  const commit = (na: string, nb: string) => {
+    const va = parseFloat(na);
+    const vb = parseFloat(nb);
+    if (va > 0 && vb > 0) onApply(`${na}:${nb}`);
+  };
+  return (
+    <span className="ratio-pair nodrag">
+      <input
+        className="input"
+        type="number"
+        min={1}
+        placeholder="宽比"
+        value={a}
+        onChange={(e) => {
+          setA(e.target.value);
+          commit(e.target.value, b);
+        }}
+      />
+      <i>:</i>
+      <input
+        className="input"
+        type="number"
+        min={1}
+        placeholder="高比"
+        value={b}
+        onChange={(e) => {
+          setB(e.target.value);
+          commit(a, e.target.value);
+        }}
+      />
+    </span>
+  );
+}
+
+/** 比例格子的悬停提示：按当前分辨率档换算后的实际宽高 */
+function ratioSizeTitle(ratio: string, tier: string): string {
+  const s = gptSize(ratio, tier);
+  return s ? `${ratio} @ ${tier} → ${s.w} × ${s.h}` : ratio;
+}
 
 /** 宽高比示意小图标 */
 function ArIcon({ ratio }: { ratio: string }) {
@@ -49,6 +155,7 @@ export function GenConfigPanel() {
 
   const d = node?.data as ImageGenData | undefined;
   const models = useSettings((s) => s.settings.models);
+  const suppressed = useUi((s) => s.genPanelSuppressed);
 
   const family: ImageFamily = useMemo(() => {
     if (!d) return "generic";
@@ -59,12 +166,28 @@ export function GenConfigPanel() {
     }
   }, [d, models]);
 
-  if (!selId || !d) return null;
+  if (!selId || !d || suppressed) return null;
 
   const refCount = edges.filter((e) => e.target === selId && e.targetHandle === "in-image").length;
   const maxN = familyMaxCount(family);
   const patch = (p: Partial<ImageGenData>) => upd(selId, p);
   const setWH = (w: number, h: number, ratio?: string) => patch({ width: w, height: h, aspect: ratio, size: "default" });
+
+  /* --- GPT Image：比例 × 分辨率档 → 实际宽高 --- */
+  const gptTier = d.resolution ?? "1K";
+  const applyGptRatio = (ratio: string) => {
+    const s = gptSize(ratio, gptTier);
+    if (!s) {
+      toast("比例格式如 16:9，范围 1:3 ~ 3:1", "err");
+      return;
+    }
+    patch({ aspect: ratio.replace(/\s/g, ""), width: s.w, height: s.h, size: "default" });
+  };
+  const applyGptTier = (tier: string) => {
+    const base = d.aspect ?? (d.width && d.height ? `${d.width}:${d.height}` : undefined);
+    const s = base ? gptSize(base, tier) : null;
+    patch({ resolution: tier, ...(s ? { width: s.w, height: s.h, size: "default" } : {}) });
+  };
 
   return (
     <div className="gen-panel glass">
@@ -89,6 +212,33 @@ export function GenConfigPanel() {
             </button>
           </div>
         </div>
+        {refCount > 0 ? (
+          <div className="gp-sec" title="仅图生图生效：低 = 忠于参考图微调；高 = 大胆重新演绎（会转译成模型能懂的力度描述附加到提示词）">
+            <div className="gp-lab">
+              创意度
+              <span className="gp-hint">{creativityLabel(d.creativity ?? 50)}</span>
+            </div>
+            <input
+              type="range"
+              className="range nodrag"
+              min={0}
+              max={100}
+              step={5}
+              value={d.creativity ?? 50}
+              onChange={(e) => patch({ creativity: +e.target.value })}
+            />
+          </div>
+        ) : null}
+        <div className="gp-sec">
+          <ComparePicker nodeId={selId} currentModel={(() => {
+            try {
+              const c = resolveModelCard("image", d.modelId);
+              return modelKey(c.id, c.model);
+            } catch {
+              return undefined;
+            }
+          })()} />
+        </div>
         <div className="gp-foot">
           参考图：已接入 {refCount} 路 · 最多 {familyMaxRef(family)} 张
         </div>
@@ -102,6 +252,7 @@ export function GenConfigPanel() {
               <button
                 key={a}
                 className={`gp-cell ${(d.aspect ?? "auto") === a ? "on" : ""}`}
+                title={a === "auto" ? "自动：有参考图时取第一张图的比例，没有参考图时由模型决定" : undefined}
                 onClick={() => patch({ aspect: a })}
               >
                 <ArIcon ratio={a} />
@@ -110,11 +261,67 @@ export function GenConfigPanel() {
             ))}
           </div>
         </div>
+      ) : family === "gpt" ? (
+        <div className="gp-col gp-col-main">
+          <div className="gp-lab">
+            比例
+            <span className="gp-hint">选比例 → 右侧选分辨率档；当前 {d.width && d.height ? `${d.width}×${d.height}` : "自动"}</span>
+          </div>
+          <div className="gp-grid ratios">
+            {GPT_RATIOS.map((r) => (
+              <button key={r} className={`gp-cell ${d.aspect === r ? "on" : ""}`} title={ratioSizeTitle(r, gptTier)} onClick={() => applyGptRatio(r)}>
+                <ArIcon ratio={r} />
+                {r}
+              </button>
+            ))}
+            <button
+              className={`gp-cell ${!d.width && !d.height && !d.aspect ? "on" : ""}`}
+              title="自动：有参考图时取第一张图的比例，没有参考图时跟随服务商配置的默认尺寸"
+              onClick={() => patch({ width: undefined, height: undefined, aspect: undefined, size: "default" })}
+            >
+              <ArIcon ratio="auto" />
+              auto
+            </button>
+          </div>
+          <div className="gp-wh inline">
+            <span className="gp-lab" title="宽高 16 的倍数 · 比例 1:3~3:1 · 长边 ≤3840">自定义</span>
+            <label>
+              W
+              <input
+                className="input nodrag"
+                type="number"
+                step={16}
+                min={256}
+                max={3840}
+                value={d.width ?? ""}
+                placeholder="宽"
+                onChange={(e) => patch({ width: e.target.value ? Number(e.target.value) : undefined, aspect: undefined, size: "default" })}
+              />
+            </label>
+            <label>
+              H
+              <input
+                className="input nodrag"
+                type="number"
+                step={16}
+                min={256}
+                max={3840}
+                value={d.height ?? ""}
+                placeholder="高"
+                onChange={(e) => patch({ height: e.target.value ? Number(e.target.value) : undefined, aspect: undefined, size: "default" })}
+              />
+            </label>
+            <label title="只知道比例就填这里：宽比、高比各一个框，自动按分辨率档换算宽高">
+              比
+              <RatioPair current={d.aspect} onApply={applyGptRatio} />
+            </label>
+          </div>
+        </div>
       ) : (
         <div className="gp-col gp-col-main">
           <div className="gp-lab">
             尺寸
-            <span className="gp-hint">{family === "gpt" ? "16 的倍数 · 比例 1:3~3:1 · 最大 3840x2160" : "自定义宽高或选预设"}</span>
+            <span className="gp-hint">自定义宽高或选预设</span>
           </div>
           <div className="gp-wh">
             <label>
@@ -145,21 +352,19 @@ export function GenConfigPanel() {
             </label>
           </div>
           <div className="gp-grid">
-            {(family === "gpt" ? GPT_PRESETS : GENERIC_PRESETS).map((p) => {
-              const tag = "tag" in p ? (p as { tag?: string }).tag : undefined;
+            {GENERIC_PRESETS.map((p) => {
               const on = d.width === p.w && d.height === p.h;
               return (
                 <button key={`${p.w}x${p.h}`} className={`gp-cell ${on ? "on" : ""}`} title={`${p.w} × ${p.h}`}
                   onClick={() => setWH(p.w, p.h, p.ratio)}>
                   <ArIcon ratio={p.ratio} />
                   {p.ratio}
-                  {tag ? <em>{tag}</em> : null}
                 </button>
               );
             })}
             <button
               className={`gp-cell ${!d.width && !d.height ? "on" : ""}`}
-              title="自动 / 跟随服务商默认"
+              title="自动：有参考图时取第一张图的比例，没有参考图时跟随服务商配置的默认尺寸"
               onClick={() => patch({ width: undefined, height: undefined, aspect: undefined, size: "default" })}
             >
               <ArIcon ratio="auto" />
@@ -169,7 +374,7 @@ export function GenConfigPanel() {
         </div>
       )}
 
-      <div className="gp-col gp-col-side">
+      <div className={`gp-col gp-col-side ${family === "gpt" ? "wide" : ""}`}>
         {family === "banana" ? (
           <>
             <div className="gp-lab">分辨率</div>
@@ -187,8 +392,21 @@ export function GenConfigPanel() {
           </>
         ) : family === "gpt" ? (
           <>
-            <div className="gp-lab">质量</div>
-            <div className="gp-seg col">
+            <div className="gp-lab">分辨率</div>
+            <div className="gp-seg">
+              {GPT_TIERS.map((t) => (
+                <button
+                  key={t}
+                  title={`按当前比例换算宽高（${t === "1K" ? "约 100 万" : t === "2K" ? "约 400 万" : "约 800 万"}像素）`}
+                  className={gptTier === t ? "on" : ""}
+                  onClick={() => applyGptTier(t)}
+                >
+                  {t}
+                </button>
+              ))}
+            </div>
+            <div className="gp-lab" style={{ marginTop: 8 }}>质量</div>
+            <div className="gp-seg">
               {GPT_QUALITIES.map((q) => (
                 <button
                   key={q.value}

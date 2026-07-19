@@ -3,7 +3,8 @@ import type { NodeProps } from "@xyflow/react";
 import { NodeShell, PortOut } from "../NodeShell";
 import { IcLoading, IcSparkles, IcText } from "../../../ui/icons";
 import { useBoard } from "../../../core/stores/boardStore";
-import { optimizePrompt } from "../../../core/runner";
+import { optimizePrompt, orderedInEdges } from "../../../core/runner";
+import { Thumb } from "../../../ui/Thumb";
 import type { PromptData } from "../../../core/types";
 
 /** 与本提示词共同接入同一个下游生成节点的上游图片（供 @ 引用） */
@@ -15,8 +16,9 @@ function useSiblingImages(id: string) {
     const out: { src: string; label: string }[] = [];
     const seen = new Set<string>();
     for (const t of targets) {
-      for (const e of edges) {
-        if (e.target !== t || e.targetHandle !== "in-image" || seen.has(e.source)) continue;
+      // 与 runner 的收集顺序一致（按上游节点位置上→下），保证 @图N 编号对得上
+      for (const e of orderedInEdges(t, nodes, edges)) {
+        if (e.targetHandle !== "in-image" || seen.has(e.source)) continue;
         const n = nodes.find((x) => x.id === e.source);
         if (!n) continue;
         const nd = n.data as Record<string, unknown>;
@@ -73,7 +75,7 @@ export const PromptNode = memo(function PromptNode({ id, data, selected }: NodeP
             <div className="rs-chips">
               {images.map((im) => (
                 <button key={im.label} className="img-chip" title={`插入 @${im.label}（如：@${im.label} 把背景换成夜景）`} onClick={() => insertAt(im.label)}>
-                  <img src={im.src} alt="" />
+                  <Thumb src={im.src} alt="" />
                   <span>@{im.label}</span>
                 </button>
               ))}

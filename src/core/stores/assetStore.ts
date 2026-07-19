@@ -1,9 +1,10 @@
 import { create } from "zustand";
-import type { AssetFolder, AssetItem, AssetKind } from "../types";
+import type { AssetFolder, AssetGenMeta, AssetItem, AssetKind } from "../types";
 import { loadJSON, saveJSON } from "../persist";
 import { errMsg, sanitizeFilename, uid } from "../utils";
-import { deleteAssetFile, extFromMime, fetchBytes, kindFromExt, storeAssetFile } from "../services/assetFiles";
+import { deleteAssetFile, extFromMime, fetchBytes, kindFromExt, mimeFromExt, sniffExt, storeAssetFile } from "../services/assetFiles";
 import { toast } from "./uiStore";
+import { useBoard } from "./boardStore";
 
 export type CollectInput = {
   src: string; // dataURL / blob / http(s)
@@ -11,6 +12,8 @@ export type CollectInput = {
   name?: string;
   prompt?: string;
   model?: string;
+  /** 生成参数快照（Remix 还原用） */
+  gen?: AssetGenMeta;
 };
 
 type AssetState = {
@@ -28,6 +31,10 @@ type AssetState = {
   removeMany: (ids: string[]) => Promise<void>;
   moveTo: (ids: string[], folderId: string | null) => void;
   rename: (id: string, name: string) => void;
+  /** 覆盖式设置某资产的标签（去重、去空） */
+  setTags: (id: string, tags: string[]) => void;
+  /** 给一批资产追加同一个标签（批量栏用） */
+  addTagMany: (ids: string[], tag: string) => void;
   createFolder: (name: string) => string;
   renameFolder: (id: string, name: string) => void;
   deleteFolder: (id: string) => void;
@@ -62,23 +69,34 @@ export const useAssets = create<AssetState>((set, get) => {
     collect: async (input) => {
       try {
         const { bytes, mime } = await fetchBytes(input.src);
-        const ext = extFromMime(mime);
+        // mime 不可靠（中转站常给 octet-stream）→ 落盘扩展名以文件头识别为准，避免存成 .bin
+        let ext = extFromMime(mime);
+        if (kindFromExt(ext) === "other") ext = sniffExt(bytes) ?? (input.kind === "image" ? "png" : ext);
         const kind = input.kind ?? kindFromExt(ext);
+        const realMime = kindFromExt(ext) === "other" ? mime : mimeFromExt(ext);
         const stored = await storeAssetFile(bytes, ext, kind);
+        // 按当前画布名自动归入同名文件夹（不存在则创建）
+        let folderId: string | null = null;
+        const b = useBoard.getState();
+        const boardName = b.boards[b.activeId]?.meta.name?.trim();
+        if (boardName) {
+          folderId = get().folders.find((f) => f.name === boardName)?.id ?? get().createFolder(boardName);
+        }
         const item: AssetItem = {
           id: uid(),
           kind,
           name: input.name ?? (input.prompt ? sanitizeFilename(input.prompt, 32) : `生成_${new Date().toLocaleTimeString("zh-CN", { hour12: false })}`),
           path: stored.path,
           thumb: stored.thumb,
-          mime,
+          mime: realMime,
           size: stored.size,
           width: stored.width,
           height: stored.height,
           prompt: input.prompt,
           model: input.model,
-          folderId: null,
+          folderId,
           source: "canvas",
+          gen: input.gen,
           createdAt: Date.now(),
         };
         set((s) => ({ items: [item, ...s.items] }));
@@ -92,9 +110,11 @@ export const useAssets = create<AssetState>((set, get) => {
       let ok = 0;
       for (const f of files) {
         try {
-          const ext = f.name.split(".").pop() ?? extFromMime(f.type);
-          const kind = kindFromExt(ext);
           const bytes = new Uint8Array(await f.arrayBuffer());
+          let ext = f.name.includes(".") ? f.name.split(".").pop()! : extFromMime(f.type);
+          // 扩展名认不出来（无后缀 / .bin 等）→ 按文件头识别，别一律归入「其他」
+          if (kindFromExt(ext) === "other") ext = sniffExt(bytes) ?? ext;
+          const kind = kindFromExt(ext);
           const stored = await storeAssetFile(bytes, ext, kind);
           const item: AssetItem = {
             id: uid(),
@@ -102,7 +122,7 @@ export const useAssets = create<AssetState>((set, get) => {
             name: f.name.replace(/\.[^.]+$/, ""),
             path: stored.path,
             thumb: stored.thumb,
-            mime: f.type || "application/octet-stream",
+            mime: f.type || mimeFromExt(ext),
             size: stored.size,
             width: stored.width,
             height: stored.height,
@@ -138,6 +158,24 @@ export const useAssets = create<AssetState>((set, get) => {
 
     rename: (id, name) => {
       set((s) => ({ items: s.items.map((i) => (i.id === id ? { ...i, name } : i)) }));
+      persist();
+    },
+
+    setTags: (id, tags) => {
+      const clean = [...new Set(tags.map((t) => t.trim()).filter(Boolean))];
+      set((s) => ({ items: s.items.map((i) => (i.id === id ? { ...i, tags: clean.length ? clean : undefined } : i)) }));
+      persist();
+    },
+
+    addTagMany: (ids, tag) => {
+      const t = tag.trim();
+      if (!t) return;
+      const setIds = new Set(ids);
+      set((s) => ({
+        items: s.items.map((i) =>
+          setIds.has(i.id) && !(i.tags ?? []).includes(t) ? { ...i, tags: [...(i.tags ?? []), t] } : i,
+        ),
+      }));
       persist();
     },
 

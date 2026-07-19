@@ -54,6 +54,31 @@ export async function toDataUrl(src: string, fetcher: typeof fetch = (...args) =
   });
 }
 
+/** 视觉输入压缩：长边 ≤maxSide、JPEG 重编码，避免超出视觉模型的图片大小限制（如 Claude 协议 10MB） */
+export async function shrinkForVision(dataUrl: string, maxSide = 1600): Promise<string> {
+  if (!dataUrl.startsWith("data:image")) return dataUrl;
+  try {
+    const img = new Image();
+    await new Promise<void>((res, rej) => {
+      img.onload = () => res();
+      img.onerror = () => rej(new Error("图片解码失败"));
+      img.src = dataUrl;
+    });
+    const scale = Math.min(1, maxSide / Math.max(img.naturalWidth, img.naturalHeight));
+    // 尺寸不大且体积也不大 → 原样发送
+    if (scale >= 1 && dataUrl.length < 2_500_000) return dataUrl;
+    const c = document.createElement("canvas");
+    c.width = Math.max(1, Math.round(img.naturalWidth * scale));
+    c.height = Math.max(1, Math.round(img.naturalHeight * scale));
+    const ctx = c.getContext("2d");
+    if (!ctx) return dataUrl;
+    ctx.drawImage(img, 0, 0, c.width, c.height);
+    return c.toDataURL("image/jpeg", 0.85);
+  } catch {
+    return dataUrl;
+  }
+}
+
 /** 图片格式转换（dataURL → 指定格式 dataURL） */
 export function convertImage(dataUrl: string, format: "png" | "jpeg" | "webp", quality = 0.92): Promise<string> {
   if (dataUrl.startsWith(`data:image/${format}`)) return Promise.resolve(dataUrl);
@@ -86,7 +111,19 @@ export function sanitizeFilename(s: string, max = 40) {
 }
 
 /** 命名模板 → 文件名（不含扩展名） */
-export function buildFilename(pattern: string, meta: { model?: string; prompt?: string; seed?: string | number }) {
+export type FilenameMeta = {
+  model?: string;
+  prompt?: string;
+  seed?: string | number;
+  /** 分辨率，如 2560x1440 */
+  size?: string;
+  /** 比例，如 16x9（文件名不能用冒号） */
+  ratio?: string;
+  /** 序号：同前缀依次递增（由保存服务填入） */
+  n?: number;
+};
+
+export function buildFilename(pattern: string, meta: FilenameMeta) {
   const d = new Date();
   const p = (n: number) => String(n).padStart(2, "0");
   const tokens: Record<string, string> = {
@@ -95,13 +132,63 @@ export function buildFilename(pattern: string, meta: { model?: string; prompt?: 
     model: sanitizeFilename(meta.model ?? "model", 24),
     prompt: sanitizeFilename(meta.prompt ?? "", 24) || "untitled",
     seed: String(meta.seed ?? ""),
+    size: meta.size ?? "",
+    ratio: meta.ratio ?? "",
+    n: meta.n !== undefined ? String(meta.n) : "",
   };
   let out = pattern.replace(/\{(\w+)\}/g, (_, k) => tokens[k] ?? "");
   out = sanitizeFilename(out, 120) || `momo_${tokens.date}_${tokens.time}`;
   return out;
 }
 
+/** 图片实际宽高 → { size: "2560x1440", ratio: "16x9" } */
+export async function imageSizeMeta(dataUrl: string): Promise<{ size: string; ratio: string }> {
+  try {
+    const img = new Image();
+    await new Promise<void>((res, rej) => {
+      img.onload = () => res();
+      img.onerror = () => rej(new Error("decode"));
+      img.src = dataUrl;
+    });
+    const w = img.naturalWidth;
+    const h = img.naturalHeight;
+    const gcd = (a: number, b: number): number => (b ? gcd(b, a % b) : a);
+    const g = gcd(w, h) || 1;
+    return { size: `${w}x${h}`, ratio: `${w / g}x${h / g}` };
+  } catch {
+    return { size: "", ratio: "" };
+  }
+}
+
+/** 键盘事件是否命中组合键描述（"ctrl+z" / "Delete" / "Tab"…），修饰键需精确匹配 */
+export function matchHotkey(e: KeyboardEvent, combo: string): boolean {
+  if (!combo) return false;
+  const parts = combo.toLowerCase().split("+").filter(Boolean);
+  const key = parts[parts.length - 1];
+  const mods = new Set(parts.slice(0, -1));
+  const k = e.key.toLowerCase();
+  return (
+    k === key &&
+    mods.has("ctrl") === (e.ctrlKey || e.metaKey) &&
+    mods.has("shift") === e.shiftKey &&
+    mods.has("alt") === e.altKey
+  );
+}
+
 export function errMsg(e: unknown): string {
   if (e instanceof Error) return e.message;
   return String(e);
+}
+
+/** 宽容解析模型返回的 JSON：剥掉代码块围栏，截取首个 { 到最后一个 } */
+export function parseJsonLoose<T>(text: string): T | null {
+  const cleaned = text.replace(/```(?:json)?/g, "").trim();
+  const start = cleaned.indexOf("{");
+  const end = cleaned.lastIndexOf("}");
+  if (start < 0 || end <= start) return null;
+  try {
+    return JSON.parse(cleaned.slice(start, end + 1)) as T;
+  } catch {
+    return null;
+  }
 }

@@ -1,15 +1,20 @@
 /**
- * 快速添加菜单 — 双击空白 / 从端口拖线到空白处触发
+ * 快速添加菜单 — 双击空白 / 从端口拖线到空白处触发；底部可直接插入画布模板
  */
 import { NODE_INPUTS, useBoard } from "../../core/stores/boardStore";
+import { useTemplates } from "../../core/stores/templateStore";
 import { useUi } from "../../core/stores/uiStore";
 import { NODE_CATALOG } from "./nodeCatalog";
+import { IcLayers } from "../../ui/icons";
 
 export function AddNodeMenu() {
   const menu = useUi((s) => s.addMenu);
   const setAddMenu = useUi((s) => s.setAddMenu);
   const addNode = useBoard((s) => s.addNode);
   const connectNodes = useBoard((s) => s.connectNodes);
+  const templates = useTemplates((s) => s.templates);
+  const allTemplates = useTemplates((s) => s.all);
+  void templates; // 订阅模板增删以刷新菜单
 
   if (!menu) return null;
 
@@ -51,6 +56,29 @@ export function AddNodeMenu() {
             </div>
           );
         })}
+        {!menu.sourcePort && allTemplates().length ? (
+          <>
+            <div className="am-group">画布模板</div>
+            {allTemplates().map((tpl) => (
+              <button
+                key={tpl.id}
+                className="am-item"
+                onClick={() => {
+                  useTemplates.getState().instantiate(tpl, { x: menu.flowX, y: menu.flowY });
+                  setAddMenu(null);
+                }}
+              >
+                <span className="di-ic">
+                  <IcLayers size={18} />
+                </span>
+                <span>
+                  <b>{tpl.name}</b>
+                  <span>{tpl.nodes.filter((x) => x.kind !== "group").length} 个节点 · 连好线，插入即用</span>
+                </span>
+              </button>
+            ))}
+          </>
+        ) : null}
       </div>
     </>
   );

@@ -22,8 +22,13 @@ tauri = { version = "2", features = ["protocol-asset"] }
 tauri-plugin-opener = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-fs = "2"
-tauri-plugin-http = "2"
+# unsafe-headers：允许前端显式控制 Origin 头（传空 = 摘掉）。
+# ComfyUI 等本地服务开着 DNS-rebinding 防护，Origin 与 Host 不一致会 403，
+# 而插件默认无条件把 webview 的 Origin 塞进每个请求 —— 必须能摘。
+tauri-plugin-http = { version = "2", features = ["unsafe-headers"] }
 tauri-plugin-store = "2"
+tauri-plugin-window-state = "2"
+tauri-plugin-drag = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 

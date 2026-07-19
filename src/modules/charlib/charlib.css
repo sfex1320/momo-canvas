@@ -1,0 +1,216 @@
+/* ============ 角色库 ============ */
+.charlib-mask {
+  position: fixed;
+  inset: 0;
+  z-index: 400;
+  background: rgba(8, 12, 26, 0.45);
+  backdrop-filter: blur(6px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: fadeIn 160ms ease;
+}
+
+.charlib {
+  width: min(980px, calc(100vw - 80px));
+  max-height: calc(100vh - 90px);
+  display: flex;
+  flex-direction: column;
+  border-radius: var(--r-lg);
+  background: var(--panel-solid);
+  border: 1px solid var(--panel-border);
+  box-shadow: var(--panel-shadow);
+  overflow: hidden;
+  animation: popIn 170ms var(--ease);
+}
+.charlib .cl-detail,
+.charlib .cl-filter {
+  overflow-y: auto;
+}
+
+.charlib .cl-head {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 15px 18px 12px;
+  border-bottom: 1px solid var(--panel-border);
+}
+.charlib .cl-head b {
+  font-size: var(--fs-title);
+  font-weight: 800;
+}
+.charlib .cl-hint {
+  font-size: 12px;
+  color: var(--text-3);
+  margin-left: 4px;
+}
+
+/* ---- 所选预设详情 ---- */
+.charlib .cl-detail {
+  display: flex;
+  align-items: flex-start;
+  gap: 18px;
+  padding: 18px;
+  position: relative;
+}
+.cp-avatar {
+  border-radius: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.25);
+  position: relative;
+  overflow: hidden;
+}
+.cp-avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.cp-avatar.busy img,
+.cp-avatar.busy svg {
+  opacity: 0.35;
+}
+.cp-avatar .cp-busy {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+}
+.charlib .cl-avatar-col {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+}
+.charlib .cl-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.charlib .cl-name {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.charlib .cl-name b {
+  font-size: 17px;
+  font-weight: 800;
+}
+.charlib .cl-name i {
+  font-style: normal;
+  color: var(--text-3);
+  font-size: 12.5px;
+}
+.charlib .cl-tag {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--accent);
+  background: var(--grad-brand-soft);
+  border-radius: 99px;
+  padding: 2px 9px;
+}
+.charlib .cl-desc {
+  font-size: var(--fs-base);
+  color: var(--text-2);
+  line-height: 1.6;
+}
+.charlib .cl-facts {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12.5px;
+  color: var(--text-2);
+  line-height: 1.6;
+}
+.charlib .cl-facts span {
+  display: inline-block;
+  min-width: 40px;
+  color: var(--text-3);
+  font-weight: 700;
+  margin-right: 6px;
+}
+.charlib .cl-palette {
+  display: flex;
+  gap: 6px;
+}
+.charlib .cl-palette i {
+  width: 22px;
+  height: 22px;
+  border-radius: 7px;
+  border: 1px solid var(--panel-border);
+}
+.charlib .cl-delivs {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  font-size: 12px;
+  color: var(--text-3);
+}
+.charlib .cl-delivs span {
+  font-weight: 600;
+  color: var(--text-2);
+  background: var(--input-bg);
+  border: 1px solid var(--input-border);
+  border-radius: 99px;
+  padding: 2px 10px;
+}
+.charlib .cl-apply {
+  position: absolute;
+  right: 18px;
+  bottom: 14px;
+}
+
+/* ---- 筛选 + 预设卡片横排 ---- */
+.charlib .cl-filter {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  padding: 10px 18px 2px;
+  border-top: 1px solid var(--panel-border);
+}
+.charlib .cl-strip {
+  display: flex;
+  gap: 10px;
+  overflow-x: auto;
+  padding: 12px 18px 16px;
+}
+.charlib .cl-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 7px;
+  padding: 10px 12px 9px;
+  border-radius: var(--r-md);
+  border: 1.5px solid var(--input-border);
+  background: var(--input-bg);
+  flex: none;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-2);
+  transition: border-color var(--t-fast), background var(--t-fast), transform var(--t-fast);
+}
+.charlib .cl-card:hover {
+  border-color: var(--accent);
+  transform: translateY(-2px);
+}
+.charlib .cl-card.on {
+  border-color: var(--accent);
+  background: var(--grad-brand-soft);
+  color: var(--accent);
+}
+.charlib .cl-card span {
+  max-width: 108px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}

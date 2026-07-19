@@ -40,16 +40,55 @@ export function defaultData(kind: NodeKind): Record<string, unknown> {
       return { status: "idle", text: "", color: "yellow" };
     case "group":
       return { status: "idle" };
+    case "relight":
+      return { status: "idle", outMode: "image", azimuth: 0, elevation: 0, brightness: 50, color: "", rim: false, smart: false, results: [], picked: 0 };
+    case "multiAngle":
+      return { status: "idle", outMode: "image", preset: "custom", yaw: 0, pitch: 0, shot: 2, results: [], picked: 0 };
+    case "charCard":
+      return {
+        status: "idle",
+        outMode: "image",
+        lang: "zh",
+        style: "auto",
+        deliverables: ["turnaround", "expressions", "portrait", "sheet"],
+        prompts: {},
+        results: {},
+      };
+    case "resize":
+      return { status: "idle", mode: "mp", mp: 1, sideRef: "long", sideLen: 1024, scalePct: 50, out: "image" };
+    case "inpaint":
+      return { status: "idle", prompt: "", count: 1, results: [], picked: 0 };
+    case "outpaint":
+      return { status: "idle", pads: { left: 0.25, right: 0.25, up: 0, down: 0 }, prompt: "", count: 1, results: [], picked: 0 };
+    case "matting":
+      return { status: "idle", bg: "transparent", subject: "", results: [], picked: 0 };
+    case "enhance":
+      return { status: "idle", factor: 2, focus: "detail", results: [], picked: 0 };
+    case "crop":
+      return { status: "idle" };
   }
 }
 
 /* ---------- 端口能力 ---------- */
-export function outPortType(kind: NodeKind): PortType | null {
+/** 节点输出端口类型；打光/多角度/角色卡按输出模式（出图/提示词）动态切换，需传入节点 data */
+export function outPortType(kind: NodeKind, data?: Record<string, unknown>): PortType | null {
   switch (kind) {
     case "image":
     case "imageGen":
     case "comfy":
+    case "inpaint":
+    case "outpaint":
+    case "matting":
+    case "enhance":
+    case "crop":
       return "image";
+    case "relight":
+    case "multiAngle":
+    case "charCard":
+      return data?.outMode === "prompt" ? "text" : "image";
+    case "resize":
+      // image = 输出处理后的图片；其余样式输出尺寸/比例文本
+      return data?.out === "image" || data?.out === undefined ? "image" : "text";
     case "prompt":
     case "chat":
     case "caption":
@@ -78,6 +117,15 @@ export const NODE_INPUTS: Record<NodeKind, { text?: boolean; image?: boolean }> 
   llmText: { text: true },
   combine: { text: true },
   group: {},
+  relight: { text: true, image: true },
+  multiAngle: { text: true, image: true },
+  charCard: { text: true, image: true },
+  resize: { image: true },
+  inpaint: { text: true, image: true },
+  outpaint: { text: true, image: true },
+  matting: { image: true },
+  enhance: { image: true },
+  crop: { image: true },
 };
 
 /** 成组自动排布时的类别顺序：输入 → 智能处理 → 生成 → 备注 */
@@ -90,10 +138,19 @@ const KIND_RANK: Record<NodeKind, number> = {
   llmText: 5,
   combine: 6,
   imageGen: 7,
-  videoGen: 8,
-  comfy: 9,
-  note: 10,
-  group: 11,
+  resize: 7.5,
+  crop: 7.6,
+  inpaint: 7.7,
+  outpaint: 7.8,
+  matting: 7.9,
+  enhance: 7.95,
+  relight: 8,
+  multiAngle: 9,
+  charCard: 10,
+  videoGen: 11,
+  comfy: 12,
+  note: 13,
+  group: 14,
 };
 function kindRank(kind: NodeKind): number {
   return KIND_RANK[kind] ?? 99;
@@ -112,6 +169,15 @@ export const NODE_LABEL: Record<NodeKind, string> = {
   stylePreset: "风格预设",
   note: "备注",
   group: "组",
+  relight: "打光",
+  multiAngle: "多角度",
+  charCard: "角色卡",
+  resize: "尺寸调整",
+  inpaint: "局部重绘",
+  outpaint: "扩图",
+  matting: "抠图",
+  enhance: "高清增强",
+  crop: "聚焦裁剪",
 };
 
 type BoardRecord = { meta: BoardMeta; nodes: AppNode[]; edges: Edge[] };
@@ -138,16 +204,20 @@ type BoardState = {
   canRedo: boolean;
 
   init: () => Promise<void>;
+  /** 记录当前画布的视图位置（防抖持久化） */
+  setViewport: (vp: { x: number; y: number; zoom: number }) => void;
   onNodesChange: (changes: NodeChange<AppNode>[]) => void;
   onEdgesChange: (changes: EdgeChange[]) => void;
   onConnect: (conn: Connection) => void;
   addNode: (kind: NodeKind, pos: { x: number; y: number }, init?: Record<string, unknown>) => string;
+  /** 插入一段现成子图（模板实例化/播种用）：一次快照、整体入画布并选中 */
+  insertFragment: (nodes: AppNode[], edges: Edge[]) => void;
   updateData: (id: string, patch: Record<string, unknown>) => void;
   removeNode: (id: string) => void;
   duplicateNode: (id: string) => void;
   connectNodes: (source: string, target: string, targetHandle: string, sourceHandle?: string) => void;
-  /** 拖拽结束后：贴近左右两侧的节点自动连线 */
-  proximityConnect: (id: string) => void;
+  /** 拖拽结束后：鼠标命中/贴近两侧的节点自动连线（mouse 为松手时指针的画布坐标） */
+  proximityConnect: (id: string, mouse?: { x: number; y: number } | null) => void;
   /** 把当前多选的节点打包成一个组（组框大小匹配所选范围） */
   groupSelected: () => void;
   /** 在画布指定区域建组：区域内节点入组并自动排布 */
@@ -184,12 +254,20 @@ function makeBoard(name: string): BoardRecord {
   return { meta: { id: uid(8), name, updatedAt: Date.now() }, nodes: [], edges: [] };
 }
 
-/** 载入时清洗：运行态重置、失效的 blob 链接清空 */
+/** 上次退出时任务还在运行中的提示语（载入时标注，让中断可见而不是静默消失） */
+export const INTERRUPTED_MSG =
+  "任务中断：生成进行中应用被关闭或重启，结果未能写回（服务商可能已扣费）。请重新运行";
+
+/** 载入时清洗：运行中的任务标记为中断错误、失效的 blob 链接清空 */
 function sanitizeNodes(nodes: AppNode[]): AppNode[] {
   return nodes.map((n) => {
     const d = { ...(n.data as Record<string, unknown>) };
-    if (d.status === "running") d.status = "idle";
+    if (d.status === "running") {
+      d.status = "error";
+      d.error = INTERRUPTED_MSG;
+    }
     d.progress = undefined;
+    d.progressPct = undefined;
     if (typeof d.resultUrl === "string" && d.resultUrl.startsWith("blob:")) d.resultUrl = undefined;
     return { ...n, data: d };
   });
@@ -245,8 +323,8 @@ export function wouldCycle(edges: Edge[], source: string, target: string): boole
 }
 
 /* ---------- 贴近/覆盖 自动连线 ---------- */
-const PROX_GAP_MAX = 130; // 左右贴近的最大间距
-const PROX_V_OVERLAP = 24; // 需要的最小纵向重叠
+const PROX_GAP_MAX = 24; // 左右贴近的最大间距（需要接触或几乎贴上才判定连线）
+const PROX_V_OVERLAP = 32; // 需要的最小纵向重叠
 const PROX_SNAP_GAP = 48; // 覆盖放置后自动摆开的间距
 
 type ProxPair = { up: AppNode; down: AppNode; sourceHandle: string; targetHandle: string; overlap: boolean; dist: number };
@@ -265,13 +343,13 @@ function linkHandles(
   if (up.type === "group") {
     // 组：按成员构成与下游能力选择文本/图片出口
     const members = nodes.filter((n) => n.parentId === up.id);
-    const hasText = members.some((m) => outPortType(m.type as NodeKind) === "text");
-    const hasImage = members.some((m) => outPortType(m.type as NodeKind) === "image");
+    const hasText = members.some((m) => outPortType(m.type as NodeKind, m.data as Record<string, unknown>) === "text");
+    const hasImage = members.some((m) => outPortType(m.type as NodeKind, m.data as Record<string, unknown>) === "image");
     targetHandle = ins.text && hasText ? "in-text" : ins.image && hasImage ? "in-image" : null;
     if (!targetHandle) return null;
     sourceHandle = targetHandle === "in-text" ? "out-text" : "out-image";
   } else {
-    const pt = outPortType(up.type as NodeKind);
+    const pt = outPortType(up.type as NodeKind, up.data as Record<string, unknown>);
     if (!pt || pt === "video") return null;
     targetHandle = pt === "image" ? (ins.image ? "in-image" : null) : ins.text ? "in-text" : null;
     if (!targetHandle) return null;
@@ -281,8 +359,13 @@ function linkHandles(
   return { sourceHandle, targetHandle };
 }
 
-/** 找到被拖节点最合适的连线对象：贴近左右两侧，或直接拖到节点上方（按中心决定方向） */
-export function findProximityPair(nodes: AppNode[], edges: Edge[], id: string): ProxPair | null {
+/** 找到被拖节点最合适的连线对象：鼠标悬到目标节点上（指针在其左半=作上游/右半=作下游），或左右贴近 */
+export function findProximityPair(
+  nodes: AppNode[],
+  edges: Edge[],
+  id: string,
+  mouse?: { x: number; y: number } | null,
+): ProxPair | null {
   const moved = nodes.find((n) => n.id === id);
   // 组内成员坐标是相对父级的，不参与贴近连线
   if (!moved?.measured?.width || moved.parentId) return null;
@@ -296,22 +379,30 @@ export function findProximityPair(nodes: AppNode[], edges: Edge[], id: string): 
   for (const other of nodes) {
     if (other.id === id || !other.measured?.width || other.parentId) continue;
     const ob = { x: other.position.x, y: other.position.y, w: other.measured.width ?? 0, h: other.measured.height ?? 0 };
+    // 叠放连线以「鼠标指针命中目标节点」为准（此前按矩形重合判定，节点稍一靠近就误触）
+    // 组框只支持左右侧贴连线，叠放到组上语义不明确，跳过
+    if (
+      mouse && other.type !== "group" && moved.type !== "group" &&
+      mouse.x >= ob.x && mouse.x <= ob.x + ob.w && mouse.y >= ob.y && mouse.y <= ob.y + ob.h
+    ) {
+      // 指针在目标左半边 → 被拖节点作上游，右半边 → 作下游；首选方向不可连则试反向
+      const movedLeft = mouse.x <= ob.x + ob.w / 2;
+      const dist = Math.abs(mouse.x - (ob.x + ob.w / 2));
+      consider(movedLeft ? moved : other, movedLeft ? other : moved, true, dist);
+      consider(movedLeft ? other : moved, movedLeft ? moved : other, true, dist + 0.1);
+      continue;
+    }
+    // 普通节点之间只按鼠标命中连线；贴近/接触不再自动连（组框保留左右贴近，因为不支持鼠标叠放）
+    if (other.type !== "group" && moved.type !== "group") continue;
     const vOverlap = Math.min(mb.y + mb.h, ob.y + ob.h) - Math.max(mb.y, ob.y);
     if (vOverlap < PROX_V_OVERLAP) continue;
     const hOverlap = Math.min(mb.x + mb.w, ob.x + ob.w) - Math.max(mb.x, ob.x);
-    // 组框只支持左右侧贴连线，叠放到组上语义不明确，跳过
-    if (hOverlap > 16 && other.type !== "group" && moved.type !== "group") {
-      // 直接拖到节点上方：中心偏左 → 被拖节点作上游，反之作下游；首选方向不可连则试反向
-      const movedLeft = mb.x + mb.w / 2 <= ob.x + ob.w / 2;
-      const dist = Math.abs(mb.x + mb.w / 2 - (ob.x + ob.w / 2));
-      consider(movedLeft ? moved : other, movedLeft ? other : moved, true, dist);
-      consider(movedLeft ? other : moved, movedLeft ? moved : other, true, dist + 0.1);
-    } else {
-      const gapFromLeft = mb.x - (ob.x + ob.w); // other 在左侧 → other 为上游
-      if (gapFromLeft >= -16 && gapFromLeft <= PROX_GAP_MAX) consider(other, moved, false, Math.abs(gapFromLeft));
-      const gapFromRight = ob.x - (mb.x + mb.w); // other 在右侧 → moved 为上游
-      if (gapFromRight >= -16 && gapFromRight <= PROX_GAP_MAX) consider(moved, other, false, Math.abs(gapFromRight));
-    }
+    // 矩形已重合 → 不判定为贴近，避免误触
+    if (hOverlap > 16) continue;
+    const gapFromLeft = mb.x - (ob.x + ob.w); // other 在左侧 → other 为上游
+    if (gapFromLeft >= -16 && gapFromLeft <= PROX_GAP_MAX) consider(other, moved, false, Math.abs(gapFromLeft));
+    const gapFromRight = ob.x - (mb.x + mb.w); // other 在右侧 → moved 为上游
+    if (gapFromRight >= -16 && gapFromRight <= PROX_GAP_MAX) consider(moved, other, false, Math.abs(gapFromRight));
   }
   return best;
 }
@@ -370,20 +461,35 @@ export const useBoard = create<BoardState>((set, get) => {
         if (saved && saved.order?.length && saved.boards) {
           const activeId = saved.boards[saved.activeId] ? saved.activeId : saved.order[0];
           const cur = saved.boards[activeId];
+          const nodes = sanitizeNodes(cur?.nodes ?? []);
           set({
             boards: saved.boards,
             order: saved.order,
             activeId,
             archived: saved.archived ?? {},
-            nodes: sanitizeNodes(cur?.nodes ?? []),
+            nodes,
             edges: cur?.edges ?? [],
             loaded: true,
           });
+          // 上次退出时有任务在运行 → 明确告知，而不是静默消失
+          const cut = nodes.filter((n) => (n.data as Record<string, unknown>).error === INTERRUPTED_MSG).length;
+          if (cut) {
+            const { pushError } = await import("./uiStore");
+            pushError("任务中断", `检测到 ${cut} 个任务在上次退出时仍在运行中，已标记为中断（节点上可见），请重新运行`);
+          }
           return;
         }
         const b = makeBoard("画布 1");
         set({ boards: { [b.meta.id]: b }, order: [b.meta.id], activeId: b.meta.id, nodes: [], edges: [], loaded: true });
       })()),
+
+    setViewport: (vp) => {
+      const { boards, activeId } = get();
+      const cur = boards[activeId];
+      if (!cur) return;
+      set({ boards: { ...boards, [activeId]: { ...cur, meta: { ...cur.meta, viewport: vp } } } });
+      persist();
+    },
 
     snapshot,
 
@@ -448,7 +554,7 @@ export const useBoard = create<BoardState>((set, get) => {
             ? ("image" as const)
             : ("text" as const)
           : src
-            ? outPortType(src.type as NodeKind)
+            ? outPortType(src.type as NodeKind, src.data as Record<string, unknown>)
             : null;
       set({
         edges: addEdge({ ...conn, id: `e_${uid(8)}`, className: edgeClassFor(port), interactionWidth: 28 }, get().edges),
@@ -464,7 +570,7 @@ export const useBoard = create<BoardState>((set, get) => {
             ? ("image" as const)
             : ("text" as const)
           : src
-            ? outPortType(src.type as NodeKind)
+            ? outPortType(src.type as NodeKind, src.data as Record<string, unknown>)
             : null;
       set({
         edges: addEdge(
@@ -475,9 +581,9 @@ export const useBoard = create<BoardState>((set, get) => {
       persist();
     },
 
-    proximityConnect: (id) => {
+    proximityConnect: (id, mouse) => {
       const { nodes, edges, connectNodes } = get();
-      const best = findProximityPair(nodes, edges, id);
+      const best = findProximityPair(nodes, edges, id, mouse);
       if (!best) return;
       snapshot();
       if (best.overlap) {
@@ -670,6 +776,16 @@ export const useBoard = create<BoardState>((set, get) => {
       set({ nodes: [...get().nodes.map((n) => ({ ...n, selected: false })), { ...node, selected: true }] });
       persist();
       return id;
+    },
+
+    insertFragment: (nodes, edges) => {
+      if (!nodes.length) return;
+      snapshot();
+      set({
+        nodes: [...get().nodes.map((n) => ({ ...n, selected: false })), ...nodes],
+        edges: [...get().edges, ...edges],
+      });
+      persist();
     },
 
     updateData: (id, patch) => {
