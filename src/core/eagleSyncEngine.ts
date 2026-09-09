@@ -18,6 +18,7 @@ import { useAssets } from "./stores/assetStore";
 import { useSettings } from "./stores/settingsStore";
 import { useEagle } from "./stores/eagleStore";
 import { EagleClient, libraryKeyOf, type EagleLibraryInfo } from "./services/eagleApi";
+import { activeEagleAssets, newEagleImports } from "./eagleSyncIdentity";
 
 /** 队列重试上限（超过进入 error 态等待手动重试） */
 const MAX_ATTEMPT = 3;
@@ -40,6 +41,9 @@ let consuming = false;
 let pollTimer: ReturnType<typeof setTimeout> | null = null;
 let pollBackoffMs = 0;
 let lastOfflineNoticeAt = 0;
+let scanning = false;
+/** 同一远端项目的导入串行，避免扫描与手动拉回同时创建版本。 */
+const importing = new Map<string, Promise<void>>();
 /** 本地写入记录 → 防止把 MOMO 自己写的变更当成 Eagle 端修改再拉回来 */
 const lastWrite = new Map<string, { at: number; metaFingerprint: string; modifiedAt?: number }>();
 
@@ -387,7 +391,13 @@ export async function importEagleItems(
   const { cli, lib } = await ensureLibraryReady();
 
   const imported: AssetItem[] = [];
-  for (const id of itemIds.slice(0, 50)) {
+  for (const id of [...new Set(itemIds)].slice(0, 50)) {
+    const key = `${libraryKeyOf(lib.path)}:${id}`;
+    const previous = importing.get(key);
+    let release!: () => void;
+    const done = new Promise<void>(resolve => { release = resolve; });
+    importing.set(key, done);
+    await previous;
     try {
       const page = await cli.getItems({ id, limit: 1 });
       const remote = page.data[0];
@@ -395,8 +405,8 @@ export async function importEagleItems(
 
       // 幂等：已绑定且无远端变化的 itemId 直接复用现有资产——
       // 插件「发送到画布」等场景不得复制出重复版本
-      const existing = useAssets.getState().items.find((i) => i.eagle?.itemId === id);
-      if (existing && existing.eagle?.state === "synced") {
+      const existing = activeEagleAssets(useAssets.getState().items, libraryKeyOf(lib.path)).find(i => i.eagle?.itemId === id);
+      if (existing && existing.eagle?.state === "synced" && existing.eagle.lastRemoteModifiedAt === remoteStamp(remote)) {
         if (opts.target === "canvas") void sendToCanvasCenter(existing);
         imported.push(existing);
         continue;
@@ -410,7 +420,7 @@ export async function importEagleItems(
       );
 
       // 作为已绑定资产的新版本回流（从 Eagle 刷新）
-      if (existing && (existing.eagle?.state === "remote-dirty" || opts.silent)) {
+      if (existing) {
         const revision = (existing.lineage?.revision ?? 0) + 1;
         const link: EagleAssetLink = {
           ...(existing.eagle as EagleAssetLink),
@@ -466,6 +476,9 @@ export async function importEagleItems(
       }
     } catch (e) {
       pushError("Eagle 资产桥", `导入「${id}」失败：${errMsg(e)}`);
+    } finally {
+      release();
+      if (importing.get(key) === done) importing.delete(key);
     }
   }
   if (!opts.silent && imported.length) {
@@ -506,6 +519,12 @@ function effectiveInterval(base: number): number {
 }
 
 async function runScanOnce(): Promise<void> {
+  if (scanning) return;
+  scanning = true;
+  try { await scanActiveAssets(); } finally { scanning = false; }
+}
+
+async function scanActiveAssets(): Promise<void> {
   const st = useEagle.getState();
   if (st.connState !== "ready" || st.library == null) return;
   const cli = client();
@@ -513,7 +532,7 @@ async function runScanOnce(): Promise<void> {
 
   // 只核对 MOMO 已绑定的 itemId（分批 500/个请求），不扫全库——
   // 6 千项的库按老做法每轮要 7 个请求，绑定几十个时 1 个请求就够
-  const bound = useAssets.getState().items.filter((i) => i.eagle?.itemId && i.eagle.state !== "error");
+  const bound = activeEagleAssets(useAssets.getState().items, libraryKeyOf(st.library.path)).filter(i => i.eagle?.state !== "error");
   if (!bound.length) return;
   try {
     const byId = new Map<string, number>();
@@ -550,11 +569,13 @@ async function runScanOnce(): Promise<void> {
     if (changedAssets.length) {
       useEagle.setState({ dirtyIds: changedAssets });
       // 双向模式 = 无感回流：Eagle 端被加工过的素材自动以新版本导入（原版本保留）
-      void importEagleItems(changedItemIds, { silent: true, autoPull: true })
+      const previousIds = new Set(useAssets.getState().items.map(i => i.id));
+      await importEagleItems(changedItemIds, { silent: true, autoPull: true })
         .then((imported) => {
           if (!imported.length) return;
           useEagle.setState({ dirtyIds: [] });
-          toastOnce(`Eagle 端有 ${imported.length} 个素材被更新，已自动导入为新版本（原版本保留在资产库）`, "ok");
+          const created = newEagleImports(imported, previousIds);
+          if (created.length) toastOnce(`Eagle 端有 ${created.length} 个素材被更新，已自动导入为新版本（原版本保留在资产库）`, "ok");
         })
         .catch((e) => console.warn("[eagle] auto pull failed", e));
     }

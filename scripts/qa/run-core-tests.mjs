@@ -6,7 +6,7 @@ import path from 'node:path';
 const require=createRequire(import.meta.url),viteRequire=createRequire(require.resolve('vite'));
 const {build}=viteRequire('esbuild');
 const tests=execFileSync('rg',['--files','src'],{encoding:'utf8',windowsHide:true}).split(/\r?\n/).filter(f=>f.endsWith('.test.ts'));
-tests.push('scripts/qa/h3Authoring.test.ts','scripts/qa/skill-delete.test.ts','scripts/qa/codexBridge.test.ts');
+tests.push('scripts/qa/h3Authoring.test.ts','scripts/qa/skill-delete.test.ts','scripts/qa/codexBridge.test.ts','scripts/qa/eagle-sync.test.ts');
 await mkdir('.Codex/core-tests',{recursive:true});let failed=0;
 for(const file of tests){
  const name=path.basename(file),outfile=path.resolve('.Codex/core-tests',name+'.mjs');
