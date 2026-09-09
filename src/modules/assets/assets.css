@@ -103,7 +103,8 @@
   border-bottom: 1px solid var(--panel-border);
   flex-wrap: wrap;
 }
-.al-toolbar .search-box {
+.al-toolbar .search-box,
+.al-eagle-head .search-box {
   display: flex;
   align-items: center;
   gap: 7px;
@@ -115,7 +116,8 @@
   width: 240px;
   color: var(--text-3);
 }
-.al-toolbar .search-box input {
+.al-toolbar .search-box input,
+.al-eagle-head .search-box input {
   border: none;
   background: none;
   outline: none;
@@ -879,3 +881,124 @@ img.svg-bg {
 .assetlib.selecting .a-card {
   user-select: none;
 }
+
+/* ================= Eagle 资产桥（资产库内集成） ================= */
+
+/* 组展开面板成员卡：可整卡拖拽（与单卡一致的手感） */
+.a-group-member {
+  cursor: grab;
+}
+.a-group-member:active {
+  cursor: grabbing;
+}
+
+/* Eagle 状态角标：位于卡片右上角，避免和左侧类型角标叠位 */
+.a-card .a-badge.eagle {
+  left: auto;
+  right: 7px;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  max-width: calc(100% - 14px);
+  font-weight: 650;
+}
+.a-card .a-badge.eagle.ok {
+  background: color-mix(in srgb, var(--accent) 55%, rgba(10, 14, 30, 0.72));
+}
+.a-card .a-badge.eagle.warn {
+  background: color-mix(in srgb, #e8a13c 78%, rgba(10, 14, 30, 0.72));
+}
+.a-card .a-badge.eagle.err {
+  background: color-mix(in srgb, var(--danger, #e05555) 76%, rgba(10, 14, 30, 0.72));
+}
+/* 组员卡里的角标尺寸微调 */
+.a-group-member .a-badge.eagle {
+  position: absolute;
+  top: 7px;
+  right: 7px;
+  z-index: 2;
+}
+
+/* Eagle 页签（侧栏底部「连接」区） */
+.side-item.on.eagle {
+  border-color: color-mix(in srgb, var(--accent) 60%, transparent);
+}
+
+/* ---- Eagle 远程浏览 ---- */
+.al-eagle {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+}
+.al-eagle-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--panel-border);
+  background: var(--grad-brand-soft);
+}
+.al-eagle-head .search-box {
+  flex: 1;
+  max-width: 460px;
+  width: auto;
+}
+.al-eagle-lib {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  color: var(--text-2);
+  font-size: 12.5px;
+  font-weight: 700;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 300px;
+}
+.al-eagle-lib em {
+  font-style: normal;
+  font-weight: 500;
+  color: var(--text-3);
+}
+.al-eagle-grid {
+  grid-auto-rows: 200px;
+}
+.a-remote .a-remote-btn {
+  margin: 0 8px 8px;
+  width: calc(100% - 16px);
+}
+.al-eagle-more,
+.al-eagle-loading {
+  display: flex;
+  justify-content: center;
+  padding: 14px 0 22px;
+  color: var(--text-3);
+  font-size: 12.5px;
+}
+.al-eagle-empty {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  color: var(--text-3);
+  text-align: center;
+  line-height: 1.7;
+}
+
+/* 范围切换与搜索并列，不占据整条内容区。 */
+.al-scope { display:inline-flex; align-items:center; gap:3px; padding:3px; border:1px solid var(--panel-border); background:var(--input-bg); border-radius:10px; flex:none; }
+.al-scope button { display:flex; align-items:center; justify-content:center; gap:6px; padding:7px 10px; border-radius:7px; font-size:var(--fs-sm); color:var(--text-2); white-space:nowrap; transition:background var(--t-fast),color var(--t-fast); }
+.al-scope button[aria-pressed="true"] { background:var(--panel-solid); color:var(--text-1); box-shadow:0 1px 4px #0002; }
+.al-scope button:hover:not(:disabled) { background:var(--hover); color:var(--text-1); }
+.al-scope button:disabled { opacity:.4; cursor:not-allowed; }
+.al-scope button:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+.al-toolbar { flex-wrap:wrap; }

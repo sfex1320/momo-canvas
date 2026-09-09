@@ -8,7 +8,7 @@ import {
   type EdgeChange,
   type Connection,
 } from "@xyflow/react";
-import type { AppNode, BoardMeta, NodeKind, PortType } from "../types";
+import type { AppNode, BoardMeta, GroupData, NodeKind, PortType } from "../types";
 import { uid } from "../utils";
 import { loadJSON, loadJSONChecked, saveJSON } from "../persist";
 import { externalizeBoards, gcBlobs, hydrateBoards } from "../blobStore";
@@ -19,6 +19,8 @@ import { useDirector } from "./directorStore";
 
 /** 拖动吸附对齐的阈值（flow 坐标 px） */
 const ALIGN_SNAP = 6;
+/** 拖出脱组的越界阈值：成员拖离组框超过该距离才脱组（防止贴边微调时误脱） */
+const GROUP_ESCAPE = 96;
 
 /* ---------- 节点默认数据 ---------- */
 export function defaultData(kind: NodeKind): Record<string, unknown> {
@@ -265,6 +267,10 @@ type BoardState = {
   groupInRect: (rect: { x: number; y: number; w: number; h: number }) => void;
   /** 重排组内成员（瀑布流）并重算组框尺寸——成员拖动/尺寸变化后自适应 */
   relayoutGroup: (gid: string) => void;
+  /** 组框自适应成员（只扩不缩）：成员拖动/尺寸变化后由组节点自动调用，解决「元素过大被固定区域关住」 */
+  fitGroupToMembers: (gid: string) => void;
+  /** 图层组原位摆放：按「成员 id → 组内坐标」映射写成员位置并设定组框尺寸（元素拆解「位置即语义」布局） */
+  placeGroupMembers: (gid: string, pos: Record<string, { x: number; y: number }>, size: { w: number; h: number }, recordUndo?: boolean) => void;
   /** 忽略/恢复所选节点（忽略的节点半透明，不向下游传递数据） */
   toggleIgnoreSelected: () => void;
   /** 快捷键强制对齐：≥2 个所选顶层节点按主轴对齐（横向铺开 → 顶对齐成一排；纵向铺开 → 左对齐成一列）；单选吸到 20px 网格 */
@@ -320,13 +326,14 @@ export const INTERRUPTED_MSG =
 /** 已删除的节点类型：旧画布载入时直接丢弃（连着相关边一起清掉） */
 const REMOVED_KINDS = new Set(["frame", "videoTrim", "videoConcat", "matting"]);
 
-/** 已改为「节点上直接编辑」的旧编辑节点类型：旧画布载入时转成图片节点（结果图落进去，来源写进名字） */
+/** 已改为「节点上直接编辑」的旧编辑节点类型 + 已下线的宫格节点：旧画布载入时转成图片节点（结果图落进去，来源写进名字） */
 const LEGACY_EDIT_LABEL: Record<string, string> = {
   inpaint: "局部重绘",
   outpaint: "扩图",
   enhance: "高清增强",
   crop: "聚焦裁剪",
   resize: "尺寸调整",
+  grid: "宫格",
 };
 
 /** 载入时清洗：运行中的任务标记为中断错误、失效的 blob 链接清空、已删除的节点类型丢弃、反推描述迁移进文本处理
@@ -345,10 +352,10 @@ function sanitizeNodes(nodes: AppNode[], markInterrupted = true): { nodes: AppNo
       d.mode = undefined;
       d.custom = d.custom ?? "";
     }
-    // 旧编辑节点（局部重绘/扩图/增强/裁剪/尺寸）→ 图片节点：结果图保留为节点内容
+    // 旧编辑节点（局部重绘/扩图/增强/裁剪/尺寸）与已下线的宫格节点 → 图片节点：整图保留为节点内容
     if (LEGACY_EDIT_LABEL[type as string]) {
       const results = d.results as string[] | undefined;
-      const src = (d.result as string | undefined) ?? results?.[(d.picked as number | undefined) ?? 0];
+      const src = (d.src as string | undefined) ?? (d.result as string | undefined) ?? results?.[(d.picked as number | undefined) ?? 0];
       d = { status: src ? "done" : "idle", src, name: LEGACY_EDIT_LABEL[type as string] };
       type = "image" as typeof type;
     }
@@ -388,18 +395,32 @@ function normOutHandle(h?: string | null): string {
 }
 
 /** 连线清洗：丢弃两端已不存在的边；把老画布细分句柄迁移到统一单口；
- *  单口后同一(源,源句柄,目标)只保留一条——老画布里同对多类型边会塌缩，避免重影（分镜 shot-N 因源句柄不同仍可并存）。 */
+ *  单口后同一(源,源句柄,目标)只保留一条——老画布里同对多类型边会塌缩，避免重影（分镜 shot-N 因源句柄不同仍可并存）；
+ *  句柄非法（如目标句柄写成了 out/随机值）的边 React Flow 不会渲染但数据还在——表现为「传入 N 却看不见线」的幽灵边，一并丢弃。 */
 function sanitizeEdges(edges: Edge[], nodes: AppNode[]): Edge[] {
-  const ids = new Set(nodes.map((n) => n.id));
-  // 无输入口的类型（源素材/便签）：指向它们的边一律是旧数据残留（如旧编辑节点转成图片节点后的入边），丢弃
-  const noInput = new Set(nodes.filter((n) => n.type !== "group" && !Object.keys(NODE_INPUTS[n.type as NodeKind] ?? {}).length).map((n) => n.id));
+  const byId = new Map(nodes.map((n) => [n.id, n]));
+  // 无输入口的类型（源素材/便签）：指向它们的边一律是旧数据残留（如旧编辑节点转成图片节点后的入边），丢弃；
+  // 分镜切片图片节点（storyTile）带可见输入口（连线来自原图，纯溯源展示），例外保留
+  const noInput = new Set(
+    nodes
+      .filter(
+        (n) =>
+          n.type !== "group" &&
+          !Object.keys(NODE_INPUTS[n.type as NodeKind] ?? {}).length &&
+          !(n.data as Record<string, unknown> | undefined)?.storyTile,
+      )
+      .map((n) => n.id),
+  );
   const seen = new Set<string>();
   const out: Edge[] = [];
   for (const e of edges) {
-    if (!ids.has(e.source) || !ids.has(e.target)) continue;
+    if (!byId.has(e.source) || !byId.has(e.target)) continue;
     if (noInput.has(e.target)) continue;
     const sh = normOutHandle(e.sourceHandle);
     const th = normInHandle(e.targetHandle);
+    // 句柄存在性校验：源句柄只有 out；目标句柄 in 或分镜 shot-N（否则该边画不出来）
+    if (sh !== "out") continue;
+    if (th !== "in" && !(byId.get(e.target)!.type === "storyboard" && /^shot-\d+$/.test(th))) continue;
     const key = `${e.source}|${sh}|${e.target}`;
     if (seen.has(key)) continue;
     seen.add(key);
@@ -832,6 +853,34 @@ export const useBoard = create<BoardState>((set, get) => {
         (c): c is Extract<NodeChange<AppNode>, { type: "position" }> =>
           c.type === "position" && !!c.dragging && !!c.position,
       );
+      // 拖出脱组：成员被拖离组框越界超过阈值 → 立即脱组（转绝对坐标），Figma 式「拖出即出组」
+      if (dragChanges.length) {
+        const escapes = new Map<string, { x: number; y: number }>();
+        for (const c of dragChanges) {
+          const n = nodes.find((nn) => nn.id === c.id);
+          if (!n?.parentId || !c.position) continue;
+          const g = nodes.find((gg) => gg.id === n.parentId && gg.type === "group");
+          if (!g) continue;
+          const gw = Number(g.style?.width) || g.measured?.width || 0;
+          const gh = Number(g.style?.height) || g.measured?.height || 0;
+          const w = n.measured?.width ?? 0;
+          const h = n.measured?.height ?? 0;
+          const { x, y } = c.position;
+          if (x < -GROUP_ESCAPE || y < -GROUP_ESCAPE || x + w > gw + GROUP_ESCAPE || y + h > gh + GROUP_ESCAPE) {
+            escapes.set(n.id, { x: x + g.position.x, y: y + g.position.y });
+          }
+        }
+        if (escapes.size) {
+          nodes = nodes.map((n) =>
+            escapes.has(n.id) ? { ...n, parentId: undefined, extent: undefined, position: escapes.get(n.id)! } : n,
+          );
+          // 脱组后坐标系从「相对组」变「绝对」：本轮及松手帧的 position 变更须换成绝对坐标，否则节点会跳回相对位置
+          changes = changes.map((c) => {
+            const abs = c.type === "position" && c.position ? escapes.get(c.id) : undefined;
+            return abs ? { ...c, position: { x: abs.x, y: abs.y } } : c;
+          });
+        }
+      }
       if (dragChanges.length) {
         const ids = new Set(dragChanges.map((c) => c.id));
         const dragged = dragChanges
@@ -981,7 +1030,7 @@ export const useBoard = create<BoardState>((set, get) => {
         ...n,
         selected: false,
         parentId: gid,
-        extent: "parent" as const,
+        // 不写 extent:"parent"：成员不再被硬锁在组框内（元素拆解产物常比组框大），越界由 fitGroupToMembers 扩组兜底，拖出脱组在 onNodesChange
         position: posById.get(n.id)!,
       }));
       const group: AppNode = {
@@ -1008,6 +1057,8 @@ export const useBoard = create<BoardState>((set, get) => {
       const { nodes } = get();
       const g = nodes.find((n) => n.id === gid && n.type === "group");
       if (!g) return;
+      // 图层组的 y 序就是图层 z 序，瀑布流重排（kindRank 优先）会打乱层序——直接跳过
+      if ((g.data as GroupData).layerGroup) return;
       const members = nodes
         .filter((n) => n.parentId === gid)
         .sort(
@@ -1024,6 +1075,42 @@ export const useBoard = create<BoardState>((set, get) => {
           if (n.id === gid) return { ...n, style: { ...n.style, width: groupW, height: groupH } };
           const np = posById.get(n.id);
           return np && (n.position.x !== np.x || n.position.y !== np.y) ? { ...n, position: np } : n;
+        }),
+      });
+      persist();
+    },
+
+    fitGroupToMembers: (gid) => {
+      const { nodes } = get();
+      const g = nodes.find((n) => n.id === gid && n.type === "group");
+      if (!g || (g.data as GroupData).artboard) return;
+      const members = nodes.filter((n) => n.parentId === gid);
+      if (!members.length) return;
+      let maxX = 0;
+      let maxY = 0;
+      for (const m of members) {
+        maxX = Math.max(maxX, m.position.x + (m.measured?.width ?? 0));
+        maxY = Math.max(maxY, m.position.y + (m.measured?.height ?? 0));
+      }
+      const w = Math.max(Number(g.style?.width) || 0, Math.ceil(maxX + GP_PAD));
+      const h = Math.max(Number(g.style?.height) || 0, Math.ceil(maxY + GP_PAD));
+      const cw = g.style?.width as number | undefined;
+      const ch = g.style?.height as number | undefined;
+      if (w === cw && h === ch) return;
+      set({ nodes: nodes.map((n) => (n.id === gid ? { ...n, style: { ...n.style, width: w, height: h } } : n)) });
+      persist();
+    },
+
+    placeGroupMembers: (gid, pos, size, recordUndo=true) => {
+      const { nodes } = get();
+      const g = nodes.find((n) => n.id === gid && n.type === "group");
+      if (!g) return;
+      if(recordUndo)snapshot();
+      set({
+        nodes: nodes.map((n) => {
+          if (n.id === gid) return { ...n, style: { ...n.style, width: size.w, height: size.h } };
+          const p = pos[n.id];
+          return p ? { ...n, position: p } : n;
         }),
       });
       persist();
@@ -1047,7 +1134,6 @@ export const useBoard = create<BoardState>((set, get) => {
         ...n,
         selected: false,
         parentId: gid,
-        extent: "parent" as const,
         position: posById.get(n.id)!,
       }));
       // 组宽至少容纳瀑布流内容；框选区比内容大时取框宽（成员贴左上，右侧留白）

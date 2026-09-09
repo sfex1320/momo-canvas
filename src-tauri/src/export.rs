@@ -140,6 +140,8 @@ fn reg_exists(key: &str) -> bool {
 /// SVG 文本 → 原生 .ai / .cdr。w_mm/h_mm 仅 CorelDRAW 页面尺寸用。
 /// format="eps" 走独立导出（不依赖 AI/CDR，见 run_eps）。
 pub fn run(svg: &str, format: &str, out_path: &str, w_mm: f64, h_mm: f64) -> SResult<ExportResult> {
+    if format == "pdf" { return run_pdf(svg, out_path, w_mm, h_mm); }
+    if format == "png" { return run_png(svg, out_path, w_mm as u32); }
     if format == "eps" {
         return run_eps(svg, out_path);
     }
@@ -207,6 +209,32 @@ pub fn run(svg: &str, format: &str, out_path: &str, w_mm: f64, h_mm: f64) -> SRe
         bytes: meta.len() as usize,
         format: format.to_string(),
     })
+}
+
+/// 独立矢量 PDF：拒绝会栅格化的滤镜/图片，避免“套壳 PDF”误当生产矢量。
+fn run_pdf(svg:&str,out_path:&str,w_mm:f64,h_mm:f64)->SResult<ExportResult>{
+    let lower=svg.to_lowercase();
+    if lower.contains("<image")||lower.contains("<filter")||lower.contains("filter="){return Err("纯矢量 PDF 不接受嵌入位图或滤镜，请先转为路径".into());}
+    if !w_mm.is_finite()||!h_mm.is_finite()||w_mm<=0.||h_mm<=0.||w_mm>20000.||h_mm>20000.{return Err("导出尺寸必须在 0–20000 mm 之间".into());}
+    let mut opts=svg2pdf::usvg::Options::default();opts.fontdb_mut().load_system_fonts();
+    opts.image_href_resolver.resolve_string=Box::new(|_,_|None);
+    let tree=svg2pdf::usvg::Tree::from_str(svg,&opts).map_err(|e|format!("SVG 解析失败：{e}"))?;
+    if (w_mm/h_mm-tree.size().width() as f64/tree.size().height() as f64).abs()>0.01{return Err("导出宽高比与矢量稿不一致，请保持原稿比例".into());}
+    let dpi=(tree.size().width() as f64*25.4/w_mm) as f32;
+    let bytes=svg2pdf::to_pdf(&tree,svg2pdf::ConversionOptions{embed_text:false,..Default::default()},svg2pdf::PageOptions{dpi}).map_err(|e|format!("PDF 转换失败：{e}"))?;
+    std::fs::write(out_path,&bytes).map_err(|e|e.to_string())?;
+    Ok(ExportResult{path:out_path.into(),bytes:bytes.len(),format:"pdf".into()})
+}
+/// 从矢量曲线直接重新栅格化，不放大原图的马赛克。w_px 是用户指定的输出像素宽。
+fn run_png(svg:&str,out_path:&str,w_px:u32)->SResult<ExportResult>{
+    let mut opts=resvg::usvg::Options::default();opts.image_href_resolver.resolve_string=Box::new(|_,_|None);
+    let tree=resvg::usvg::Tree::from_str(svg,&opts).map_err(|e|e.to_string())?;
+    let scale=w_px as f32/tree.size().width();let h=(tree.size().height()*scale).round() as u32;
+    if w_px<1||w_px>32768||h<1||h>32768||w_px as u64*h as u64>64_000_000{return Err("PNG 输出限制为 6400 万像素，请降低倍率".into());}
+    let mut pix=resvg::tiny_skia::Pixmap::new(w_px,h).ok_or("无法分配输出画布")?;
+    resvg::render(&tree,resvg::tiny_skia::Transform::from_scale(scale,scale),&mut pix.as_mut());
+    pix.save_png(out_path).map_err(|e|e.to_string())?;let bytes=std::fs::metadata(out_path).map_err(|e|e.to_string())?.len() as usize;
+    Ok(ExportResult{path:out_path.into(),bytes,format:"png".into()})
 }
 
 fn unique_nanos() -> u128 {
@@ -375,6 +403,16 @@ fn run_with_timeout(mut cmd: Command, timeout: Duration) -> SResult<i32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn independent_pdf_keeps_paths_and_mm(){
+        let svg=r#"<svg xmlns="http://www.w3.org/2000/svg" width="400" height="200" viewBox="0 0 400 200"><path d="M10 10H390V190H10Z" fill="red"/></svg>"#;
+        let dir=std::env::var("MOMO_VECTOR_ACCEPTANCE_DIR").unwrap_or_else(|_|env!("OUT_DIR").into());
+        let pdf=format!("{dir}/平面拆件.pdf");run_pdf(svg,&pdf,200.,100.).unwrap();
+        let bytes=std::fs::read(&pdf).unwrap();let text=String::from_utf8_lossy(&bytes);assert!(text.starts_with("%PDF"));assert!(!text.contains("/Subtype /Image"));assert!(text.contains("/MediaBox"));
+        let png=format!("{dir}/平面拆件-4x.png");run_png(svg,&png,1600).unwrap();let img=image::open(png).unwrap();assert_eq!((img.width(),img.height()),(1600,800));
+        assert!(run_png(svg,"unused.png",32000).is_err());assert!(run_pdf(svg,"unused.pdf",200.,500.).is_err());
+    }
+    #[test]fn pdf_rejects_raster_and_filters(){assert!(run_pdf("<svg><image href='x'/></svg>","unused.pdf",1.,1.).is_err());assert!(run_pdf("<svg><filter/></svg>","unused.pdf",1.,1.).is_err());}
 
     #[test]
     fn vbs_scripts_present() {

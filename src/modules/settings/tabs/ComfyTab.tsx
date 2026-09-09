@@ -8,8 +8,10 @@ import { useComfy, useComfyTemplates } from "../../../core/stores/comfyStore";
 import { toast, useUi } from "../../../core/stores/uiStore";
 import { freeComfyMemory, freeResultText } from "../../../core/services/comfy";
 import { importTemplateFilesAuto, packTemplates, saveTextFile } from "../../comfy/templateIO";
-import { IcBroom, IcDownload, IcEdit, IcFlow, IcLoading, IcTrash, IcUpload } from "../../../ui/icons";
+import { useComfySync } from "../../../core/stores/comfySyncStore";
+import { IcBroom, IcDownload, IcEdit, IcFlow, IcLoading, IcRefresh, IcTrash, IcUpload } from "../../../ui/icons";
 import { SecHelp } from "../shared";
+import { Switch } from "../../../ui/kit";
 
 export function ComfyTab() {
   const settings = useSettings((s) => s.settings);
@@ -20,6 +22,11 @@ export function ComfyTab() {
   const templates = useComfyTemplates();
   const removeTpl = useComfy((s) => s.remove);
   const setTemplateMgr = useUi((s) => s.setTemplateMgr);
+  const setComfySyncOpen = useUi((s) => s.setComfySyncOpen);
+  const closeSettings = useUi((s) => s.closeSettings);
+  const syncSources = useComfySync((s) => s.sources);
+  const syncRunning = useComfySync((s) => s.running);
+  const syncUntracked = useComfySync((s) => s.workflows.filter((w) => w.status === "untracked").length);
   const [testing, setTesting] = useState(false);
   const [freeing, setFreeing] = useState(false);
   const [confirmDel, setConfirmDel] = useState<string | null>(null);
@@ -36,6 +43,43 @@ export function ComfyTab() {
       <div className="set-page-h">
         <div className="set-page-t">ComfyUI</div>
         <div className="set-page-d">连接本机或局域网内已启动的 ComfyUI 服务，通过工作流模板在画布上直接出图。</div>
+      </div>
+
+      <div className="set-card">
+        <div className="set-card-h">
+          工作流无感同步
+          <span className="sec-h-tail">
+            <SecHelp>
+              配置一次 ComfyUI 工作流目录后：ComfyUI 里新建、保存、改名工作流，MOMO 自动同步更新；
+              完整工作流 JSON（布局/分组/子图）原样入库，API 格式自动派生，不再需要手工导出导入。
+              默认 ComfyUI 主控：MOMO 对源目录只读，绝不写回。画布节点上改的参数不受同步影响。
+            </SecHelp>
+          </span>
+        </div>
+        <Field label="启用无感同步">
+          <Row>
+            <Switch
+              on={settings.comfy.syncV2Enabled !== false}
+              onChange={(v) => {
+                update("comfy", { ...settings.comfy, syncV2Enabled: v });
+                void import("../../../core/comfySync/engine").then((m) => (v ? m.startEngine() : m.stopEngine()));
+              }}
+            />
+            <span className="set-hint">关闭后回退旧的手工导入/往返编辑路径，已同步数据不受影响</span>
+          </Row>
+        </Field>
+        <Row gap={8}>
+          <span className={`set-badge ${syncRunning ? "ok" : "dim"}`}>{syncRunning ? `同步服务运行中 · ${syncSources.length} 个来源` : "同步服务未运行"}</span>
+          <button className="btn sm" style={{ marginLeft: "auto" }} onClick={() => {
+            closeSettings();
+            setComfySyncOpen(true);
+          }}>
+            <IcRefresh size={14} /> 打开同步中心
+          </button>
+        </Row>
+        <div className="set-hint" style={{ marginTop: 6 }}>
+          同步中心入口也在顶部工具栏（工作流图标按钮，带状态点）。{syncUntracked ? `当前有 ${syncUntracked} 套新发现的工作流待勾选。` : ""}
+        </div>
       </div>
 
       <div className="set-card">

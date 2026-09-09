@@ -65,7 +65,7 @@ export const DirectorNode = memo(function DirectorNode({ id, data, selected }: N
 
   const enter = () => {
     if (d.projectId) {
-      useUi.setState({ directorNodeId: id });
+      useUi.setState({ directorNodeId: id, directorProjectId: d.projectId });
       setDirectorOpen(true);
     }
   };

@@ -10,9 +10,18 @@
  *  - 导入向导让用户补充名称、分类、适用位置、执行阶段
  */
 import type { MomoSkill, SkillContext, SkillOutput, SkillPhase, SkillVariable } from "./skillTypes";
+import { SKILL_CONTEXTS } from "./skillTypes";
+import type { SkillPurpose } from "./skillTypes";
 import { newSkill } from "./stores/skillStore";
 
 /** 导入结果 */
+const VALID_PURPOSES: SkillPurpose[] = ["script-plan", "segment-authoring", "compile-video-prompt", "compile-image-prompt", "project-package", "validate"];
+
+/** frontmatter/JSON 的 purpose 合法化：非法值丢弃返回 undefined */
+function validPurpose(raw: unknown): SkillPurpose | undefined {
+  return typeof raw === "string" && (VALID_PURPOSES as string[]).includes(raw) ? (raw as SkillPurpose) : undefined;
+}
+
 export type ImportResult = {
   skill: MomoSkill;
   warnings: string[]; // 非 fatal 警告（如忽略了脚本文件）
@@ -31,6 +40,10 @@ type Frontmatter = {
   phase?: string;
   output?: string;
   variables?: SkillVariable[];
+  /** 分型（能力层）：rule | workflow，缺省 rule */
+  kind?: string;
+  /** Agent 路由提示（workflow 型）：自然语言触发条件 */
+  triggers?: string[];
 };
 
 /** 解析 SKILL.md：首段 YAML frontmatter（--- 分隔）+ 剩余正文作为 instructions */
@@ -49,9 +62,11 @@ function parseSkillMd(text: string): { fm: Frontmatter; instructions: string } {
       const [, k, v] = mm;
       if (k === "contexts") {
         fm.contexts = v.replace(/[\[\]]/g, "").split(",").map((s) => s.trim()).filter(Boolean);
+      } else if (k === "triggers") {
+        fm.triggers = v.replace(/[\[\]]/g, "").split(",").map((s) => s.trim()).filter(Boolean).slice(0, 6);
       } else if (k === "variables") {
         // variables 是多行结构，极简解析跳过（导入向导里让用户补）
-      } else if (k === "id" || k === "name" || k === "version" || k === "description" || k === "phase" || k === "output") {
+      } else if (k === "id" || k === "name" || k === "version" || k === "description" || k === "phase" || k === "output" || k === "kind") {
         (fm as any)[k] = v.trim().replace(/^["']|["']$/g, "");
       }
     }
@@ -67,14 +82,8 @@ function skillFromFrontmatter(
   references?: string[],
 ): ImportResult {
   const warnings: string[] = [];
-  const validContexts: SkillContext[] = (fm.contexts ?? ["prompt.text"]).filter(
-    (c): c is SkillContext =>
-      [
-        "prompt.text", "prompt.image", "prompt.video",
-        "director.project", "director.segment",
-        "poster.layout", "ecom.layout",
-        "agent.image", "agent.video",
-      ].includes(c),
+  const validContexts: SkillContext[] = (fm.contexts ?? ["prompt.text"]).filter((c): c is SkillContext =>
+    SKILL_CONTEXTS.includes(c as SkillContext),
   );
   if (fm.contexts && validContexts.length !== fm.contexts.length) {
     warnings.push(`部分 contexts 值不合法，已保留合法项：${validContexts.join(", ")}`);
@@ -83,6 +92,12 @@ function skillFromFrontmatter(
   const phase = (fm.phase && validPhases.includes(fm.phase as SkillPhase) ? fm.phase : "authoring") as SkillPhase;
   const validOutputs: SkillOutput[] = ["text", "prompt-plan", "poster-plan", "director-plan"];
   const output = (fm.output && validOutputs.includes(fm.output as SkillOutput) ? fm.output : "text") as SkillOutput;
+  // 分型（能力层）：只认 rule/workflow，非法值丢弃告警；triggers 仅作 Agent 路由提示登记
+  if (fm.kind && fm.kind !== "rule" && fm.kind !== "workflow") {
+    warnings.push(`kind 值不合法（${fm.kind}），已按默认 rule 处理`);
+  }
+  const kind: MomoSkill["kind"] = fm.kind === "workflow" ? "workflow" : fm.kind === "rule" ? "rule" : undefined;
+  const triggers = (fm.triggers ?? []).map((t) => t.trim()).filter(Boolean).slice(0, 6);
 
   const skill = newSkill({
     id: fm.id || fm.name || undefined, // name 派生稳定 id：重复导入同名 Skill 覆盖更新而非新增重复项
@@ -91,10 +106,13 @@ function skillFromFrontmatter(
     description: fm.description || "",
     contexts: validContexts,
     phase,
+    purpose: validPurpose((fm as Record<string, unknown>).purpose),
     output,
     instructions,
     references,
     source: "import",
+    ...(kind ? { kind } : {}),
+    ...(triggers.length ? { triggers } : {}),
   });
   return { skill, warnings };
 }
@@ -227,20 +245,24 @@ export function importSkillPackage(
     }
   }
 
-  // 5. 校验 contexts/phase/output 合法性（同 importSkillMd）
-  const validContexts: SkillContext[] = (sj.contexts ?? ["prompt.text"]).filter(
-    (c): c is SkillContext =>
-      [
-        "prompt.text", "prompt.image", "prompt.video",
-        "director.project", "director.segment",
-        "poster.layout", "ecom.layout",
-        "agent.image", "agent.video",
-      ].includes(c),
+  // 5. 校验 contexts/phase/output 合法性（同 importSkillMd；合法表唯一来源 SKILL_CONTEXTS）
+  const validContexts: SkillContext[] = (sj.contexts ?? ["prompt.text"]).filter((c): c is SkillContext =>
+    SKILL_CONTEXTS.includes(c as SkillContext),
   );
   const validPhases: SkillPhase[] = ["analyze", "authoring", "model-adapter", "validate"];
   const phase = (sj.phase && validPhases.includes(sj.phase as SkillPhase) ? sj.phase : "authoring") as SkillPhase;
   const validOutputs: SkillOutput[] = ["text", "prompt-plan", "poster-plan", "director-plan"];
   const output = (sj.output && validOutputs.includes(sj.output as SkillOutput) ? sj.output : "text") as SkillOutput;
+  // 分型（能力层）：skill.json 同样支持 kind/triggers（triggers 仅作 Agent 路由提示）
+  const sjExtra = sj as Record<string, unknown>;
+  const rawKind = typeof sjExtra.kind === "string" ? sjExtra.kind : "";
+  if (rawKind && rawKind !== "rule" && rawKind !== "workflow") {
+    warnings.push(`kind 值不合法（${rawKind}），已按默认 rule 处理`);
+  }
+  const kind: MomoSkill["kind"] = rawKind === "workflow" ? "workflow" : rawKind === "rule" ? "rule" : undefined;
+  const triggers = Array.isArray(sjExtra.triggers)
+    ? sjExtra.triggers.map((t) => String(t).trim()).filter(Boolean).slice(0, 6)
+    : [];
 
   const skill = newSkill({
     id: sj.id || sj.name || undefined, // 同上：稳定 id，重复导入覆盖更新
@@ -249,11 +271,14 @@ export function importSkillPackage(
     description: sj.description || "",
     contexts: validContexts,
     phase,
+    purpose: validPurpose((sj as Record<string, unknown>).purpose),
     output,
     instructions,
     references,
     variables: sj.variables ?? [],
     source: "import",
+    ...(kind ? { kind } : {}),
+    ...(triggers.length ? { triggers } : {}),
   });
   return { skill, warnings };
 }

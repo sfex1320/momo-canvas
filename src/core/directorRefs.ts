@@ -227,7 +227,7 @@ export type ResolvedRefs = {
 };
 
 /** 计算片段生效槽位：全局槽（保序）+ 片段槽（追加在后；首帧/尾帧单例语义片段覆盖全局） */
-function effectiveSlots(project: DirectorProject, segment: DirectorSegment): DirectorSlotValue[] {
+export function effectiveSlots(project: DirectorProject, segment: DirectorSegment): DirectorSlotValue[] {
   const continuityText = [
     segment.promptFinalOverride,
     segment.promptOverride,

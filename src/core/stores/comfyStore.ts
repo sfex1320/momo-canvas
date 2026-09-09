@@ -37,6 +37,17 @@ function normalizeTemplate(t: ComfyTemplate): ComfyTemplate {
 
 let initOnce: Promise<void> | null = null;
 
+/** 落盘防抖：同步引擎/批量导入会连续 upsert 多个模板（全量 JSON 每次都重写），
+ *  300ms 合并成一次保存；set 仍即时生效，UI 不会看到延迟 */
+let saveTimer: number | null = null;
+function scheduleSave() {
+  if (saveTimer !== null) return;
+  saveTimer = window.setTimeout(() => {
+    saveTimer = null;
+    void saveJSON("comfy-templates.json", "v1", useComfy.getState().templates);
+  }, 300);
+}
+
 export const useComfy = create<ComfyState>((set, get) => ({
   templates: [],
   online: "unknown",
@@ -60,7 +71,7 @@ export const useComfy = create<ComfyState>((set, get) => ({
     const list = get().templates.filter((t) => t.id !== tpl.id);
     const next = [tpl, ...list];
     set({ templates: next });
-    void saveJSON("comfy-templates.json", "v1", next);
+    scheduleSave();
   },
 
   remove: (id) => {
@@ -71,7 +82,7 @@ export const useComfy = create<ComfyState>((set, get) => ({
     }
     const next = get().templates.filter((t) => t.id !== id);
     set({ templates: next });
-    void saveJSON("comfy-templates.json", "v1", next);
+    scheduleSave();
   },
 
   test: async (host) => {

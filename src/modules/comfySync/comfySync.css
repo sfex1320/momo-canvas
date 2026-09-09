@@ -1,0 +1,662 @@
+/**
+ * Comfy 工作流同步中心样式（插件规格 §6）
+ *  - 全屏层 z-index 460（高于导演台 450，规格关键约定：从导演台打开也不能被盖）
+ *  - 颜色一律 var(--token)；强调/状态光晕用 color-mix(in srgb, var(--accent) N%, transparent)
+ */
+
+.cfs-mask {
+  position: fixed;
+  inset: 0;
+  z-index: 460;
+  background: color-mix(in srgb, var(--bg-app) 55%, transparent);
+  backdrop-filter: blur(6px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: cfs-fade 0.18s ease;
+}
+
+@keyframes cfs-fade {
+  from {
+    opacity: 0;
+  }
+}
+
+.cfs-panel {
+  width: min(960px, calc(100vw - 64px));
+  height: min(720px, calc(100vh - 64px));
+  display: flex;
+  flex-direction: column;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  position: relative;
+  box-shadow: 0 18px 60px rgba(0, 0, 0, 0.35);
+  overflow: hidden;
+  animation: cfs-pop 0.2s cubic-bezier(0.2, 0.9, 0.3, 1.2);
+}
+
+@keyframes cfs-pop {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.98);
+  }
+}
+
+.cfs-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--border);
+}
+
+.cfs-head h2 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  font-size: 15.5px;
+  color: var(--text-1);
+}
+
+.cfs-head-acts {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* 状态点：灰=未配置/停 绿=正常 蓝=有新 黄=警告 红=失败 */
+.cfs-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--text-3);
+}
+.cfs-dot-ok {
+  background: var(--ok);
+}
+.cfs-dot-new {
+  background: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 25%, transparent);
+}
+.cfs-dot-warn {
+  background: var(--warn);
+}
+.cfs-dot-error {
+  background: var(--danger);
+}
+
+.cfs-empty {
+  padding: 40px 36px;
+  margin: 14px 18px;
+  border: 1px dashed var(--border);
+  border-radius: 12px;
+  color: var(--text-3);
+  font-size: 13px;
+  line-height: 1.9;
+  text-align: center;
+}
+
+.cfs-empty.sm {
+  padding: 22px;
+  margin: 8px;
+}
+
+.cfs-empty code {
+  padding: 1px 6px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--text-3) 12%, transparent);
+  color: var(--text-2);
+}
+
+/* 来源卡 */
+.cfs-sources {
+  padding: 12px 18px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.cfs-source {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 8px 12px;
+  background: var(--bg-app);
+}
+
+.cfs-source.editing {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+}
+
+.cfs-source-main {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.cfs-source-name {
+  font-size: 13px;
+  color: var(--text-1);
+  white-space: nowrap;
+}
+
+.cfs-ktag {
+  flex: none;
+  font-size: 11px;
+  padding: 1px 7px;
+  border-radius: 20px;
+  color: var(--text-3);
+  border: 1px solid var(--border);
+}
+
+.cfs-path {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11.5px;
+  color: var(--text-3);
+  font-family: var(--font-mono);
+}
+
+.cfs-hint {
+  font-size: 11.5px;
+  color: var(--text-3);
+  white-space: nowrap;
+}
+
+.cfs-acts {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: auto;
+  flex: none;
+}
+
+.cfs-source-edit {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  align-items: center;
+  padding: 10px 4px 4px;
+  border-top: 1px dashed var(--border);
+  margin-top: 8px;
+}
+
+.cfs-source-edit label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+  color: var(--text-2);
+}
+
+.cfs-source-edit .cfs-hint {
+  width: 100%;
+  white-space: normal;
+  line-height: 1.7;
+}
+
+.cfs-switch {
+  cursor: pointer;
+}
+
+/* 状态徽章 */
+.cfs-badge {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11.5px;
+  padding: 2px 9px;
+  border-radius: 20px;
+  color: var(--text-2);
+  background: color-mix(in srgb, var(--text-3) 12%, transparent);
+}
+
+.cfs-badge i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--text-3);
+}
+
+.cfs-badge.ok i {
+  background: var(--ok);
+}
+.cfs-badge.info i {
+  background: var(--accent);
+}
+.cfs-badge.warn i {
+  background: var(--warn);
+}
+.cfs-badge.err i {
+  background: var(--danger);
+}
+.cfs-badge.dim i {
+  background: var(--text-3);
+}
+
+/* 工作流列表 */
+.cfs-list {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 12px 18px 0;
+}
+
+.cfs-list-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding-bottom: 10px;
+}
+
+.cfs-checkall {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+  color: var(--text-2);
+  white-space: nowrap;
+}
+
+.cfs-search {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-3);
+}
+
+.cfs-rows {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-app);
+}
+
+.cfs-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  font-size: 12.5px;
+}
+
+.cfs-row:last-child {
+  border-bottom: none;
+}
+
+.cfs-row[data-status="syncing"] {
+  background: color-mix(in srgb, var(--accent) 6%, transparent);
+}
+
+.cfs-row-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.cfs-row-main b {
+  font-size: 13px;
+  color: var(--text-1);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cfs-row-main .cfs-hint {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-family: var(--font-mono);
+}
+
+.cfs-warn {
+  font-size: 11.5px;
+  color: var(--warn);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cfs-cell {
+  flex: none;
+  font-size: 11.5px;
+  color: var(--text-3);
+  width: 82px;
+  text-align: center;
+}
+
+/* 事件记录 */
+.cfs-events {
+  padding: 10px 18px 14px;
+}
+
+.cfs-events > b {
+  font-size: 12.5px;
+  color: var(--text-2);
+}
+
+.cfs-event-list {
+  margin-top: 6px;
+  max-height: 108px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.cfs-event {
+  display: flex;
+  gap: 10px;
+  font-size: 11.5px;
+  color: var(--text-2);
+}
+
+.cfs-event.lv-warn {
+  color: var(--warn);
+}
+
+.cfs-event.lv-error {
+  color: var(--danger);
+}
+
+/* 子浮层（目录确认 / 版本历史） */
+.cfs-sublayer {
+  position: absolute;
+  inset: 0;
+  z-index: 465;
+  background: color-mix(in srgb, var(--bg-app) 45%, transparent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.cfs-subpanel {
+  width: min(480px, 90%);
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 18px 20px;
+  box-shadow: 0 14px 44px rgba(0, 0, 0, 0.3);
+}
+
+.cfs-subpanel.wide {
+  width: min(620px, 92%);
+  max-height: 76%;
+  overflow-y: auto;
+}
+
+.cfs-subpanel h3 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 10px;
+  font-size: 14px;
+  color: var(--text-1);
+}
+
+.cfs-subpanel h3 .icon-btn {
+  margin-left: auto;
+}
+
+.cfs-subpanel .cfs-hint {
+  white-space: normal;
+  line-height: 1.7;
+  margin: 6px 0;
+}
+
+.cfs-candidate {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  margin: 4px 0;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.cfs-candidate.on {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+
+.cfs-candidate .cfs-path {
+  white-space: normal;
+  word-break: break-all;
+}
+
+.cfs-name-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+  font-size: 12.5px;
+  color: var(--text-2);
+}
+
+.cfs-sub-acts {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+/* 版本列表 */
+.cfs-rev-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.cfs-rev {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 7px 10px;
+  border-radius: 8px;
+  font-size: 12.5px;
+  color: var(--text-2);
+}
+
+.cfs-rev.cur {
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+}
+
+.cfs-rev > b {
+  color: var(--text-1);
+  width: 44px;
+}
+
+.cfs-rev > .cfs-hint {
+  flex: none;
+}
+
+.cfs-rev .cfs-acts {
+  margin-left: auto;
+}
+
+/* M2：写回冲突区（规格 FR-015） */
+.cfs-conflict-pill {
+  flex: none;
+  font-size: 11.5px;
+  padding: 3px 10px;
+  border-radius: 20px;
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+  cursor: help;
+}
+
+.cfs-conflicts {
+  padding: 12px 18px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.cfs-conflicts > b {
+  font-size: 12.5px;
+  color: var(--danger);
+}
+
+.cfs-conflict-card {
+  border: 1px solid color-mix(in srgb, var(--danger) 35%, var(--border));
+  background: color-mix(in srgb, var(--danger) 5%, transparent);
+  border-radius: 10px;
+  padding: 10px 12px;
+}
+
+.cfs-conflict-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.cfs-conflict-head b {
+  font-size: 13px;
+  color: var(--text-1);
+}
+
+.cfs-conflict-field {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  padding: 6px 0 2px;
+  font-size: 12px;
+}
+
+.cfs-fname {
+  min-width: 130px;
+  color: var(--text-1);
+  font-weight: 600;
+}
+
+.cfs-fval {
+  color: var(--text-2);
+}
+
+.cfs-fval.src {
+  color: var(--accent);
+}
+
+.cfs-fval.momo {
+  color: var(--ok);
+}
+
+.cfs-conflict-acts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+/* M2：差异视图（规格 FR-014） */
+.cfs-diff {
+  margin-top: 12px;
+  border-top: 1px dashed var(--border);
+  padding-top: 10px;
+}
+
+.cfs-diff-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.cfs-diff-head b {
+  font-size: 13px;
+  color: var(--text-1);
+}
+
+.cfs-diff-head .icon-btn {
+  margin-left: auto;
+}
+
+.cfs-diff-list {
+  margin-top: 8px;
+  max-height: 260px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.cfs-diff-row {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  font-size: 12px;
+  color: var(--text-2);
+}
+
+.cfs-diff-kind {
+  flex: none;
+  width: 62px;
+  font-size: 11px;
+  padding: 0 6px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--text-3) 12%, transparent);
+  color: var(--text-3);
+  text-align: center;
+}
+
+.cfs-diff-row.k-node\+ .cfs-diff-kind {
+  color: var(--ok);
+  background: color-mix(in srgb, var(--ok) 12%, transparent);
+}
+
+.cfs-diff-row.k-node- .cfs-diff-kind {
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+}
+
+.cfs-diff-row.k-param .cfs-diff-kind {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
+.cfs-diff-text {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 版本面板底部的写回行 */
+.cfs-rev-writeback {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--border);
+}
+
+/* 模式下拉（行内小号）与来源设置的忽略规则 */
+.cfs-policy .pop-trigger {
+  min-height: 26px;
+  font-size: 11.5px;
+  padding: 2px 8px;
+}
+
+.cfs-ignore-row {
+  width: 100%;
+  align-items: flex-start;
+}
+
+.cfs-ignore-input {
+  flex: 1;
+  min-height: 44px;
+  font-size: 11.5px;
+  font-family: var(--font-mono);
+  line-height: 1.5;
+}

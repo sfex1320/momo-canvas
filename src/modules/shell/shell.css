@@ -1306,3 +1306,45 @@
   z-index: 5;
   pointer-events: none;
 }
+
+/* Comfy 同步入口的状态点（规格 §6.1：灰=未配置 绿=正常 蓝=有新 黄=警告 红=失败） */
+.titlebar .icon-btn {
+  position: relative;
+}
+
+.tb-sync-dot {
+  position: absolute;
+  right: 3px;
+  bottom: 3px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--text-3);
+  pointer-events: none;
+}
+.tb-sync-dot.d-ok {
+  background: var(--ok);
+}
+.tb-sync-dot.d-new {
+  background: var(--accent);
+  box-shadow: 0 0 0 2.5px color-mix(in srgb, var(--accent) 25%, transparent);
+}
+.tb-sync-dot.d-warn {
+  background: var(--warn);
+}
+.tb-sync-dot.d-error {
+  background: var(--danger);
+}
+
+/* 同步派生模板的角标（模板管理行）：来源 Comfy 工作流同步 */
+.tpl-sync-tag {
+  display: inline-block;
+  margin-left: 7px;
+  padding: 0 7px;
+  border-radius: 20px;
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  vertical-align: 1px;
+}

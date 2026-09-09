@@ -124,8 +124,9 @@ export type StoredFile = {
   height?: number;
 };
 
-/** 生成图片缩略图 dataURL（webp, 最长边 360），并带回原始尺寸 */
-function makeImageThumb(blobUrl: string): Promise<{ thumb: string; width: number; height: number } | null> {
+/** 生成图片缩略图 dataURL（webp, 最长边 360），并带回原始尺寸；
+ *  导出供 Eagle 桥等外部落盘文件的场景复用 */
+export function makeImageThumb(blobUrl: string): Promise<{ thumb: string; width: number; height: number } | null> {
   return new Promise((res) => {
     const img = new Image();
     const timer = setTimeout(() => res(null), 8000);
@@ -150,8 +151,8 @@ function makeImageThumb(blobUrl: string): Promise<{ thumb: string; width: number
   });
 }
 
-/** 抓取视频首帧缩略图 */
-function makeVideoThumb(url: string): Promise<{ thumb: string; width: number; height: number } | null> {
+/** 抓取视频首帧缩略图；导出供 Eagle 桥等外部落盘文件的场景复用 */
+export function makeVideoThumb(url: string): Promise<{ thumb: string; width: number; height: number } | null> {
   return new Promise((res) => {
     const v = document.createElement("video");
     const timer = setTimeout(() => res(null), 10000);

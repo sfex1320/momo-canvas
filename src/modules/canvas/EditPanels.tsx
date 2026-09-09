@@ -254,6 +254,7 @@ export function EnhanceConfigPanel() {
 /* ================= 智能矢量 ================= */
 
 const VEC_TYPE_OPTS = [
+  { value: "flat", label: "平面拆件", desc: "整理纯色色块，保留轮廓与透明边界", icon: <IcPalette size={15} /> },
   { value: "auto", label: "自动", desc: "按上游内容分析选", icon: <IcSparkles size={15} /> },
   { value: "poster", label: "海报 / 色块", desc: "扁平色块、文化墙", icon: <IcLayers size={15} /> },
   { value: "comic", label: "插画 / 漫画", desc: "锐利尖角、细线条（爆炸贴/Logo）", icon: <IcBrush size={15} /> },
@@ -316,17 +317,17 @@ export function VectorizeConfigPanel() {
     }
   };
 
-  const doExport = async (format: "ai" | "cdr" | "pdf" | "eps") => {
+  const doExport = async (format: "ai" | "cdr" | "pdf" | "eps" | "png") => {
     if (!d.svg) return;
     const app = format === "cdr" ? "CorelDRAW" : "Illustrator";
     try {
       const { save } = await import("@tauri-apps/plugin-dialog");
       const p = await save({ defaultPath: `矢量_${Date.now()}.${format}`, filters: [{ name: format === "eps" ? "EPS" : app, extensions: [format] }] });
       if (!p) return;
-      const wmm = ((d.resultW ?? 1000) / 96) * 25.4;
-      const hmm = ((d.resultH ?? 1000) / 96) * 25.4;
+      const wmm = format==="png" ? Math.round((d.resultW??1000)*(d.exportScale??4)) : d.exportWidthMm ?? ((d.resultW ?? 1000) / 96) * 25.4;
+      const hmm = wmm * (d.resultH??1000)/(d.resultW??1000);
       // EPS 是本地独立导出（渐变降级纯填充，文字/位图不支持），不启动外部应用
-      if (format !== "eps") toast(`${app} 转换中（可能启动应用，请稍候，最多 180s）…`, "info");
+      if (format === "ai" || format === "cdr") toast(`${app} 转换中（可能启动应用，请稍候，最多 180s）…`, "info");
       const r = await invoke<{ path: string; bytes: number; format: string }>("vector_export", {
         svg: d.svg, format, outPath: p, wMm: wmm, hMm: hmm,
       });
@@ -362,8 +363,9 @@ export function VectorizeConfigPanel() {
             onChange={(v) => upd(selId, { preset: v as VectorizeData["preset"] })}
           />
           <ParamsPop icon={<IcFilter size={14} />} label="参数" title="矢量化参数（VTracer）">
+            {d.preset==="flat"&&<><div className="gp-sec-title">平面色盘<span className="gp-hint">较少颜色更干净；太少会合并相近色与细节</span></div><label className="ne-slider nodrag"><span>色数</span><input type="range" className="range" min={2} max={64} value={d.flatColors??12} onChange={e=>upd(selId,{flatColors:+e.target.value})}/><b>{d.flatColors??12}</b></label><p className="gp-hint">整理色块不改变构图。文字错误、缺件或轮廓畸变，请先用绘画模型重绘。</p></>}
             <div className="gp-sec-title">
-              颜色精度<span className="gp-hint">0 = 自动（随预设）；越高颜色越丰富</span>
+              颜色精度<span className="gp-hint">{d.preset==="flat"?"平面拆件由上方色盘控制，描边使用完整色准":"0 = 自动（随预设）；越高颜色越丰富"}</span>
             </div>
             <label className="ne-slider nodrag">
               <span>精度</span>
@@ -374,6 +376,7 @@ export function VectorizeConfigPanel() {
                 max={10}
                 step={1}
                 value={d.colorPrecision}
+                disabled={d.preset==="flat"}
                 onChange={(e) => upd(selId, { colorPrecision: Number(e.target.value) })}
               />
               <b>{d.colorPrecision === 0 ? "自动" : d.colorPrecision}</b>
@@ -446,6 +449,9 @@ export function VectorizeConfigPanel() {
         </div>
         {d.svg ? (
           <div className="ed-exports nodrag">
+            <label>宽 mm <input className="input" type="number" min={1} max={20000} style={{width:82}} value={d.exportWidthMm??Math.round((d.resultW??1000)/96*25.4)} onChange={e=>upd(selId,{exportWidthMm:+e.target.value})}/></label>
+            <PopSelect title="高清 PNG 倍率" triggerIcon value={String(d.exportScale??4)} options={[1,2,4,8].map(v=>({value:String(v),label:`${v} 倍 PNG`,icon:<IcImage size={14}/>}))} onChange={v=>upd(selId,{exportScale:+v})}/>
+            <button className="btn sm" title="从矢量路径直接渲染高清 PNG，透明背景保留" onClick={()=>void doExport("png")}>高清 PNG</button>
             <span className="ed-exp-cap">导出</span>
             <button className="btn sm" title="保存 SVG 矢量文件" onClick={saveSvg}>
               <IcDownload size={13} /> SVG
@@ -459,8 +465,7 @@ export function VectorizeConfigPanel() {
             </button>
             <button
               className="btn sm"
-              disabled={!apps.illustrator}
-              title={apps.illustrator ? "经 Illustrator 导出矢量 PDF" : "未检测到 Illustrator"}
+              title="独立导出矢量 PDF，保留路径与毫米尺寸，无需 Illustrator"
               onClick={() => doExport("pdf")}
             >
               PDF

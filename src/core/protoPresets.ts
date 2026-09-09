@@ -1,7 +1,6 @@
 /**
- * 常用中转站协议预设 — 一键导入/修复
- *  按服务商 baseUrl 匹配：若该服务商的对应槽位已绑定自定义协议，则「原地覆盖」其内容
- *  （保留原 id，绑定关系不变）；未绑定则新建协议并自动绑定到匹配的服务商槽位。
+ * 内置中转站协议预设 —— 唯一协议来源（3.6 起：自定义协议编辑/校准/自愈功能已移除，
+ * 协议只从这里来，按服务商 baseUrl 自动绑定；站点接口有变化时改这里即可）。
  *
  *  预设内容来自对各中转站官方文档/网页端源码的逆向核对（2026-07）：
  *   - 65535.space：文生图 /v1/images/generations、图生图与蒙版 /v1/images/edits（纯 JSON，
@@ -13,13 +12,11 @@
  *     局部重绘请在节点上选「指令式」通道。轮询 GET /v1/tasks/{task_id}。
  */
 import type { CustomProtocol } from "./types";
-import { useSettings } from "./stores/settingsStore";
-import { uid } from "./utils";
 
 export type ProtoPreset = {
   key: string;
   label: string;
-  /** 匹配服务商 baseUrl 的正则（自动定位要修复/绑定的卡片） */
+  /** 匹配服务商 baseUrl 的正则（自动定位要绑定的卡片） */
   hostMatch: RegExp;
   note: string;
   proto: Omit<CustomProtocol, "id">;
@@ -30,11 +27,11 @@ const AUTH_HEADERS = { Authorization: "Bearer {{apiKey}}", "Content-Type": "appl
 export const PROTO_PRESETS: ProtoPreset[] = [
   {
     key: "65535-image",
-    label: "65535 异步生图（文生图 + 图生图 + 真蒙版）",
+    label: "65535 生图",
     hostMatch: /65535\.space/i,
     note: "有参考图自动切 /v1/images/edits；蒙版按官方 {\"image_url\":…} 对象格式；异步轮询 job 状态",
     proto: {
-      name: "65535 异步生图（图生图+蒙版·修正版）",
+      name: "65535 生图",
       role: "image",
       submit: {
         url: "{{baseUrl}}/v1/images/{{?images}}edits{{/images}}{{^images}}generations{{/images}}",
@@ -57,11 +54,11 @@ export const PROTO_PRESETS: ProtoPreset[] = [
   },
   {
     key: "apimart-image",
-    label: "APIMart GPT-Image-2 异步生图（文生图 + 图生图）",
+    label: "APIMart 生图",
     hostMatch: /apimart\.ai|aishuch\.com/i,
     note: "逆向通道 image_urls 接受 base64 参考图；该通道不支持真蒙版（重绘节点请用「指令式」）",
     proto: {
-      name: "APIMart GPT-Image-2 异步生图（修正版）",
+      name: "APIMart 生图",
       role: "image",
       submit: {
         url: "{{baseUrl}}/v1/images/generations",
@@ -84,11 +81,11 @@ export const PROTO_PRESETS: ProtoPreset[] = [
   },
   {
     key: "apimart-video",
-    label: "APIMart Seedance 异步生视频（文/图生视频）",
+    label: "APIMart 生视频",
     hostMatch: /apimart\.ai|aishuch\.com/i,
     note: "image 字段按有无上游图条件出现（纯文生视频不再发空 image）",
     proto: {
-      name: "APIMart Seedance 异步生视频（修正版）",
+      name: "APIMart 生视频",
       role: "video",
       submit: {
         url: "{{baseUrl}}/v1/videos/generations",
@@ -111,43 +108,5 @@ export const PROTO_PRESETS: ProtoPreset[] = [
   },
 ];
 
-/** 应用预设：覆盖修复已绑定的协议 / 新建并绑定；返回给用户看的结果说明 */
-export function applyProtoPreset(preset: ProtoPreset): string {
-  const st = useSettings.getState();
-  const s = st.settings;
-  const role = preset.proto.role === "video" ? "video" : preset.proto.role === "audio" ? "audio" : "image";
-  const protos = [...s.customProtocols];
-  const providers = s.models.providers.map((p) => ({ ...p, models: { ...p.models } }));
-  const done: string[] = [];
-  let boundNew = false;
-
-  for (const pv of providers) {
-    if (!preset.hostMatch.test(pv.baseUrl ?? "")) continue;
-    const slot = pv.models[role];
-    const bound = slot?.protocol?.startsWith("custom:") ? slot.protocol.slice("custom:".length) : null;
-    if (bound) {
-      const idx = protos.findIndex((x) => x.id === bound);
-      if (idx >= 0) {
-        protos[idx] = { ...preset.proto, id: bound };
-        done.push(`已原地修复「${pv.name}」绑定的协议（绑定关系不变）`);
-        continue;
-      }
-    }
-    // 该服务商还没绑自定义协议：新建一份并绑定到对应槽位
-    const id = uid(6);
-    protos.push({ ...preset.proto, id });
-    pv.models[role] = { ...(slot ?? { models: [] }), protocol: `custom:${id}` };
-    boundNew = true;
-    done.push(`已为「${pv.name}」新建协议并绑定到${role === "video" ? "视频" : "图片"}槽位`);
-  }
-
-  if (!done.length) {
-    // 没有匹配的服务商：只把协议加进协议库
-    protos.push({ ...preset.proto, id: uid(6) });
-    done.push("没有找到匹配的服务商卡片，已将协议加入协议库（可在服务商的槽位手动选用）");
-  }
-
-  st.update("customProtocols", protos);
-  if (boundNew) st.update("models", { ...s.models, providers });
-  return done.join("；");
-}
+/** 预设协议的确定性 id（重复绑定时复用同一条，不产生重复协议） */
+export const presetProtoId = (key: string) => `preset-${key}`;

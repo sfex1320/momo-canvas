@@ -274,7 +274,7 @@ button {
   display: flex;
   align-items: center;
   justify-content: center;
-  z-index: 200;
+  z-index: 470; /* 高于导演台(450)/资产库(460)：从制片工作站打开设置/模板管理器不被盖；低于 toast(500) */
   animation: fadeIn 160ms ease;
 }
 .modal {

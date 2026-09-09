@@ -60,6 +60,7 @@ export function estimateCost(
   model: string,
   opts: { images?: number; videoSec?: number; audioSec?: number; inTok?: number; outTok?: number },
 ): number {
+  if (model === "codex-image") return 0; // 共享会员额度，不换算成 API 人民币余额
   const p = unitPriceFor(model);
   const c =
     (p.perImage ?? 0) * (opts.images ?? 0) +

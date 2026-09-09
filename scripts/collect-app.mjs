@@ -95,6 +95,13 @@ if (portableExes.length > 0) {
     const size = copyOne(src, join(portableDir, outName))
     console.log(`  - ${relative(appDir, portableDir)}/${outName}  (${size} MB)`)
   })
+  // 安装器会自动收录 release 同级 DLL，便携版也必须携带（尤其 DirectML，缺失会使本地超清失效）。
+  for (const name of readdirSync(releaseDir).filter(n => n.toLowerCase().endsWith('.dll'))) {
+    const src = join(releaseDir, name)
+    if (!statSync(src).isFile()) continue
+    const size = copyOne(src, join(portableDir, name))
+    console.log(`  - ${relative(appDir, portableDir)}/${name}  (${size} MB)`)
+  }
   // 内嵌超清模型：bundle.resources 只覆盖安装版（NSIS 释放到 exe 同级 models/），
   // 便携 zip 是裸 exe，必须手动塞 models/ 才能走 resourceDir 内嵌解析（与安装版同一约定）
   const modelsSrc = join(rootDir, 'models', 'sr')
@@ -117,13 +124,14 @@ if (portableExes.length > 0) {
     `${productName} · 便携版 v${version}`,
     '==============================',
     `直接双击 ${productName}.exe 即可运行，无需安装。`,
-    '首次启动会自动在桌面创建快捷方式（已存在则跳过，不重复创建）。',
+    '请先完整解压到固定目录，再运行 EXE，不要在压缩软件的临时目录中直接运行。',
+    '启动会自动创建桌面快捷方式；同名旧快捷方式会更新为当前 EXE，已指向当前目录则不重复创建。',
     '',
     '运行依赖：Windows 系统自带的 WebView2 运行时（Win10 1803+ / Win11 通常已预装）。',
     `运行数据保存在：%APPDATA%\\${dataDir}\\（API Key 已加密绑定本机，拷给他人无效）`,
     '',
-    '注意：models/ 文件夹是超清放大的本地模型，必须与 exe 放在同一目录，',
-    '移动 exe 时请连同 models/ 一起拷贝（否则首次使用超清放大时会重新联网下载）。',
+    '注意：同目录 DLL 是运行依赖，models/ 文件夹是超清放大的本地模型，',
+    '移动程序时请连同 DLL、models/ 和 portable.txt 一起拷贝，不要只移动 EXE。',
     '更新：可在「设置 → 关于与更新」内一键升级，也可重新下载新版 zip 解压覆盖。',
   ].join('\n') + '\n'
   writeFileSync(join(portableDir, '便携版说明.txt'), readme, 'utf8')
@@ -190,7 +198,8 @@ function buildReadme() {
   const modelRows = modelManifest.models.map(m =>
     `| \`${relative(rootDir, portableDir).replace(/\\/g, '/')}/models/${m.fileName}\` | ${modelNote(m.fileName)}（${m.license}，作者 ${m.author}） |`,
   ).join('\n')
-  const changes = changelogSection(version) || '（未在 CHANGELOG.md 里找到本版本记录）'
+  const pending = readFileSync(join(rootDir, 'CHANGELOG.md'), 'utf8').match(/^## 未发布\s*\n([\s\S]*?)(?=^## |$(?![\s\S]))/m)?.[1]?.trim()
+  const changes = [pending ? `### 本次构建中的最新修复\n\n${pending}` : '', changelogSection(version)].filter(Boolean).join('\n\n') || '（未在 CHANGELOG.md 里找到本版本记录）'
   return `# MOMO 智能画布 v${version} 构建说明
 
 - 版本号：${version}（package.json / src-tauri/tauri.conf.json 同步）
@@ -220,8 +229,9 @@ ${changes}
 
 | 文件 / 目录 | 说明 |
 | --- | --- |
-| \`${relative(rootDir, portableDir).replace(/\\/g, '/')}/\` | 便携版目录（三件套：主程序 + models + portable.txt） |
-| ├ \`${productName}.exe\` | 主程序：双击即用；首次启动自动在桌面创建快捷方式（已存在则跳过），不写注册表 |
+| \`${relative(rootDir, portableDir).replace(/\\/g, '/')}/\` | 便携版目录（主程序 + 运行 DLL + models + portable.txt） |
+| ├ \`${productName}.exe\` | 主程序：完整解压后双击；自动创建桌面快捷方式，同名旧链接更新为当前程序，不写注册表 |
+| ├ \`*.dll\` | 与安装版相同的运行依赖（含 DirectML 本地超清运行库），请随 EXE 一起保留 |
 | ├ \`models/\` | 超清放大本地模型，必须与 exe 同目录（缺失时首次使用会联网重新下载） |
 | ├ \`portable.txt\` | 便携版标记：应用据此识别便携模式（更新走 zip 整包替换，不走安装版更新器） |
 | └ \`便携版说明.txt\` | 给最终用户的使用说明 |
@@ -242,7 +252,8 @@ ${modelRows}
 
 ## 便携版行为要点
 
-- 桌面快捷方式：首次启动自动创建（COM IShellLink 直写 .lnk，不走 shell；用户删除后下次启动会重建）
+- 桌面快捷方式：每次启动核对目标路径（COM IShellLink 直写 .lnk）；缺失则创建、旧链接则更新为当前程序、正确则跳过
+- 请先完整解压到固定目录，不要在压缩软件内直接运行 EXE，避免快捷方式指向临时解压目录
 - 数据目录：%APPDATA%\\${dataDir}\\（API Key 经 DPAPI 加密绑定本机用户，拷贝数据目录到他人电脑无法解密）
 - 便携版更新：应用内下载新版本 *_portable.zip → 退出后解压覆盖程序目录 → 自动重启（等价于手动下载覆盖）
 

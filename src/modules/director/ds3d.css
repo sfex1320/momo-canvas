@@ -741,9 +741,8 @@
 }
 .ds3d-vf-frame {
   position: relative;
-  width: min(62%, 96vh);
   border: 1px dashed rgba(255, 255, 255, 0.4);
-  border-radius: 6px;
+  box-sizing: border-box;
 }
 .ds3d-vf-cross {
   position: absolute;
@@ -807,3 +806,18 @@
   border-color: color-mix(in srgb, var(--accent) 50%, transparent);
   background: color-mix(in srgb, var(--accent) 8%, transparent);
 }
+
+.ds3d-quickbar { position: absolute; bottom: 88px; left: 78px; right: 292px; z-index: 5; display: flex; align-items: center; flex-wrap: wrap; gap: 6px; padding: 7px; background: var(--d3-panel); border: 1px solid var(--d3-border); border-radius: 9px; }
+.ds3d-quickbar > span { color: var(--d3-text-3); font-size: 11.5px; }
+.ds3d-preset-btn.on { color: var(--d3-accent); border-color: var(--d3-accent); }
+@media (max-width: 1050px) { .ds3d-quickbar { right: 12px; } .ds3d-quickbar > span { display: none; } }
+.ds3d-scene-presets { display: grid; gap: 10px; }
+.ds3d-scene-presets button { display: grid; gap: 5px; text-align: left; padding: 13px; border-radius: var(--r-md); border: 1px solid var(--border); color: var(--text-1); background: var(--panel-2); cursor: pointer; }
+.ds3d-scene-presets button:hover { border-color: var(--accent); background: var(--input-bg); }
+.ds3d-scene-presets small { color: var(--text-3); line-height: 1.5; }
+
+.ds3d-motion{position:absolute;left:70px;right:310px;bottom:112px;z-index:12;padding:10px;background:var(--d3-panel);color:var(--d3-text-1);border:1px solid var(--d3-border);border-radius:10px;max-height:170px;overflow:auto}.ds3d-motion-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:4px 0}.ds3d-motion input[type=range]{flex:1;min-width:120px}.ds3d-motion input[type=number]{width:54px}.ds3d-motion small{color:var(--d3-text-2)}
+
+.ds3d-bottom-tools{position:absolute;bottom:88px;left:78px;right:292px;z-index:12;display:flex;flex-direction:column;gap:8px}.ds3d-bottom-tools .ds3d-quickbar,.ds3d-bottom-tools .ds3d-motion{position:static;width:auto;flex-shrink:0}.ds3d-bottom-tools .ds3d-motion{max-height:190px}@media(max-width:1050px){.ds3d-bottom-tools{right:12px}}
+
+.ds3d.recording .ds3d-panel,.ds3d.recording .ds3d-rail,.ds3d.recording .ds3d-viewseg,.ds3d.recording .ds3d-quickbar,.ds3d.recording .ds3d-axisbox{pointer-events:none;opacity:.65}

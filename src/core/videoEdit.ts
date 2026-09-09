@@ -18,22 +18,30 @@ function makeVideo(src: string): HTMLVideoElement {
 }
 
 function loadMeta(v: HTMLVideoElement): Promise<void> {
-  return new Promise((res, rej) => {
-    if (v.readyState >= 1) return res();
-    v.onloadedmetadata = () => res();
-    v.onerror = () => rej(new Error("视频加载失败：源可能已过期（中转站直链一般 24 小时失效），可重新生成或改用本地文件"));
+  return new Promise((resolve,reject)=>{
+    if(v.readyState>=1)return resolve();
+    const finish=(error?:Error)=>{clearTimeout(timer);v.onloadedmetadata=null;v.onerror=null;error?reject(error):resolve();};
+    const timer=setTimeout(()=>finish(new Error("视频加载超时，请检查素材是否在线")),30000);
+    v.onloadedmetadata=()=>finish();v.onerror=()=>finish(new Error("视频加载失败，请重新导入素材"));
+  });
+}
+function seekTo(v: HTMLVideoElement,t:number):Promise<void>{
+  return new Promise((resolve,reject)=>{
+    if(Math.abs(v.currentTime-t)<0.001&&v.readyState>=2&&!v.seeking)return resolve();
+    const finish=(error?:Error)=>{clearTimeout(timer);v.onseeked=null;v.onloadeddata=null;error?reject(error):resolve();};
+    const timer=setTimeout(()=>finish(new Error("视频定位超时")),15000);
+    v.onseeked=()=>finish();v.onloadeddata=()=>{if(Math.abs(v.currentTime-t)<0.05&&!v.seeking)finish();};v.currentTime=t;
   });
 }
 
-function seekTo(v: HTMLVideoElement, t: number): Promise<void> {
-  return new Promise((res, rej) => {
-    const timer = setTimeout(() => rej(new Error("视频定位超时")), 15000);
-    v.onseeked = () => {
-      clearTimeout(timer);
-      res();
-    };
-    v.currentTime = t;
-  });
+/** MediaRecorder 的 WebM 可能没有 duration 头；定位到末端促使浏览器读出实际时长。 */
+async function mediaDuration(v:HTMLVideoElement):Promise<number>{
+  await loadMeta(v);
+  if(Number.isFinite(v.duration)&&v.duration>0)return v.duration;
+  await seekTo(v,1e7);
+  const duration=Number.isFinite(v.duration)?v.duration:v.currentTime;
+  if(!Number.isFinite(duration)||duration<=0||duration>=1e7)throw new Error("无法读取视频时长，请转换为带时长信息的视频");
+  await seekTo(v,0);return duration;
 }
 
 /** 抽帧：point = first/last/custom(timeSec)，返回 PNG dataURL 与视频时长 */
@@ -43,8 +51,7 @@ export async function grabFrame(
   timeSec?: number,
 ): Promise<{ dataUrl: string; duration: number }> {
   const v = makeVideo(src);
-  await loadMeta(v);
-  const dur = Number.isFinite(v.duration) ? v.duration : 0;
+  const dur = await mediaDuration(v);
   const t =
     point === "first"
       ? Math.min(0.05, dur)
@@ -75,16 +82,18 @@ function pickMime(): string {
  * 实时重编码引擎：把若干 (src, start, end) 片段按顺序画到 canvas 并混入音频，
  * 用 MediaRecorder 录成一条 webm。取段 = 单片段；拼接 = 多片段。
  */
-async function recordSegments(
+export async function recordSegments(
   segs: { src: string; start?: number; end?: number }[],
   onProgress?: (msg: string) => void,
+  signal?: AbortSignal,
 ): Promise<string> {
+  signal?.throwIfAborted();
   // 先取全部片段时长，用于进度显示与画布尺寸（取第一段的分辨率）
   const metas: { v: HTMLVideoElement; start: number; end: number }[] = [];
   for (const s of segs) {
+    signal?.throwIfAborted();
     const v = makeVideo(s.src);
-    await loadMeta(v);
-    const dur = Number.isFinite(v.duration) ? v.duration : 0;
+    const dur = await mediaDuration(v);
     const start = Math.min(Math.max(0, s.start ?? 0), Math.max(0, dur - 0.05));
     const end = Math.min(s.end && s.end > start ? s.end : dur, dur);
     metas.push({ v, start, end });
@@ -92,6 +101,7 @@ async function recordSegments(
   const total = metas.reduce((sum, m) => sum + (m.end - m.start), 0);
   if (total <= 0.1) throw new Error("片段总时长为 0，请检查起止时间");
 
+  signal?.throwIfAborted();
   const first = metas[0].v;
   const c = document.createElement("canvas");
   c.width = first.videoWidth || 1280;
@@ -100,6 +110,7 @@ async function recordSegments(
 
   // 音频：各视频经 AudioContext 汇入同一路输出（元素静音不影响采集）
   const ac = new AudioContext();
+  await ac.resume();
   const dest = ac.createMediaStreamDestination();
   for (const m of metas) {
     try {
@@ -120,50 +131,46 @@ async function recordSegments(
   const done = new Promise<void>((res) => (rec.onstop = () => res()));
 
   let elapsed = 0;
-  let tainted = false;
   rec.start(250);
   try {
     for (const [i, m] of metas.entries()) {
+      signal?.throwIfAborted();
       const v = m.v;
       v.muted = false;
       v.volume = 1;
       await seekTo(v, m.start);
       await v.play();
-      await new Promise<void>((res, rej) => {
-        let raf = 0;
-        const tick = () => {
-          try {
-            ctx.drawImage(v, 0, 0, c.width, c.height);
-          } catch {
-            tainted = true;
-          }
-          const segDone = elapsed + Math.max(0, v.currentTime - m.start);
-          onProgress?.(`重编码中 ${Math.min(99, Math.round((segDone / total) * 100))}%（第 ${i + 1}/${metas.length} 段）`);
-          if (v.ended || v.currentTime >= m.end) {
-            v.pause();
-            cancelAnimationFrame(raf);
-            res();
-            return;
-          }
-          raf = requestAnimationFrame(tick);
-        };
-        v.onerror = () => rej(new Error("视频播放出错"));
-        raf = requestAnimationFrame(tick);
+      await new Promise<void>((resolve,reject)=>{
+        let raf=0,lastTime=v.currentTime,lastAdvance=performance.now();
+        const finish=(error?:unknown)=>{cancelAnimationFrame(raf);signal?.removeEventListener("abort",abort);v.onerror=null;v.pause();error?reject(error):resolve();};
+        const abort=()=>finish(new DOMException("已取消","AbortError"));
+        signal?.addEventListener("abort",abort,{once:true});
+        const tick=()=>{try{
+          signal?.throwIfAborted();
+          ctx.drawImage(v,0,0,c.width,c.height);
+          if(v.currentTime>lastTime){lastTime=v.currentTime;lastAdvance=performance.now();}
+          if(performance.now()-lastAdvance>20000)throw new Error("视频播放停滞，请检查素材或前台运行后重试");
+          const current=elapsed+Math.max(0,v.currentTime-m.start);
+          onProgress?.(`重编码中 ${Math.min(99,Math.round(current/total*100))}%（第 ${i+1}/${metas.length} 段）`);
+          if(v.ended||v.currentTime>=m.end)finish();else raf=requestAnimationFrame(tick);
+        }catch(e){finish(e);}};
+        v.onerror=()=>finish(new Error("视频播放出错"));tick();
       });
       elapsed += m.end - m.start;
     }
   } finally {
-    rec.stop();
+    if(rec.state!=="inactive")rec.stop();
     await done;
+    stream.getTracks().forEach(t=>t.stop());
     void ac.close();
     for (const m of metas) {
       m.v.pause();
       m.v.src = "";
     }
   }
-  if (tainted) throw new Error(CROSS_HINT);
+
   const blob = new Blob(chunks, { type: "video/webm" });
-  if (blob.size < 20_000) throw new Error("录制结果为空，可能是视频无法解码或被跨域保护");
+  if (blob.size < 100) throw new Error("录制结果为空，可能是视频无法解码或被跨域保护");
   return URL.createObjectURL(blob);
 }
 
@@ -193,8 +200,7 @@ export async function dubVideo(
   onProgress?: (msg: string) => void,
 ): Promise<string> {
   const v = makeVideo(videoSrc);
-  await loadMeta(v);
-  const dur = Number.isFinite(v.duration) ? v.duration : 0;
+  const dur = await mediaDuration(v);
   if (dur <= 0.1) throw new Error("上游视频时长为 0，无法配音");
 
   const c = document.createElement("canvas");
@@ -288,8 +294,8 @@ export async function dubVideo(
 export async function videoDuration(src: string): Promise<number> {
   try {
     const v = makeVideo(src);
-    await loadMeta(v);
-    return Number.isFinite(v.duration) ? v.duration : 0;
+    const duration=await mediaDuration(v);
+    v.removeAttribute("src");v.load();return duration;
   } catch {
     return 0;
   }

@@ -294,6 +294,7 @@ export function ComfyConfigPanel() {
         </div>
         {tpl ? (
           effParams.length ? (
+            <>
             <div className="cf-params nodrag nowheel">
               {effParams.map((p) => (
                 <ParamField
@@ -306,6 +307,35 @@ export function ComfyConfigPanel() {
                 />
               ))}
             </div>
+            {(() => {
+              // 孤儿参数（规格 FR-009）：实例覆盖值还在，但模板定义里该输入已被移除（多为工作流升级后）。
+              // 值保留不丢（运行时不生效），这里灰显 + 可单条清除
+              const effKeys = new Set(effParams.map((p) => p.key));
+              const orphans = Object.entries(branchParams ?? {}).filter(([k]) => !effKeys.has(k));
+              if (!orphans.length) return null;
+              const clearOrphan = (key: string) => {
+                const next = { ...branchParams };
+                delete next[key];
+                const patch: Partial<ComfyData> = { params: next };
+                if (variantId) patch.paramsByVariant = { ...(d.paramsByVariant ?? {}), [variantId]: next };
+                upd(selId, patch);
+              };
+              return (
+                <div className="cf-orphan nodrag">
+                  <div className="gp-hint">已失效的参数覆盖（工作流定义里已移除，不参与运行；值已保留）：</div>
+                  {orphans.map(([k, v]) => (
+                    <div key={k} className="cf-orphan-row">
+                      <span className="cf-orphan-key">{k}</span>
+                      <span className="gp-hint cf-orphan-val">{String(v)}</span>
+                      <button className="icon-btn" title="清掉这条失效覆盖值" onClick={() => clearOrphan(k)}>
+                        <IcClose size={14} />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              );
+            })()}
+            </>
           ) : (
             <div className="gp-hint">
               该模板没有暴露参数——点左侧齿轮可勾选要暴露的参数；直接点右侧圆钮即可运行。

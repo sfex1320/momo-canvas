@@ -2057,3 +2057,332 @@
   flex: 1;
   min-width: 0;
 }
+
+/* ---- 成片交付工位：多轨时间线 / 混音器 / 字幕编辑器 / 导出确认卡（导演台 3.0 复用组件） ---- */
+.ds-tl {
+  display: flex;
+  flex-direction: column;
+}
+.ds-tl-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--studio-border, var(--panel-border));
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  background: var(--studio-panel, var(--panel));
+}
+.ds-tl-toolbar .spacer { flex: 1; }
+.ds-tl-scroll {
+  flex: 1;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+.ds-tl-canvas {
+  position: relative;
+  min-width: 100%;
+  font-size: 11px;
+}
+.ds-tl-ruler {
+  position: relative;
+  height: 18px;
+  border-bottom: 1px solid var(--studio-border, var(--panel-border));
+}
+.ds-tl-tick {
+  position: absolute;
+  top: 0;
+  height: 100%;
+  padding-left: 4px;
+  border-left: 1px solid var(--studio-border, var(--panel-border));
+  font-size: 10px;
+  line-height: 18px;
+  color: var(--text-3);
+}
+.ds-tl-track {
+  position: relative;
+  display: flex;
+  align-items: center;
+  height: 28px;
+  border-bottom: 1px solid color-mix(in srgb, var(--studio-border, var(--panel-border)) 55%, transparent);
+}
+.ds-tl-track.v { height: 38px; }
+.ds-tl-track.t { height: 30px; }
+.ds-tl-track.a { height: 26px; }
+.ds-tl-track.sub { height: 24px; }
+.ds-tl-track-label {
+  position: sticky;
+  left: 6px;
+  flex: none;
+  z-index: 2;
+  margin-right: 6px;
+  padding: 1px 7px;
+  border: 1px solid var(--studio-border, var(--panel-border));
+  border-radius: 999px;
+  background: var(--studio-panel, var(--panel));
+  font-size: 10px;
+  color: var(--text-3);
+  white-space: nowrap;
+  user-select: none;
+}
+.ds-tl-clip {
+  position: absolute;
+  top: 4px;
+  bottom: 4px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: flex-start;
+  gap: 1px;
+  padding: 0 6px;
+  border: 1px solid color-mix(in srgb, var(--accent) 55%, transparent);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--accent) 16%, var(--studio-panel-2, var(--panel)));
+  color: var(--text-1);
+  cursor: pointer;
+  overflow: hidden;
+  text-align: left;
+  transition: box-shadow 120ms var(--ease, ease), border-color 120ms var(--ease, ease);
+}
+.ds-tl-clip:hover { border-color: var(--accent); }
+.ds-tl-clip.on {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1.5px color-mix(in srgb, var(--accent) 65%, transparent);
+}
+.ds-tl-clip-n {
+  max-width: 100%;
+  font-size: 11px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ds-tl-clip-d {
+  font-size: 9.5px;
+  font-family: monospace;
+  color: var(--text-3);
+}
+.ds-tl-fade {
+  position: absolute;
+  right: 3px;
+  top: 1px;
+  font-size: 10px;
+  color: var(--accent);
+  pointer-events: none;
+}
+.ds-tl-empty {
+  margin-left: 4px;
+  font-size: 12px;
+  color: var(--text-3);
+  user-select: none;
+}
+.ds-tl-title {
+  position: absolute;
+  top: 4px;
+  bottom: 4px;
+  padding: 0 6px;
+  border: 1px solid color-mix(in srgb, var(--warn) 55%, transparent);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--warn) 18%, var(--studio-panel-2, var(--panel)));
+  color: var(--text-1);
+  font-size: 10.5px;
+  line-height: 1;
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ds-tl-title.on {
+  border-color: var(--warn);
+  box-shadow: 0 0 0 1.5px color-mix(in srgb, var(--warn) 60%, transparent);
+}
+.ds-tl-audio {
+  position: absolute;
+  top: 4px;
+  bottom: 4px;
+  padding: 0 5px;
+  line-height: 17px;
+  border: 1px solid color-mix(in srgb, var(--ok) 45%, transparent);
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--ok) 14%, var(--studio-panel-2, var(--panel)));
+  color: var(--text-2);
+  font-size: 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ds-tl-audio.muted { opacity: 0.45; border-style: dashed; }
+.ds-tl-sub {
+  position: absolute;
+  top: 3px;
+  bottom: 3px;
+  padding: 0 5px;
+  line-height: 16px;
+  border: 1px solid color-mix(in srgb, var(--accent-3) 50%, transparent);
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--accent-3) 14%, var(--studio-panel-2, var(--panel)));
+  color: var(--text-2);
+  font-size: 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* 空态：整个时间线收成一条细提示 */
+.ds-tl-bar {
+  min-height: 0;
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--studio-border, var(--panel-border));
+}
+/* 时间线浮层（片段参数 / 标题卡编辑 / 添加菜单） */
+.ds-tl-pop {
+  width: 248px;
+  max-width: calc(100vw - 48px);
+  gap: 7px;
+}
+.ds-tl-pop-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.ds-tl-pop-head b { font-size: 12.5px; color: var(--text-1); }
+.ds-tl-pop-head .spacer { flex: 1; }
+.ds-tl-fields {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 7px 8px;
+}
+.ds-tl-field {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 11.5px;
+  color: var(--text-2);
+  min-width: 0;
+}
+.ds-tl-field .input,
+.ds-tl-field .pop-wrap,
+.ds-tl-field .pop-trigger { width: 100%; min-width: 0; }
+.ds-tl-field input[type="range"] { width: 100%; accent-color: var(--accent); }
+.ds-tl-field i {
+  font-style: normal;
+  font-size: 10.5px;
+  color: var(--text-3);
+}
+.ds-tl-add {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 6px 8px;
+  border: none;
+  border-radius: var(--r-sm, 6px);
+  background: none;
+  color: var(--text-1);
+  font-size: 12px;
+  cursor: pointer;
+  text-align: left;
+}
+.ds-tl-add:hover { background: color-mix(in srgb, var(--accent) 10%, transparent); }
+
+/* 音频混音器 */
+.ds-mixer {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+}
+.ds-mixer-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 2px;
+}
+.ds-mixer-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 1px solid var(--studio-border, var(--panel-border));
+  border-radius: var(--r-md, 8px);
+  background: var(--studio-panel-2, var(--panel));
+}
+.ds-mixer-row.muted { opacity: 0.55; }
+.ds-mixer-kind {
+  flex: none;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 13%, transparent);
+  color: var(--accent);
+  font-size: 10.5px;
+  white-space: nowrap;
+}
+.ds-mixer-text {
+  flex: 1 1 110px;
+  min-width: 0;
+  font-size: 11.5px;
+  color: var(--text-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ds-mixer-vol {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+.ds-mixer-vol input[type="range"] { width: 78px; accent-color: var(--accent); }
+.ds-mixer-vol i {
+  font-style: normal;
+  width: 36px;
+  font-size: 10.5px;
+  font-family: monospace;
+  color: var(--text-3);
+}
+.ds-mixer-fade {
+  flex: none;
+  display: flex;
+  gap: 3px;
+}
+.ds-mixer-fade .input { width: 52px; }
+
+/* 字幕编辑器 */
+.ds-subed {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+}
+.ds-subed-tools {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.ds-subed-list {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.ds-subed-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+.ds-subed .ds-subed-t { width: 62px; flex: none; }
+.ds-subed .ds-subed-text { flex: 1; min-width: 0; }
+
+/* 导出 MP4 确认卡（AskCard 内容） */
+.ds-gi-confirm {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  font-size: 12.5px;
+  color: var(--text-1);
+}
+.ds-gi-confirm > b { font-size: 13px; }
+.ds-gi-confirm-line { color: var(--text-2); }
+.ds-gi-confirm-line.warn { color: var(--warn); }

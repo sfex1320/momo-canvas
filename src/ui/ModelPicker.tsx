@@ -39,7 +39,7 @@ export function ModelPicker({
   const providers = providersOfRole(role);
 
   const entries = providers.flatMap((p) =>
-    (p.models[role]?.models ?? []).map((m) => ({ key: modelKey(p.id, m), model: m, provider: p.name })),
+    (p.models[role]?.models ?? []).map((m) => ({ key: modelKey(p.id, m), model: m==="codex-image"?"Codex 生图":m, provider: p.name })),
   );
   const defEntry = entries.find((e) => e.key === defaults[role]) ?? entries[0];
 

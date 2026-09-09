@@ -42,6 +42,9 @@ pub fn request_cancel(task_id: &str) {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct VectorizeConfig {
+    /// 平面拆件限定色盘（2–64），旧节点缺省 12；仅 flat 预设消费。
+    #[serde(default)]
+    pub flat_colors: Option<usize>,
     /// "bw" | "poster" | "photo" | "line-art" | "comic"
     pub preset: String,
     /// "auto" | "color" | "binary"
@@ -440,7 +443,7 @@ fn run_core_cancel(
     // 追踪使用受控工作分辨率，最终 SVG 用 viewBox 恢复原始画布尺寸。二值线稿给更高
     // 上限以保细线；彩色海报限制像素总量，避免 4K/8K 输入把聚类拖到几十分钟。
     let (work_w, work_h) = trace_work_size(w, h, &cfg.quality, is_binary);
-    let rgba = if (work_w, work_h) == (w, h) {
+    let mut rgba = if (work_w, work_h) == (w, h) {
         original_rgba.clone()
     } else {
         progress(VecEvent::Log {
@@ -457,6 +460,14 @@ fn run_core_cancel(
         )
     };
 
+    if cfg.preset == "flat" {
+        progress(VecEvent::Stage{stage:"整理平面色块与透明边界".into(),pct:0.12});
+        rgba=crate::flat_art::clean_colors(&rgba,cfg.flat_colors.unwrap_or(12));
+        base.color_precision=8;base.filter_speckle=cfg.filter_speckle.clamp(1,200);base.corner_threshold=20;
+        // 平面图的直角/直边不能被样条控制点拉成鼓包。折线保持源轮廓，
+        // 圆弧按像素轮廓细分；几何识别另走有质量回评的图元拟合。
+        base.mode=PathSimplifyMode::Polygon;
+    }
     // ---- analysisMap 消费（文档 §5.3 跨节点复用）：自动微调 + 提示 ----
     let mut hint: Option<String> = None;
     if cfg.preset == "photo" {
@@ -801,6 +812,7 @@ mod tests {
 
     fn cfg_q(quality: &str) -> VectorizeConfig {
         VectorizeConfig {
+            flat_colors: None,
             preset: "poster".into(),
             color_mode: "auto".into(),
             hierarchical: "stacked".into(),
@@ -813,6 +825,28 @@ mod tests {
             edge_density: None,
             jpeg_score: None,
         }
+    }
+
+    #[test]#[ignore="显式提供真实平面拆件验收目录"]
+    fn flat_art_to_vector_delivery(){
+        let dir=std::path::PathBuf::from(std::env::var("MOMO_VECTOR_ACCEPTANCE_DIR").expect("须指定验收目录"));
+        let bytes=std::fs::read(dir.join("bridge-second.png")).unwrap();let mut cfg=cfg_q("high-fidelity");cfg.preset="flat".into();cfg.flat_colors=Some(4);cfg.filter_speckle=1;
+        let out=dir.join("拆件-纯色路径.svg");let result=run_core(&bytes,out.to_str().unwrap(),&cfg,&|_|{}).unwrap();
+        assert!(!result.svg.contains("<image"));assert!(result.path_count>0&&result.path_count<80);
+        crate::export::run(&result.svg,"pdf",dir.join("拆件-矢量.pdf").to_str().unwrap(),300.,300.).unwrap();
+        crate::export::run(&result.svg,"png",dir.join("拆件-4倍.png").to_str().unwrap(),(result.width*4)as f64,0.).unwrap();
+        std::fs::write(dir.join("vector-report.json"),serde_json::to_string_pretty(&result).unwrap()).unwrap();
+    }
+
+    #[test]
+    fn flat_rectangle_never_bulges_outside_source(){
+        let mut img=image::RgbaImage::from_pixel(128,128,image::Rgba([255,255,255,255]));
+        for y in 30..99 {for x in 25..88{img.put_pixel(x,y,image::Rgba([130,8,245,255]));}}
+        let mut bytes=std::io::Cursor::new(Vec::new());img.write_to(&mut bytes,image::ImageFormat::Png).unwrap();
+        let mut cfg=cfg_q("fast");cfg.preset="flat".into();cfg.flat_colors=Some(2);
+        let path=format!("{}/flat_rect.svg",env!("OUT_DIR"));let r=run_core(&bytes.into_inner(),&path,&cfg,&|_|{}).unwrap();
+        let tree=resvg::usvg::Tree::from_str(&r.svg,&Default::default()).unwrap();let mut pix=resvg::tiny_skia::Pixmap::new(128,128).unwrap();resvg::render(&tree,resvg::tiny_skia::Transform::identity(),&mut pix.as_mut());
+        let mut purple=0;for y in 0..128{for x in 0..128{let p=pix.pixel(x,y).unwrap();if p.green()<70&&p.blue()>170{purple+=1;assert!(x>=24&&x<=88&&y>=29&&y<=99,"直边不能鼓出源图范围：{x},{y}");}}}assert!(purple>4000);
     }
 
     #[test]
@@ -838,6 +872,19 @@ mod tests {
             "矢量单候选：{}×{}，{} 条路径，{} 锚点",
             r.width, r.height, r.path_count, r.anchors
         );
+    }
+
+    #[test]
+    #[ignore = "显式指定自制验收图片才运行，不读取用户作品"]
+    fn external_flat_sheet_to_paths() {
+        let source = std::path::PathBuf::from(std::env::var("MOMO_VECTOR_ACCEPTANCE_SOURCE").expect("请指定验收图片"));
+        let output = source.with_extension("svg");
+        assert!(!output.exists(), "验收不能覆盖已有 SVG");
+        let bytes = std::fs::read(&source).expect("读取自制平面总稿");
+        let result = run_core(&bytes, &output.to_string_lossy(), &cfg_q("fast"), &|_| {}).expect("真实总稿描摹成功");
+        assert!(result.path_count > 0);
+        assert!(!result.svg.contains("<image"), "必须是路径，不能包装栅格图");
+        eprintln!("真实平面总稿：{}×{}，{} 条路径，{} 锚点", result.width, result.height, result.path_count, result.anchors);
     }
 
     #[test]

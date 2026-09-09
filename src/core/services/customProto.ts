@@ -1,6 +1,6 @@
 /**
- * 自定义协议模板执行器 — 模板渲染 + 提交 + 可选异步轮询 + JSON 路径取值
- * （设置 → 协议 里的声明式协议；图片与视频服务共用）
+ * 生成协议模板执行器（预设协议运行时）— 模板渲染 + 提交 + 可选异步轮询 + JSON 路径取值
+ * （协议来源见 core/protoPresets.ts；图片/视频/音频服务共用）
  */
 import type { CustomProtocol } from "../types";
 import { xfetch } from "./http";
@@ -70,7 +70,7 @@ export function render(tpl: string, vars: Record<string, string>): string {
   // 对话模型常把 body 写成对象而不是字符串模板：这里换成中文提示，别让原生 TypeError 糊到用户脸上
   if (typeof tpl !== "string")
     throw new Error(
-      `协议模板字段不是字符串（收到 ${Array.isArray(tpl) ? "数组" : typeof tpl}）。请到「设置 → 协议」把 submit.body 写成 JSON 字符串模板，而不是嵌套对象`,
+      `协议模板字段不是字符串（收到 ${Array.isArray(tpl) ? "数组" : typeof tpl}）。submit.body 必须是 JSON 字符串模板，而不是嵌套对象`,
     );
   const cond = tpl
     .replace(/\{\{\?(\w+)\}\}([\s\S]*?)\{\{\/\1\}\}/g, (_, k, seg) => (isBlank(vars[k]) ? "" : seg))
@@ -205,59 +205,18 @@ export function extractResultStrings(final: any, primary: string, kind: "image" 
   return [];
 }
 
-/**
- * 响应结构摘要：保留全部键路径，把超长字符串（base64/dataURL）换成占位说明。
- * 现场只留 600 字符，直接 JSON.stringify 常常被一段 base64 撑满，
- * 自愈时 AI 恰好看不到结果字段在哪 —— 只能靠猜改 resultPath，改错还要白花一次钱。
- */
-function summarizeJson(v: unknown, depth = 0): unknown {
-  if (typeof v === "string") {
-    if (v.length <= 120) return v;
-    const what = v.startsWith("data:") ? "dataURL" : /^https?:/i.test(v) ? "长链接" : "长字符串";
-    return `<${what} ${v.length} 字符> ${v.slice(0, 48)}…`;
-  }
-  if (Array.isArray(v)) {
-    if (depth >= 6) return "<…>";
-    // 数组只留前两项（同构，够看出结构），并注明总长
-    const head = v.slice(0, 2).map((x) => summarizeJson(x, depth + 1));
-    return v.length > 2 ? [...head, `<共 ${v.length} 项>`] : head;
-  }
-  if (v && typeof v === "object") {
-    if (depth >= 6) return "<…>";
-    return Object.fromEntries(Object.entries(v as Record<string, unknown>).map(([k, x]) => [k, summarizeJson(x, depth + 1)]));
-  }
-  return v;
-}
-
-/** 执行现场记录：脱敏（密钥→***）+ 截断后收进 trace，供自愈时交给 AI 分析 */
-function traceAdd(trace: string[] | undefined, label: string, text: string, secret?: string): number {
-  if (!trace) return -1;
-  let t = text;
-  if (secret) t = t.split(secret).join("***");
-  trace.push(`【${label}】${t.slice(0, 600)}`);
-  return trace.length - 1;
-}
-
-/** 完整执行提交（+ 异步轮询）流程，返回包含结果的最终响应 JSON；trace 收集真实请求/响应现场 */
+/** 完整执行提交（+ 异步轮询）流程，返回包含结果的最终响应 JSON */
 export async function runCustomFlow(
   proto: CustomProtocol,
   vars: Record<string, string>,
   onProgress?: (msg: string) => void,
-  trace?: string[],
   signal?: AbortSignal,
 ): Promise<any> {
-  traceAdd(
-    trace,
-    "提交请求",
-    `${proto.submit.method ?? "POST"} ${render(proto.submit.url, vars)} body=${render(proto.submit.body ?? "", vars)}`,
-    vars.apiKey,
-  );
   let final = await customFetch(proto.submit, vars, signal);
-  traceAdd(trace, "提交响应", JSON.stringify(summarizeJson(final)), vars.apiKey);
   if (proto.taskIdPath) {
     let taskId = String(jsonPath(final, proto.taskIdPath)[0] ?? "");
     if (!taskId) {
-      // 协议里的路径没取到 → 按常见任务 id 字段名兜底再试一轮（协议助手偶尔会把路径层级写错）
+      // 协议里的路径没取到 → 按常见任务 id 字段名兜底再试一轮
       for (const p of ["task_id", "id", "job_id", "request_id", "requestId", "data.task_id", "data.id", "data.job_id"]) {
         const v = jsonPath(final, p)[0];
         if ((typeof v === "string" && v) || typeof v === "number") {
@@ -269,7 +228,6 @@ export async function runCustomFlow(
     }
     // 拿不到任务 ID 但提交响应里已经有结果 → 服务商这次走了同步通道，直接收货
     if (!taskId && extractResultStrings(final, proto.resultPath, roleKind(proto.role)).length) {
-      traceAdd(trace, "同步返回", "提交响应已含结果，跳过轮询", vars.apiKey);
       return final;
     }
     if (!taskId)
@@ -291,7 +249,7 @@ export async function runCustomFlow(
       // 协议没配轮询但服务商给了 status_url：直接按它轮询（宽容执行，别让配置缺口挡住任务）
       // 鉴权沿用 submit 已配好的那套：写死 Bearer 会让 X-API-Key / Token 风格的站点在轮询时必 401
       proto = { ...proto, poll: { url: altPoll, method: "GET", headers: inheritAuthHeaders(proto.submit.headers), intervalMs: 3000, statusPath: "status", doneValue: "completed" } };
-      traceAdd(trace, "轮询配置补全", `协议缺少 poll，已按提交响应的 status_url 轮询：${altPoll}`, vars.apiKey);
+      console.info(`[customProto] 协议缺少 poll，已按提交响应的 status_url 轮询：${altPoll}`);
     }
     const pollCfg = { ...proto.poll! };
     let switched = false;
@@ -301,21 +259,19 @@ export async function runCustomFlow(
       pollCfg.url = altPoll;
       pollCfg.method = "GET";
       delete pollCfg.body;
-      traceAdd(trace, "轮询地址替换", `${why}，改用提交响应给的查询地址：${altPoll}`, vars.apiKey);
+      console.info(`[customProto] ${why}，改用提交响应给的查询地址：${altPoll}`);
       onProgress?.("轮询地址似乎不对，已改用服务商返回的查询地址…");
       return true;
     };
 
     onProgress?.("任务已提交，生成中…");
-    traceAdd(trace, "轮询请求", `${pollCfg.method ?? "GET"} ${render(pollCfg.url, vars)}`, vars.apiKey);
-    let pollSlot = -1;
     const kind = roleKind(proto.role);
     // 超时按用途区分：视频（尤其长片/高分辨率）排队 + 生成经常超过 10 分钟，
     // 用一刀切的 10 分钟会在任务还在跑的时候误报超时
     const deadline = Date.now() + (kind === "video" ? 30 : 10) * 60_000;
     let consecFail = 0;
     let blankStatus = 0; // 连续多少轮既读不到状态也没有结果（多半是轮询地址错但返回 200）
-    // 间隔钳制：AI 写出的 intervalMs:100 会每分钟打 600 次查询（直接吃 429），过大则一次都发不出去
+    // 间隔钳制：intervalMs:100 会每分钟打 600 次查询（直接吃 429），过大则一次都发不出去
     const interval = Math.min(30_000, Math.max(1000, Math.round(Number(pollCfg.intervalMs) || 3000)));
     for (let i = 0; ; i++) {
       await sleep(interval, signal);
@@ -327,21 +283,14 @@ export async function runCustomFlow(
         pj = await customFetch(pollCfg, vars, signal);
         consecFail = 0;
       } catch (e) {
-        // 单次查询失败不掐死任务（网络抖动/临时 5xx）：先试着换 status_url，连续多次才报错
-        traceAdd(trace, "轮询请求失败", e instanceof Error ? e.message : String(e), vars.apiKey);
+        // 单次查询失败不掐死任务（网络抖动/临时 5xx/请求超时）：先试着换 status_url，连续多次才报错
+        console.warn(`[customProto] 轮询请求失败：${e instanceof Error ? e.message : String(e)}`);
         if (switchToAlt("协议里的轮询地址请求失败")) {
           consecFail = 0;
           continue;
         }
         if (++consecFail >= 5) throw e;
         continue;
-      }
-      // 现场只保留最近一次轮询响应（避免长任务把现场撑爆）
-      if (trace) {
-        const raw = JSON.stringify(summarizeJson(pj));
-        const entry = `【最近轮询响应】${(vars.apiKey ? raw.split(vars.apiKey).join("***") : raw).slice(0, 600)}`;
-        if (pollSlot < 0) pollSlot = trace.push(entry) - 1;
-        else trace[pollSlot] = entry;
       }
       const status = readStatus(pj, pollCfg.statusPath);
       const sl = status.toLowerCase();
@@ -374,12 +323,12 @@ export async function resolveCustomProto(protocolId: string, wantRole: "image" |
   const { useSettings } = await import("../stores/settingsStore");
   const id = protocolId.slice("custom:".length);
   const proto = useSettings.getState().settings.customProtocols.find((p) => p.id === id);
-  if (!proto) throw new Error(`自定义协议不存在（${id}），请到「设置 → 协议」检查`);
+  if (!proto) throw new Error(`协议不存在（${id}）——该服务商绑定的协议可能已被清理，请到「设置 → 模型配置」重新选择协议`);
   const role = roleKind(proto.role);
   if (role !== wantRole) {
     const LAB = { image: "图片", video: "视频", audio: "音频" } as const;
     throw new Error(
-      `协议「${proto.name}」的用途是「${LAB[role]}生成」，不能用于${LAB[wantRole]}槽位。请到「设置 → 协议」编辑该协议并把用途改为「${LAB[wantRole]}生成」，或换一个协议`,
+      `协议「${proto.name}」的用途是「${LAB[role]}生成」，不能用于${LAB[wantRole]}槽位。请到「设置 → 模型配置」为该槽位换用「${LAB[wantRole]}生成」用途的协议`,
     );
   }
   return proto;

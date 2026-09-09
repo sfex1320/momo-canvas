@@ -1,0 +1,17 @@
+{
+    "id": "momo-link-service",
+    "version": "1.0.0",
+    "platform": "all",
+    "arch": "all",
+    "name": "MOMO Link · 服务",
+    "keywords": [],
+    "devTools": false,
+    "description": "MOMO 智能画布 ↔ Eagle 资产桥的后台服务插件：自动发现 MOMO、转发选中素材、显示同步队列入口。",
+    "main":
+    {
+        "serviceMode": true,
+        "url": "index.html",
+        "width": 560,
+        "height": 520
+    }
+}

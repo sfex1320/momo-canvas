@@ -11,6 +11,13 @@
  *
  * 数据：实体存 project.threedEntities（types.ts PrevizEntity，3D 字段可选，旧 2D 数据自动映射）。
  */
+import { MotionPanel } from "./threed/MotionPanel";
+import { motionFrame, putMotionKey, sampleMotion } from "../../core/previzMotion";
+import * as THREE from "three";
+import { stageFrame } from "./threed/stageFraming";
+import { createScenePreset, SCENE_PRESETS } from "./threed/scenePresets";
+import { useBoard } from "../../core/stores/boardStore";
+import { useDirectorCtx } from "../../core/directorContext";
 import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState, type ReactNode } from "react";
 import "./ds3d.css";
 import { useDirector } from "../../core/stores/directorStore";
@@ -23,7 +30,7 @@ import { transcribe } from "../../core/services/asr";
 import { StageEngine, type GizmoMode, type ViewMode, type AxisInfo } from "./threed/stageEngine";
 import { BODY_PRESETS, PROP_PRESETS, POSE_PRESETS, JOINT_LABEL, entityPos, entityRotY, type JointName } from "./threed/mannequin";
 import {
-  IcBox, IcBulb, IcCamera, IcChevronD, IcClose, IcCursor, IcDownload, IcLayers, IcLoading,
+  IcCopy, IcBox, IcBulb, IcCamera, IcChevronD, IcClose, IcCursor, IcDownload, IcLayers, IcLoading,
   IcMic, IcMove, IcPerson, IcPlus, IcPose, IcRefresh, IcRotate, IcSend, IcTrash, IcUpload,
 } from "../../ui/icons";
 import type { DirectorProject, PrevizEntity } from "../../core/types";
@@ -49,7 +56,7 @@ const PALETTE = ["#4F8EF7", "#3FB56A", "#E25A8A", "#8A5CF6", "#E0A228", "#3FC5C9
 function defaultEntities(): PrevizEntity[] {
   return [
     {
-      id: uid(6), kind: "character", name: "角色A", preset: "male",
+      id: uid(6), kind: "character", name: "角色A", preset: "male", appearance: "costume",
       x: 50, y: 50, angle: 0, color: "#4F8EF7",
       pos: [0, 0, 0], rotDeg: [0, 0, 0], scale3: [1, 1, 1],
     },
@@ -89,6 +96,10 @@ const CAM_PRESETS: { key: string; label: string; off: [number, number, number]; 
 ];
 
 export function ThreeDPage({ project }: { project: DirectorProject }) {
+  return <ThreeDWorkspace key={project.id} project={project} />;
+}
+
+function ThreeDWorkspace({ project }: { project: DirectorProject }) {
   const updateProject = useDirector((s) => s.updateProject);
   const entities: PrevizEntity[] = useMemo(() => project.threedEntities ?? [], [project.threedEntities]);
 
@@ -97,13 +108,24 @@ export function ThreeDPage({ project }: { project: DirectorProject }) {
   const entitiesRef = useRef(entities);
   entitiesRef.current = entities;
 
+  const [motionTime,setMotionTime]=useState(0);
+  const motionTimeRef=useRef(0);motionTimeRef.current=motionTime;
+  const [motionOpen,setMotionOpen]=useState(false);
+  const motionRecording=useRef(false);
+  const [recording,setRecording]=useState(false);
   const [selId, setSelId] = useState<string | null>(null);
   const selIdRef = useRef(selId);
   selIdRef.current = selId;
   const [viewMode, setViewMode] = useState<ViewMode>("director");
   const [gizmoMode, setGizmoMode] = useState<GizmoMode>("translate");
-  const [railPanel, setRailPanel] = useState<"entities" | "character" | "export" | "camPreset" | null>("character");
+  const [railPanel, setRailPanel] = useState<"entities" | "character" | "export" | "camPreset" | "scene" | null>("scene");
   const [liveTick, setLiveTick] = useState(0);
+  const [snap, setSnap] = useState(false);
+  const history = useRef<{ undo: PrevizEntity[][]; redo: PrevizEntity[][] }>({ undo: [], redo: [] });
+  const currentSegmentId = useDirectorCtx(s => s.segId);
+  const currentSegment = project.scenes.flatMap(s => s.segments).find(s => s.id === currentSegmentId);
+  const [historyTick, setHistoryTick] = useState(0);
+  void historyTick;
 
   const labelRefs = useRef(new Map<string, HTMLDivElement>());
   const axisRef = useRef<AxisGizmoHandle>(null);
@@ -116,10 +138,32 @@ export function ThreeDPage({ project }: { project: DirectorProject }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [project.id]);
 
-  const setEntities = (next: PrevizEntity[]) => updateProject(project.id, { threedEntities: next });
+  const setEntities = (next: PrevizEntity[]) => {
+    if(motionRecording.current)return;
+    history.current.undo = [...history.current.undo.slice(-39), entitiesRef.current];
+    history.current.redo = [];
+    entitiesRef.current = next;
+    updateProject(project.id, { threedEntities: next });
+    setHistoryTick(n => n + 1);
+  };
+  const travel = (direction: "undo" | "redo") => {
+    if(motionRecording.current)return;
+    const value = history.current[direction].pop(); if (!value) return;
+    history.current[direction === "undo" ? "redo" : "undo"].push(entitiesRef.current);
+    entitiesRef.current = value;
+    updateProject(project.id, { threedEntities: value });
+    setHistoryTick(n => n + 1);
+  };
 
   const updateEntity = (id: string, patch: Partial<PrevizEntity>) => {
-    setEntities(entitiesRef.current.map((e) => (e.id === id ? { ...e, ...patch } : e)));
+    setEntities(entitiesRef.current.map((e) => {
+      if(e.id!==id)return e;
+      if((motionTimeRef.current>0 || e.motion?.length) && (patch.pos||patch.rotDeg||patch.scale3)){
+        const frame=motionFrame(e,motionTimeRef.current);
+        return putMotionKey({...e,...patch,pos:e.pos,rotDeg:e.rotDeg,scale3:e.scale3,x:e.x,y:e.y,angle:e.angle}, {...frame,pos:patch.pos??frame.pos,rotDeg:patch.rotDeg??frame.rotDeg,scale3:patch.scale3??frame.scale3});
+      }
+      return {...e,...patch};
+    }));
   };
 
   /* 引擎生命周期 */
@@ -156,18 +200,33 @@ export function ThreeDPage({ project }: { project: DirectorProject }) {
 
   /* 数据 → 引擎同步 */
   useEffect(() => {
-    engineRef.current?.syncEntities(entities);
-  }, [entities]);
+    engineRef.current?.syncEntities(sampleMotion(entities,motionTime));
+  }, [entities,motionTime]);
+  useEffect(()=>{engineRef.current?.setMotionTrails(motionOpen?entities:[]);},[entities,motionOpen]);
   useEffect(() => {
     engineRef.current?.setSelected(selId);
   }, [selId, entities.length]);
   useEffect(() => {
     engineRef.current?.setGizmoMode(gizmoMode);
   }, [gizmoMode]);
+  useEffect(() => { engineRef.current?.setSnap(snap); }, [snap]);
 
-  const sel = entities.find((e) => e.id === selId) ?? null;
+  const selectedEntity = entities.find((e) => e.id === selId);
+  const sel = selectedEntity ? sampleMotion([selectedEntity],motionTime)[0] : null;
 
   /* ---------- 实体操作 ---------- */
+  const addScene = (kind: typeof SCENE_PRESETS[number]["id"]) => {
+    const existing = entitiesRef.current;
+    const offset = existing.length ? Math.max(...existing.map(e => entityPos(e)[0])) + 7 : 0;
+    const next = createScenePreset(kind, () => uid(8), offset);
+    setEntities([...existing, ...next]);
+    const camera = next.find(e => e.kind === "camera")!;
+    setSelId(camera.id);
+    engineRef.current?.syncEntities([...existing, ...next]);
+    engineRef.current?.setSelected(camera.id);
+    switchView("camera");
+    toast("场景已添加，原场景保留；可撤销整套模板", "ok");
+  };
 
   const spawnPos = (): [number, number, number] => {
     // 新实体放在原点附近的空位（按数量错开，避免叠在一起）
@@ -186,6 +245,7 @@ export function ThreeDPage({ project }: { project: DirectorProject }) {
       kind,
       name,
       preset,
+      ...(kind === "character" ? { appearance: "costume" as const } : {}),
       color: kind === "camera" ? "#E0A228" : kind === "light" ? "#FFF1D6" : PALETTE[entitiesRef.current.length % PALETTE.length],
       ...legacyXY(pos, rotY),
       pos,
@@ -237,14 +297,17 @@ export function ThreeDPage({ project }: { project: DirectorProject }) {
 
   /** 机位预设：相对拍摄主体（第一个角色实体，没有则原点）的偏移与朝向——影片站位参考的核心动作 */
   const applyCamPreset = (p: (typeof CAM_PRESETS)[number]) => {
-    const subj = entitiesRef.current.find((e) => e.kind === "character");
+    const subj = entitiesRef.current.find(e => e.id === selId && e.kind === "character") ?? entitiesRef.current.find((e) => e.kind === "character");
     const base = subj?.pos ?? ([0, 0, 0] as [number, number, number]);
-    const pos: [number, number, number] = [base[0] + p.off[0], p.off[1], base[2] + p.off[2]];
-    const cam = entitiesRef.current.find((e) => e.kind === "camera");
+    const pos: [number, number, number] = [base[0] + p.off[0], base[1] + p.off[1], base[2] + p.off[2]];
+    const aim = new THREE.Object3D(); aim.position.fromArray(pos);
+    aim.lookAt(new THREE.Vector3(base[0], base[1] + (p.key === "wide" ? 0.9 : 1.3), base[2]));
+    const rotDeg: [number, number, number] = [aim.rotation.x, aim.rotation.y, aim.rotation.z].map(THREE.MathUtils.radToDeg) as [number, number, number];
+    const cam = entitiesRef.current.find(e => e.id === selId && e.kind === "camera") ?? entitiesRef.current.find((e) => e.kind === "camera");
     if (cam) {
       setEntities(
         entitiesRef.current.map((e) =>
-          e.id === cam.id ? { ...e, pos, rotDeg: [0, p.rotY, 0], ...legacyXY(pos, p.rotY) } : e,
+          e.id === cam.id ? { ...e, pos, rotDeg, ...legacyXY(pos, rotDeg[1]) } : e,
         ),
       );
       setSelId(cam.id);
@@ -255,9 +318,9 @@ export function ThreeDPage({ project }: { project: DirectorProject }) {
         name: `机位·${p.label}`,
         preset: undefined,
         color: "#E0A228",
-        ...legacyXY(pos, p.rotY),
+        ...legacyXY(pos, rotDeg[1]),
         pos,
-        rotDeg: [0, p.rotY, 0],
+        rotDeg,
         scale3: [1, 1, 1],
       };
       setEntities([...entitiesRef.current, e]);
@@ -270,20 +333,32 @@ export function ThreeDPage({ project }: { project: DirectorProject }) {
 
   /* ---------- 导出 ---------- */
 
-  const doExport = async (kind: "image" | "depth" | "segment") => {
+  const doExport = async (kind: "image" | "depth" | "segment", destination: "assets" | "canvas" | "shot" = "assets") => {
     const engine = engineRef.current;
     if (!engine) return;
     const label = kind === "image" ? "站位图" : kind === "depth" ? "深度参考图" : "分区参考图";
     try {
       const dataUrl =
-        kind === "image" ? engine.exportImage() : kind === "depth" ? engine.exportDepth() : engine.exportSegment((id) => entitiesRef.current.find((e) => e.id === id)?.color ?? "#888888");
+        kind === "image" ? engine.exportImage(viewMode === "camera" ? project.aspect : undefined) : kind === "depth" ? engine.exportDepth(viewMode === "camera" ? project.aspect : undefined) : engine.exportSegment((id) => entitiesRef.current.find((e) => e.id === id)?.color ?? "#888888", viewMode === "camera" ? project.aspect : undefined);
       const asset = await useAssets.getState().collect({
         src: dataUrl,
         kind: "image",
         prompt: `${project.name} 3D ${label}`,
         model: "3D 导演台导出",
       });
-      toast(`${label}已导出到资产库${asset ? `（${asset.name}）` : ""}`, "ok");
+      if (!asset) throw new Error("参考图未能保存到资产库");
+      if (destination === "canvas") {
+        const state = useBoard.getState();
+        if (state.activeId !== project.boardId) throw new Error("参考图已入库，请切回项目所在画布再发送");
+        const anchor = state.nodes.find(n => n.id === project.nodeId);
+        state.addNode("image", { x: (anchor?.position.x ?? 0) + 400, y: anchor?.position.y ?? 0 }, { src: dataUrl, status: "done", name: `${project.name} · 3D ${label}` });
+      }
+      if (destination === "shot") {
+        const fresh = useDirector.getState().getById(project.id)?.scenes.flatMap(s => s.segments).find(s => s.id === currentSegmentId);
+        if (!fresh) throw new Error("请先在分镜列表选中本项目的片段，参考图已保存在资产库");
+        useDirector.getState().patchSegment(project.id, fresh.id, { slots: [...(fresh.slots ?? []), { semantic: "layoutGuide", assetIds: [asset.id], auto: false, referenceRole: "spatialLayout", label: "3D 站位参考" }] });
+      }
+      toast(`${destination === "shot" ? "已送入当前分镜；" : destination === "canvas" ? "已送到画布；" : ""}${label}已导出到资产库${asset ? `（${asset.name}）` : ""}`, "ok");
     } catch (e) {
       toast(`${label}导出失败：${errMsg(e)}`, "err");
     }
@@ -292,8 +367,15 @@ export function ThreeDPage({ project }: { project: DirectorProject }) {
   /* ---------- 渲染 ---------- */
 
   return (
-    <div className="ds3d">
-      <canvas ref={canvasRef} className="ds3d-canvas nodrag" />
+    <div className={`ds3d${recording?" recording":""}`} tabIndex={-1} onKeyDown={e => {
+      if(motionRecording.current)return;
+      if ((e.target as HTMLElement).closest("input, textarea, [contenteditable=true]")) return;
+      const key = e.key.toLowerCase();
+      if ((e.ctrlKey || e.metaKey) && key === "z") { e.preventDefault(); e.stopPropagation(); travel(e.shiftKey ? "redo" : "undo"); }
+      if (key === "f") { e.preventDefault(); e.stopPropagation(); switchView("director"); engineRef.current?.focusEntity(selId ?? undefined); }
+      if (!e.ctrlKey && !e.metaKey && ['w', 'e', 'r'].includes(key)) { e.preventDefault(); e.stopPropagation(); setGizmoMode(key === 'w' ? 'translate' : key === 'e' ? 'rotate' : 'scale'); }
+    }}>
+      <canvas ref={canvasRef} className="ds3d-canvas nodrag" tabIndex={0} aria-label="3D 场景，W 移动、E 旋转、R 缩放、F 聚焦" />
 
       {/* 名牌层（位置由引擎每帧直改 DOM） */}
       <div className="ds3d-labels">
@@ -323,7 +405,7 @@ export function ThreeDPage({ project }: { project: DirectorProject }) {
           icon={<IcCamera size={18} />}
           label="机位"
           on={railPanel === "camPreset"}
-          title="机位预设：以第一个角色为主体一键摆机位（全景/中景/特写/正打/反打/侧面/俯拍）"
+          title="机位预设：以选中角色（未选时用首个角色）为主体一键摆机位（全景/中景/特写/正打/反打/侧面/俯拍）"
           onClick={() => setRailPanel(railPanel === "camPreset" ? null : "camPreset")}
         />
         <RailBtn icon={<IcBulb size={18} />} label="光源" on={false} onClick={() => addEntity("light", undefined, `光源 ${entities.filter((x) => x.kind === "light").length + 1}`)} />
@@ -331,24 +413,30 @@ export function ThreeDPage({ project }: { project: DirectorProject }) {
       </div>
 
       <div className={`ds3d-panel left ${railPanel ? "" : "hide"}`}>
-        {railPanel === "entities" ? (
+        {railPanel === "scene" ? <div className="ds3d-panel">
+          <div className="ds3d-panel-title">一键场景</div>
+          <div className="ds3d-scene-presets">{SCENE_PRESETS.map(p => <button key={p.id} onClick={() => addScene(p.id)}><b>{p.name}</b><small>{p.detail}</small></button>)}</div>
+          <p className="ds3d-export-hint">添加到现有场景旁，自动切入新机位。人物、道具和灯光都可继续调整；撤销一次即可移除整套模板。</p>
+        </div> : railPanel === "entities" ? (
           <EntityList entities={entities} selId={selId} onSelect={setSelId} onRemove={removeEntity} />
         ) : railPanel === "character" ? (
           <AddCharacterPanel onAdd={(preset, name) => addEntity(preset === "glb" ? "prop" : preset?.startsWith("crowd") ? "character" : PROP_PRESETS[preset ?? ""] ? "prop" : "character", preset, name)} onUpload={uploadModel} />
         ) : railPanel === "export" ? (
-          <ExportPanel onExport={doExport} />
+          <><ExportPanel onExport={doExport} />
+          {currentSegment ? <button className="btn sm primary" onClick={() => void doExport("image", "shot")}><IcPlus size={13} /> 送入当前分镜</button> : null}
+          <button className="btn sm" onClick={() => void doExport("image", "canvas")}><IcPlus size={13} /> 发送到画布</button></>
         ) : railPanel === "camPreset" ? (
           <div className="ds3d-panel">
             <div className="ds3d-panel-title">机位预设（一键摆位）</div>
             <div className="ds3d-preset-grid">
               {CAM_PRESETS.map((p) => (
-                <button key={p.key} className="ds3d-preset-btn" title={`${p.label}：以第一个角色为主体`} onClick={() => applyCamPreset(p)}>
+                <button key={p.key} className="ds3d-preset-btn" title={`${p.label}：以选中角色（未选时用首个角色）为主体`} onClick={() => applyCamPreset(p)}>
                   {p.label}
                 </button>
               ))}
             </div>
             <p className="ds3d-export-hint">
-              以第一个角色为拍摄主体：自动放置/移动摄影机并切到取景视角；摆好站位后在「导出」里生成站位图。
+              以选中角色（未选时用首个角色）为拍摄主体：自动放置/移动摄影机并切到取景视角；摆好站位后在「导出」里生成站位图。
             </p>
           </div>
         ) : null}
@@ -356,6 +444,7 @@ export function ThreeDPage({ project }: { project: DirectorProject }) {
 
       {/* 顶部中央：视角切换 */}
       <div className="ds3d-viewseg">
+        <button className={railPanel === "scene" ? "on" : ""} onClick={() => setRailPanel(railPanel === "scene" ? null : "scene")}>场景模板</button>
         <button className={viewMode === "director" ? "on" : ""} onClick={() => switchView("director")}>
           导演视角
         </button>
@@ -367,7 +456,7 @@ export function ThreeDPage({ project }: { project: DirectorProject }) {
       {/* 右上：轴向指示 + 重置视角 */}
       <div className="ds3d-axisbox">
         <AxisGizmo ref={axisRef} />
-        <button className="ds3d-reset" onClick={() => engineRef.current?.resetView()}>
+        <button className="ds3d-reset" onClick={() => { switchView("director"); engineRef.current?.resetView(); }}>
           <IcRefresh size={12} /> 重置视角
         </button>
       </div>
@@ -387,11 +476,24 @@ export function ThreeDPage({ project }: { project: DirectorProject }) {
           <div className="ds3d-insp-empty">
             <IcOrbitHint />
             <p>点击场景中的实体进行编辑</p>
-            <p className="dim">拖动 gizmo 移动/旋转/缩放；右键拖动环绕视角，滚轮缩放</p>
+            <p className="dim">拖动坐标轴移动/旋转/缩放；左键环绕，右键平移，滚轮缩放</p>
           </div>
         )}
       </div>
 
+      <div className="ds3d-bottom-tools">
+      {motionOpen && <MotionPanel project={project} entities={entities} selected={selId} time={motionTime} onTime={setMotionTime} onChange={setEntities} engine={engineRef.current} segmentId={currentSegmentId} onRecording={value=>{motionRecording.current=value;setRecording(value);}}/>}
+      <div className="ds3d-quickbar">
+        <button className="btn sm" onClick={()=>setMotionOpen(!motionOpen)}>关键帧与轨迹</button>
+        <button className="btn sm" disabled={!history.current.undo.length} onClick={() => travel("undo")} title="Ctrl+Z">撤销</button>
+        <button className="btn sm" disabled={!history.current.redo.length} onClick={() => travel("redo")}>重做</button>
+        <button className="btn sm" onClick={() => { switchView("director"); engineRef.current?.focusEntity(selId ?? undefined); }} title="F 聚焦选中；未选时显示全场景"><IcCursor size={13} /> 聚焦</button>
+        <button className={`btn sm ${snap ? "primary" : ""}`} onClick={() => setSnap(v => !v)} title="移动10厘米 / 旋转15度">吸附{snap ? "开" : "关"}</button>
+        <button className="btn sm" disabled={!sel} onClick={() => sel && engineRef.current?.groundEntity(sel.id)}>贴地</button>
+        <button className="btn sm" disabled={!sel} onClick={() => { if (!sel) return; const pos = entityPos(sel); const copy = { ...sel, id: uid(6), name: `${sel.name} 副本`, pos: [pos[0] + 1, pos[1], pos[2]] as [number, number, number] }; setEntities([...entitiesRef.current, copy]); setSelId(copy.id); }}><IcCopy size={13} /> 复制</button>
+        <span>W 移动 · E 旋转 · R 缩放 · 左键环绕 / 右键平移</span>
+      </div>
+      </div>
       {/* 底部：模式条 + 语音 + AI 输入 */}
       <BottomBar
         gizmoMode={gizmoMode}
@@ -564,11 +666,17 @@ const AxisGizmo = forwardRef<AxisGizmoHandle>(function AxisGizmo(_, ref) {
 /* ---------- 机位取景框 ---------- */
 
 function Viewfinder({ aspect }: { aspect: string }) {
-  const [w, h] = (aspect || "16:9").split(":").map(Number);
-  const ratio = w > 0 && h > 0 ? w / h : 16 / 9;
+  const ref = useRef<HTMLDivElement>(null);
+  const [size, setSize] = useState({ w: 0, h: 0 });
+  useEffect(() => {
+    const el = ref.current; if (!el) return;
+    const update = () => setSize(stageFrame(el.clientWidth, el.clientHeight, aspect));
+    const observer = new ResizeObserver(update); observer.observe(el); update();
+    return () => observer.disconnect();
+  }, [aspect]);
   return (
-    <div className="ds3d-vf">
-      <div className="ds3d-vf-frame" style={{ aspectRatio: `${ratio}` }}>
+    <div className="ds3d-vf" ref={ref}>
+      <div className="ds3d-vf-frame" style={{ width: size.w, height: size.h }}>
         <i className="ds3d-vf-cross" />
         <span className="ds3d-vf-tag">机位视角 · {aspect}</span>
       </div>
@@ -589,7 +697,7 @@ function Inspector({ entity, engineRef, liveTick, onPatch, onRemove }: {
   const isChar = entity.kind === "character" && !entity.preset?.startsWith("crowd");
   // gizmo 拖动中 store 不回写（松手才提交），面板数值改读引擎实时变换
   void liveTick;
-  const live = engineRef.current?.peekTransform(entity.id);
+  const live = engineRef.current?.peekLiveTransform(entity.id);
   const pos = live?.pos ?? entityPos(entity);
   const rot: [number, number, number] = live?.rotDeg ?? [entity.rotDeg?.[0] ?? 0, entityRotY(entity), entity.rotDeg?.[2] ?? 0];
   const scl = live?.scale ?? entity.scale3 ?? [1, 1, 1];
@@ -634,6 +742,9 @@ function Inspector({ entity, engineRef, liveTick, onPatch, onRemove }: {
             <span>名称</span>
             <input className="input sm nodrag" value={entity.name} onChange={(e) => onPatch({ name: e.target.value })} />
           </label>
+          {isChar ? <div className="ds3d-preset-grid" role="group" aria-label="人物风格">
+            {([['mannequin', '素模'], ['clay', '哑光'], ['costume', '服装']] as const).map(([appearance, label]) => <button key={appearance} className={`ds3d-preset-btn ${(entity.appearance ?? 'mannequin') === appearance ? 'on' : ''}`} onClick={() => onPatch({ appearance })}>{label}</button>)}
+          </div> : null}
           <Vec3Field label="位置" value={pos} onChange={setPos} step={0.1} />
           <Vec3Field label="旋转" value={rot} onChange={setRot} step={5} />
           <Vec3Field label="缩放" value={scl} onChange={setScale} step={0.05} />

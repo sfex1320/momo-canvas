@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <title>MOMO Link · 服务</title>
+  <style>
+    :root { color-scheme: dark; }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; padding: 18px;
+      font: 13px/1.7 "Segoe UI", "Microsoft YaHei", sans-serif;
+      color: #d8dbe2;
+      background: #1f2023;
+    }
+    h1 { font-size: 16px; margin: 0 0 4px; display: flex; align-items: center; gap: 8px; }
+    .sub { color: #8b90a0; font-size: 12px; margin-bottom: 14px; }
+    .card {
+      background: #282a31; border: 1px solid #3a3d47; border-radius: 10px;
+      padding: 12px 14px; margin-bottom: 12px;
+    }
+    .row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .dot { width: 9px; height: 9px; border-radius: 50%; background: #6b6f7c; flex: none; }
+    .dot.ok { background: #43c26e; } .dot.err { background: #e05555; }
+    .status b { font-size: 13.5px; }
+    select, button {
+      font: inherit; color: inherit; background: #33363f; border: 1px solid #43464f;
+      border-radius: 7px; padding: 5px 10px;
+    }
+    button.primary { background: #4b62ff; border-color: #4b62ff; font-weight: 650; cursor: pointer; }
+    button:disabled { opacity: .45; cursor: not-allowed; }
+    .log {
+      margin-top: 10px; max-height: 150px; overflow-y: auto;
+      font-family: Consolas, monospace; font-size: 11.5px; color: #9aa0b0;
+      white-space: pre-wrap; word-break: break-all;
+    }
+    label.target { display: inline-flex; align-items: center; gap: 5px; margin-right: 12px; }
+  </style>
+</head>
+<body>
+  <h1>🦅 MOMO Link · 服务</h1>
+  <div class="sub">MOMO 智能画布 ↔ Eagle 双向资产桥（后台常驻）</div>
+
+  <div class="card status">
+    <div class="row">
+      <span class="dot" id="dot"></span>
+      <span id="statusText"><b>正在寻找 MOMO…</b></span>
+      <span style="flex:1"></span>
+      <button id="btnRetry">重新连接</button>
+    </div>
+    <div class="sub" style="margin:6px 0 0" id="bridgeDetail">MOMO 未启动时插件保持待机，启动后自动恢复连接。</div>
+  </div>
+
+  <div class="card">
+    <div style="font-weight:700;margin-bottom:8px">发送当前选中素材到 MOMO</div>
+    <div class="row">
+      <label class="target"><input type="radio" name="target" value="" checked /> 仅导入资产库</label>
+      <label class="target"><input type="radio" name="target" value="canvas" /> 导入并放入画布</label>
+      <span style="flex:1"></span>
+      <button id="btnSend" disabled>发送选中项</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <div style="font-weight:700">最近活动</div>
+    <div class="log" id="log">—</div>
+  </div>
+
+  <!-- serviceMode 插件的逻辑脚本；Eagle 会注入 eagle 对象（Plugin API） -->
+  <script src="js/plugin.js"></script>
+</body>
+</html>

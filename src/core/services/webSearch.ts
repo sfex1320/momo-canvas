@@ -8,7 +8,7 @@
  *  - Jina       https://jina.ai           s.jina.ai（注册送免费 Token）
  *  - SearXNG    自建实例 /search?format=json（免 Key）
  */
-import type { SearchCfg, SearchHit, SearchProvider } from "../types";
+import type { ModelCard, SearchCfg, SearchHit, SearchProvider } from "../types";
 import { xfetch, trimBase, readErrorBody } from "./http";
 
 /** 提供商元信息（设置页展示 + 官网跳转共用） */
@@ -30,6 +30,68 @@ export const SEARCH_PROVIDERS: {
 ];
 
 const needKey = (name: string) => new Error(`请在「设置 → 联网搜索」填写 ${name} API Key（服务商旁有官网入口，注册即可获取）`);
+
+/** MiniMax 官方 Token Plan 搜索入口；Anthropic Base URL 只取同源 host，不把 /anthropic 带过去。 */
+function miniMaxSearchOrigin(card: Pick<ModelCard, "baseUrl" | "model">): string | undefined {
+  if (!/minimax/i.test(card.model)) return undefined;
+  try {
+    const url = new URL(card.baseUrl);
+    if (url.hostname !== "api.minimaxi.com" && url.hostname !== "api.minimax.io") return undefined;
+    return url.origin;
+  } catch {
+    return undefined;
+  }
+}
+
+/** 当前对话模型能否直接复用其服务商配置调用 MiniMax 官方联网搜索。 */
+export function canUseMiniMaxSearch(card: Pick<ModelCard, "baseUrl" | "model">): boolean {
+  return !!miniMaxSearchOrigin(card);
+}
+
+export type ModelSearchResult = {
+  hits: SearchHit[];
+  /** 执行轨迹里展示真实来源，避免“选了 A 却像在用默认”的错觉。 */
+  source: string;
+};
+
+/**
+ * 按当前对话模型路由搜索：官方 MiniMax 优先走 Coding Plan 搜索，其他模型才走设置页的通用搜索商。
+ * MiniMax 搜索需要 Token Plan Key（或已购积分权限），它和普通按量 API Key 不一定互通。
+ */
+export async function webSearchForModel(card: ModelCard, cfg: SearchCfg, query: string): Promise<ModelSearchResult> {
+  const origin = miniMaxSearchOrigin(card);
+  if (!origin) return { hits: await webSearch(cfg, query), source: SEARCH_PROVIDERS.find((x) => x.value === cfg.provider)?.label ?? "联网搜索" };
+  if (!card.apiKey) throw new Error(`「${card.name} · ${card.model}」没有配置 API Key，无法使用 MiniMax 联网搜索`);
+
+  const resp = await xfetch(`${origin}/v1/coding_plan/search`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${card.apiKey}`,
+      "MM-API-Source": "Minimax-MCP",
+    },
+    body: JSON.stringify({ q: query }),
+  });
+  if (!resp.ok) {
+    throw new Error(
+      `MiniMax 联网搜索失败 ${resp.status}: ${await readErrorBody(resp)}。请确认当前密钥是 Token Plan Key，或账号已有可用积分权限`,
+    );
+  }
+  const json = await resp.json();
+  const base = json.base_resp ?? {};
+  if (base.status_code != null && Number(base.status_code) !== 0) {
+    throw new Error(
+      `MiniMax 联网搜索失败 ${base.status_code}: ${base.status_msg || "未知错误"}。请确认密钥与国内/海外服务地址匹配，并具备 Token Plan 或积分权限`,
+    );
+  }
+  const n = cfg.maxResults || 5;
+  const hits = (json.organic ?? []).slice(0, n).map((r: any) => ({
+    title: r.title ?? r.link ?? "搜索结果",
+    url: r.link ?? r.url ?? "",
+    snippet: (r.snippet ?? r.description ?? "").slice(0, 300),
+  }));
+  return { hits, source: `MiniMax · ${card.model}` };
+}
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 export async function webSearch(cfg: SearchCfg, query: string): Promise<SearchHit[]> {

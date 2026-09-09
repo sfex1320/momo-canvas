@@ -95,7 +95,8 @@ export function embedPngMeta(png: Uint8Array, meta: SaveMeta): Uint8Array {
 }
 
 async function ensureDataUrl(src: string): Promise<string> {
-  return toDataUrl(src, (u, i) => xfetch(u as string, i));
+  // 已生成的结果图下载放宽超时（慢线路 4K 大图 90 秒可能不够）
+  return toDataUrl(src, (u, i) => xfetch(u as string, i, { timeoutMs: 300_000 }));
 }
 
 /** 自动保存（需已设置保存目录）；返回完整路径。{n} 序号同前缀依次递增 */

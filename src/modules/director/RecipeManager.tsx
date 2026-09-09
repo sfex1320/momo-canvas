@@ -12,6 +12,7 @@ import { useComfy, useComfyTemplates } from "../../core/stores/comfyStore";
 import { useSettings } from "../../core/stores/settingsStore";
 import { toast } from "../../core/stores/uiStore";
 import { isVideoLoaderClass, isAudioLoaderClass } from "../../core/services/comfy";
+import { MODE_LABEL as MODE_LABELS } from "../../core/studio/capabilityProfile";
 import { uid } from "../../core/utils";
 import { IcClose, IcWand, IcZap, IcPlus, IcGlobe, IcFlow, IcImage, IcVideo, IcText, IcLayers, IcFilmFrame } from "../../ui/icons";
 import { PopSelect } from "../../ui/PopSelect";
@@ -41,16 +42,8 @@ export function pruneDeadRecipes(projectId: string): void {
   toast(`已自动清理 ${dead.size} 个模板已删除的配方`, "info");
 }
 
-/** 配方模式徽章文案 */
-const MODE_LABEL: Record<DirectorRecipe["mode"], string> = {
-  t2v: "文生视频",
-  i2v: "图生视频",
-  fl2v: "首尾帧",
-  r2v: "多参考",
-  v2v: "视频重绘",
-  t2i: "文生图",
-  i2i: "图生图",
-};
+/** 配方模式徽章文案（单一来源：capabilityProfile 的 MODE_LABEL，3.3 模式补全） */
+const MODE_LABEL = MODE_LABELS;
 
 export function RecipeManagerDialog({ projectId, onClose }: { projectId: string; onClose: () => void }) {
   const project = useDirector((s) => s.projects.find((p) => p.id === projectId));
@@ -89,11 +82,13 @@ export function RecipeManagerDialog({ projectId, onClose }: { projectId: string;
     updateRecipes([...project.recipes, recipe]);
   };
 
-  /** 从已导入的 H3 模板一键建配方：FL2VA（首尾帧）/ REF2VA（多参考）各一份，同模板不重复 */
+  /** 从已导入的 H3 模板一键建配方：按模板真实节点判职能（3.3 §2.3 修复）——
+   *  文生图模板（无视频/音频入口）建成 image 配方，不再误标成 fl2v 视频配方；
+   *  REF2VA/含视频入口 → r2v；L2VA → l2v（仅尾帧反推）；其余 FL2VA → fl2v。同模板不重复。 */
   const addH3Recipes = () => {
-    const h3 = templates.filter((t) => /MiniMax[_ ]?H3|FL2VA|REF2VA/i.test(t.name));
+    const h3 = templates.filter((t) => /MiniMax[_ ]?H3|T2VA|I2VA|FL2VA|L2VA|REF2VA/i.test(t.name));
     if (!h3.length) {
-      toast("没有找到 H3 模板——请先在「设置 → ComfyUI 模板」导入两个 MiniMax H3 工作流 JSON（前端格式可直接导入）", "info");
+      toast("没有找到 H3 模板——请先在「设置 → ComfyUI 模板」导入 MiniMax H3 工作流 JSON（前端格式可直接导入）", "info");
       return;
     }
     const exist = new Set(project.recipes.map((r) => r.templateId));
@@ -103,18 +98,38 @@ export function RecipeManagerDialog({ projectId, onClose }: { projectId: string;
       const types = Object.values(t.workflow as Record<string, { class_type?: string }>).map((n) => n?.class_type ?? "");
       const hasVideo = types.some(isVideoLoaderClass);
       const hasAudio = types.some(isAudioLoaderClass);
-      const isR2V = /REF2VA|多参考/i.test(t.name) || hasVideo;
+      // 模式判定（按真实节点 + 名字特征，3.3 §2.3）：
+      //  T2VA 文生音视频——无媒体入口但确是视频模板 → t2v；
+      //  文生图 / 无任何媒体入口且非 T2VA → image 配方（不再误标 fl2v 视频）；
+      //  REF2VA 或含视频入口 → r2v；L2VA 仅尾帧 → l2v；其余 FL2VA → fl2v。
+      const nameT2V = /T2VA|文生视频/i.test(t.name);
+      const nameImg = /文生图/i.test(t.name);
+      const noMediaEntry = !hasVideo && !hasAudio;
+      if (nameImg || (noMediaEntry && !nameT2V)) {
+        added.push({
+          id: uid(6),
+          name: t.name,
+          engine: "comfy",
+          output: "image",
+          mode: "t2i",
+          templateId: t.id,
+          defaultParams: {},
+        });
+        continue;
+      }
+      const isL2V = /(?<![FR])L2VA|仅尾帧/i.test(t.name) && !hasVideo;
+      const isR2V = !nameT2V && (/REF2VA|多参考/i.test(t.name) || hasVideo);
       added.push({
         id: uid(6),
         name: t.name,
         engine: "comfy",
         output: "video",
-        mode: isR2V ? "r2v" : "fl2v",
+        mode: nameT2V ? "t2v" : isL2V ? "l2v" : isR2V ? "r2v" : "fl2v",
         templateId: t.id,
         capabilitySnapshot: {
-          firstFrame: true,
-          lastFrame: !isR2V,
-          referenceImages: 4,
+          firstFrame: !nameT2V,
+          lastFrame: !isR2V && !nameT2V,
+          referenceImages: nameT2V ? 0 : 4,
           referenceVideos: hasVideo ? 3 : 0,
           referenceAudio: hasAudio ? 3 : 0,
           nativeAudio: true,
@@ -127,7 +142,7 @@ export function RecipeManagerDialog({ projectId, onClose }: { projectId: string;
       return;
     }
     updateRecipes([...project.recipes, ...added]);
-    toast(`已添加 ${added.length} 个 H3 配方：${added.map((r) => r.name).join("、")}`, "ok");
+    toast(`已添加 ${added.length} 个 H3 配方：${added.map((r) => `${r.name}（${r.output === "image" ? "图片" : r.mode}）`).join("、")}`, "ok");
   };
 
   const updateRecipe = (id: string, patch: Partial<DirectorRecipe>) => {

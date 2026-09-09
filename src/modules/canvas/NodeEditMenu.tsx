@@ -7,15 +7,17 @@
  */
 import { useEffect, useRef, useState } from "react";
 import { outPortType, useBoard } from "../../core/stores/boardStore";
-import { toast, useUi } from "../../core/stores/uiStore";
-import { applyCropToNewNode, applyEnhance, applyInpaint, applyMark, applyOutpaint, applyResize, nodeMainImage } from "../../core/nodeEdit";
+import { evenSplit, toast, useUi } from "../../core/stores/uiStore";
+import { applyCropToNewNode, applyEnhance, applyGridSplitFractional, applyInpaint, applyMark, applyOutpaint, applyResize, createStoryboardGroup, nodeMainImage, redrawElementImage, retouchElementText, spawnAiPresetNode } from "../../core/nodeEdit";
+import { AI_PRESETS, AI_PRESET_GROUPS, type AiPreset } from "../../core/aiPresets";
+import { collectUpstreamParts } from "../../core/runner";
 import { imageDims } from "../../core/imageInfo";
 import { PopLayer, PopSelect } from "../../ui/PopSelect";
 import { NumInput } from "../../ui/kit";
 import {
-  IcArrowL, IcBrush, IcCheck, IcChevronD, IcClose, IcCrop, IcDub, IcEnhance, IcExpand, IcLayers, IcLoading, IcResize, IcTag, IcTrash, IcUndo, IcUpscale, IcVector, IcWand,
+  IcArrowL, IcBox, IcBrush, IcCheck, IcChevronD, IcClose, IcCrop, IcDub, IcEnhance, IcExpand, IcGrid, IcIdCard, IcImage, IcLayers, IcLoading, IcOrbit, IcPerson, IcPose, IcResize, IcScan, IcTag, IcText, IcTimer, IcTrash, IcUndo, IcUpscale, IcVector, IcWand,
 } from "../../ui/icons";
-import type { EditChannel, NodeKind, OutpaintPads, ResizeParams } from "../../core/types";
+import type { EditChannel, ImageData, NodeKind, OutpaintPads, ResizeParams } from "../../core/types";
 
 /* ================= 主入口：按会话/输出类型决定渲染什么 ================= */
 
@@ -28,6 +30,7 @@ export function NodeEditMenu({ id }: { id: string }) {
   const hasImage = useBoard((s) => !!nodeMainImage(s.nodes.find((n) => n.id === id)));
 
   if (me?.mode === "crop") return <CropBar id={id} />;
+  if (me?.mode === "gridsplit") return <GridSplitBar id={id} />;
   if (me?.mode === "inpaint") return <InpaintBar id={id} />;
   if (me?.mode === "mark") return <MarkBar id={id} />;
   if (out === "video") return <VideoDubButton id={id} />;
@@ -57,13 +60,15 @@ function VideoDubButton({ id }: { id: string }) {
 
 /* ================= 图片：编辑菜单 + 参数卡 ================= */
 
-type View = "menu" | "enhance" | "outpaint" | "resize";
+type View = "menu" | "enhance" | "outpaint" | "resize" | "gridAI" | "elemRedraw" | "elemText";
 
 function EditMenuButton({ id }: { id: string }) {
   const [open, setOpen] = useState(false);
   const [view, setView] = useState<View>("menu");
   const wrapRef = useRef<HTMLDivElement>(null);
   const openMediaEdit = useUi((s) => s.openMediaEdit);
+  // 元素图层元数据：元素工坊拆解产物才有的「元素重绘 / 改字」专属入口
+  const elemMeta = useBoard((s) => (s.nodes.find((n) => n.id === id)?.data as ImageData | undefined)?.elemMeta ?? null);
   const close = () => {
     setOpen(false);
     setView("menu");
@@ -76,7 +81,7 @@ function EditMenuButton({ id }: { id: string }) {
         <IcChevronD size={12} className="chev" />
       </button>
       {open ? (
-        <PopLayer anchorRef={wrapRef} onClose={close} className={view === "menu" ? "ne-menu-pop" : "ne-pop"}>
+        <PopLayer anchorRef={wrapRef} onClose={close} className={view === "menu" ? "ne-menu-pop" : view === "gridAI" ? "ne-ai-pop" : "ne-pop"}>
           {view === "menu" ? (
             <div className="pop-list ne-menu2">
               <button className="pop-item" onClick={() => { close(); openMediaEdit(id, "crop"); }}>
@@ -93,6 +98,38 @@ function EditMenuButton({ id }: { id: string }) {
                   <span className="pi-desc">在图上涂抹蒙版，只重画选区</span>
                 </span>
               </button>
+              {elemMeta ? (
+                <button className="pop-item" onClick={() => setView("elemRedraw")}>
+                  <span className="pi-icon"><IcWand size={16} /></span>
+                  <span className="pi-text">
+                    <span className="pi-label">元素重绘</span>
+                    <span className="pi-desc">按描述重画这个图层元素，仍抠回透明底</span>
+                  </span>
+                </button>
+              ) : null}
+              {elemMeta?.role === "text" && elemMeta.text ? (
+                <button className="pop-item" onClick={() => setView("elemText")}>
+                  <span className="pi-icon"><IcText size={16} /></span>
+                  <span className="pi-text">
+                    <span className="pi-label">改字</span>
+                    <span className="pi-desc">替换文字内容，保持字体风格与颜色</span>
+                  </span>
+                </button>
+              ) : null}
+              <button className="pop-item" onClick={() => { close(); openMediaEdit(id, "gridsplit"); }}>
+                <span className="pi-icon"><IcGrid size={16} /></span>
+                <span className="pi-text">
+                  <span className="pi-label">宫格切分</span>
+                  <span className="pi-desc">图上拖线调格，勾选宫格一键创建分镜组</span>
+                </span>
+              </button>
+              <button className="pop-item" onClick={() => setView("gridAI")}>
+                <span className="pi-icon"><IcWand size={16} /></span>
+                <span className="pi-text">
+                  <span className="pi-label">AI 模板…</span>
+                  <span className="pi-desc">分镜推演/多机位/三视图/设定图：铺生成节点图生图，可再切分建组</span>
+                </span>
+              </button>
               <button className="pop-item" onClick={() => { close(); openMediaEdit(id, "mark"); }}>
                 <span className="pi-icon"><IcTag size={16} /></span>
                 <span className="pi-text">
@@ -100,11 +137,14 @@ function EditMenuButton({ id }: { id: string }) {
                   <span className="pi-desc">画笔、点位与框选标记，合成后就地写回</span>
                 </span>
               </button>
+              <button className="pop-item" onClick={() => { close(); useUi.getState().setPlanarSheetNodeId(id); }}>
+                <span className="pi-icon"><IcVector size={16}/></span><span className="pi-text"><span className="pi-label">立体转平面矢量…</span><span className="pi-desc">立体效果图 → 平面部件总稿 → SVG → 原图拆件与重绘</span></span>
+              </button>
               <button className="pop-item" onClick={() => { close(); useUi.getState().setLayerEditorNodeId(id); }}>
                 <span className="pi-icon"><IcLayers size={16} /></span>
                 <span className="pi-text">
-                  <span className="pi-label">智能分层</span>
-                  <span className="pi-desc">识别标题、主体与背景，导出 PSD / 分层 TIFF</span>
+                  <span className="pi-label">元素分层…</span>
+                  <span className="pi-desc">识别文字/主体/Logo，拆成透明图层（可重绘、改字、合成）</span>
                 </span>
               </button>
               <button className="pop-item" onClick={() => setView("enhance")}>
@@ -128,6 +168,9 @@ function EditMenuButton({ id }: { id: string }) {
                   <span className="pi-desc">本地 VTracer 位图转 SVG（Logo/打卡框/文化墙），可导出 AI/CDR</span>
                 </span>
               </button>
+              <button className="pop-item" onClick={()=>{close();useBoard.getState().spawnEdit(id,"vectorize");const n=useBoard.getState().nodes.find(n=>n.selected&&n.type==="vectorize");if(n)useBoard.getState().updateData(n.id,{preset:"flat",flatColors:12,quality:"high-fidelity",filterSpeckle:1});}}>
+                <span className="pi-icon"><IcVector size={16}/></span><span className="pi-text"><span className="pi-label">平面拆件清理与矢量</span><span className="pi-desc">整理色块 → 矢量路径 → 高清 PNG / 矢量 PDF</span></span>
+              </button>
               <button className="pop-item" onClick={() => setView("outpaint")}>
                 <span className="pi-icon"><IcExpand size={16} /></span>
                 <span className="pi-text">
@@ -147,6 +190,12 @@ function EditMenuButton({ id }: { id: string }) {
             <EnhanceCard id={id} onBack={() => setView("menu")} onDone={close} />
           ) : view === "outpaint" ? (
             <OutpaintCard id={id} onBack={() => setView("menu")} onDone={close} />
+          ) : view === "gridAI" ? (
+            <AiPresetMenu id={id} onDone={close} />
+          ) : view === "elemRedraw" ? (
+            <ElemRedrawCard id={id} onBack={() => setView("menu")} onDone={close} />
+          ) : view === "elemText" ? (
+            <ElemTextCard id={id} orig={elemMeta?.text ?? ""} onBack={() => setView("menu")} onDone={close} />
           ) : (
             <ResizeCard id={id} onBack={() => setView("menu")} onDone={close} />
           )}
@@ -182,7 +231,7 @@ function RunBtn({ id, label, onRun }: { id: string; label: string; onRun: () => 
 /* ---------- 高清增强 ---------- */
 function EnhanceCard({ id, onBack, onDone }: { id: string; onBack: () => void; onDone: () => void }) {
   const [factor, setFactor] = useState(2);
-  const [focus, setFocus] = useState<"detail" | "face" | "none">("detail");
+  const [focus, setFocus] = useState<"detail" | "face" | "none" | "flat">("detail");
   return (
     <>
       <CardHead title="高清增强" onBack={onBack} />
@@ -198,7 +247,7 @@ function EnhanceCard({ id, onBack, onDone }: { id: string; onBack: () => void; o
         增强侧重<span className="gp-hint">重绘式增强（绘画模型）；更专业的放大可接 ComfyUI 节点</span>
       </div>
       <div className="gp-seg">
-        {([["detail", "细节纹理"], ["face", "人物面部"], ["none", "纯放大"]] as const).map(([v, lab]) => (
+        {([["flat", "平面拆件清理"], ["detail", "细节纹理"], ["face", "人物面部"], ["none", "纯放大"]] as const).map(([v, lab]) => (
           <button key={v} className={focus === v ? "on" : ""} onClick={() => setFocus(v)}>
             {lab}
           </button>
@@ -319,6 +368,233 @@ function OutpaintCard({ id, onBack, onDone }: { id: string; onBack: () => void; 
 }
 
 /* ---------- 尺寸调整 ---------- */
+/* ---------- 元素重绘：透明图层 → 铺白底图生图 → 色键抠回透明 ---------- */
+function ElemRedrawCard({ id, onBack, onDone }: { id: string; onBack: () => void; onDone: () => void }) {
+  const [text, setText] = useState("");
+  return (
+    <>
+      <CardHead title="元素重绘" onBack={onBack} />
+      <textarea
+        className="textarea nodrag nowheel"
+        rows={3}
+        placeholder="描述要怎么改（留空 = 保持原样提升质量），如：换成红色外套、帽子改成贝雷帽"
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+      />
+      <div className="gp-foot">重绘后自动抠回透明底写回本图层（Ctrl+Z 可撤销）；使用图像角色默认模型，计费。</div>
+      <RunBtn
+        id={id}
+        label="重绘元素"
+        onRun={() => {
+          onDone();
+          void redrawElementImage(id, text);
+        }}
+      />
+    </>
+  );
+}
+
+/* ---------- 改字：文字图层换内容，保字体风格 ---------- */
+function ElemTextCard({ id, orig, onBack, onDone }: { id: string; orig: string; onBack: () => void; onDone: () => void }) {
+  const [text, setText] = useState("");
+  return (
+    <>
+      <CardHead title="改字" onBack={onBack} />
+      <div className="gp-sec-title">
+        原文<span className="gp-hint">{orig ? `「${orig}」` : "（未识别出原文）"}</span>
+      </div>
+      <textarea
+        className="textarea nodrag nowheel"
+        rows={2}
+        placeholder="输入替换成的新文字"
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+      />
+      <div className="gp-foot">保持原字体、颜色与质感，只换文字内容；改完仍抠回透明图层。</div>
+      <RunBtn
+        id={id}
+        label="替换文字"
+        onRun={() => {
+          onDone();
+          void retouchElementText(id, text);
+        }}
+      />
+    </>
+  );
+}
+
+/* ================= 会话条：宫格切分（图上拖线调格 + 勾选宫格 → 拆出 / 分镜组） ================= */
+
+function GridSplitBar({ id }: { id: string }) {
+  const me = useUi((s) => s.mediaEdit);
+  const patch = useUi((s) => s.patchMediaEdit);
+  const close = useUi((s) => s.closeMediaEdit);
+  const [specOpen, setSpecOpen] = useState(false);
+  const specRef = useRef<HTMLDivElement>(null);
+  // 自定义宫格悬停选格器（1-5 行 × 1-5 列）
+  const [hover, setHover] = useState<{ r: number; c: number } | null>(null);
+  if (!me) return null;
+  const rows = me.gridYs.length + 1;
+  const cols = me.gridXs.length + 1;
+  const total = rows * cols;
+  const uniform = rows === cols && [2, 3, 4, 5].includes(rows);
+  const applyGrid = (nr: number, nc: number) =>
+    patch({ gridRows: nr, gridCols: nc, gridXs: evenSplit(nc), gridYs: evenSplit(nr), gridPicked: [] });
+  const pickedCount = me.gridPicked.length;
+  return (
+    <>
+      <div ref={specRef} className="pop-wrap">
+        <button className={`nt-btn ${specOpen ? "on" : ""}`} title="宫格规格：预设等分，或悬停选自定义行列（应用后仍可在图上拖动微调）" onClick={() => setSpecOpen((v) => !v)}>
+          <IcGrid size={14} /> {uniform ? `${rows * rows}宫格（${rows}×${rows}）` : `自定义 ${rows}×${cols}`}
+          <IcChevronD size={12} className="chev" />
+        </button>
+        {specOpen ? (
+          <PopLayer anchorRef={specRef} onClose={() => setSpecOpen(false)} className="ne-pop gs-spec-pop">
+            <div className="gs-spec">
+              <div className="pop-list">
+                {[2, 3, 4, 5].map((n) => (
+                  <button
+                    key={n}
+                    className={`pop-item ${uniform && rows === n ? "on" : ""}`}
+                    onClick={() => {
+                      applyGrid(n, n);
+                      setSpecOpen(false);
+                    }}
+                  >
+                    <span className="pi-icon"><IcGrid size={15} /></span>
+                    <span className="pi-text">
+                      <span className="pi-label">{n * n}宫格（{n}×{n}）</span>
+                    </span>
+                  </button>
+                ))}
+              </div>
+              <div className="gs-picker">
+                <div className="gs-picker-t">自定义宫格</div>
+                <div className="gs-picker-grid" onPointerLeave={() => setHover(null)}>
+                  {Array.from({ length: 25 }, (_, k) => {
+                    const r = Math.floor(k / 5);
+                    const c = k % 5;
+                    const on = !!hover && r <= hover.r && c <= hover.c;
+                    return (
+                      <button
+                        key={k}
+                        className={`gs-pick-cell ${on ? "on" : ""}`}
+                        aria-label={`${r + 1} 行 ${c + 1} 列`}
+                        onPointerEnter={() => setHover({ r, c })}
+                        onClick={() => {
+                          applyGrid(hover ? hover.r + 1 : 3, hover ? hover.c + 1 : 3);
+                          setSpecOpen(false);
+                        }}
+                      />
+                    );
+                  })}
+                </div>
+                <div className="gs-picker-n">{hover ? `${hover.r + 1} 行 × ${hover.c + 1} 列 · 点击应用` : "悬停选行列（1-5）"}</div>
+              </div>
+            </div>
+          </PopLayer>
+        ) : null}
+      </div>
+      <button className="nt-btn" title="切割线恢复等分（保留已勾选的格子）" onClick={() => patch({ gridXs: evenSplit(cols), gridYs: evenSplit(rows) })}>
+        <IcUndo size={13} /> 重置均分
+      </button>
+      <button className="nt-btn" title="按原图行列顺序全选，建立无缝整体；不裁掉任何内容" onClick={() => { close(); void createStoryboardGroup(id, Array.from({ length: total }, (_, i) => `${Math.floor(i / cols)}-${i % cols}`), me.gridXs, me.gridYs); }}>
+        <IcGrid size={14} /> 整图无缝拆组
+      </button>
+      <span className="nt-label" title="在图上点击格子按点击顺序勾选（再点取消）">
+        已选 {pickedCount}/{total}
+      </span>
+      <button className="nt-btn" title="退出切分（Esc）" onClick={close}>
+        <IcClose size={13} />
+      </button>
+      <button
+        className="nt-btn"
+        title={`按当前切割线拆出全部 ${total} 格（阅读序摆在原图下方）`}
+        onClick={() => {
+          close();
+          void applyGridSplitFractional(id, me.gridXs, me.gridYs);
+        }}
+      >
+        <IcCrop size={14} /> 全部拆出
+      </button>
+      <button
+        className="nt-btn primary"
+        title="把勾选的格子按点击顺序包成一个无边框分镜组（整组可拖动，每片与原图连线）"
+        disabled={!pickedCount}
+        style={{ opacity: pickedCount ? 1 : 0.5 }}
+        onClick={() => {
+          close();
+          void createStoryboardGroup(id, me.gridPicked, me.gridXs, me.gridYs);
+        }}
+      >
+        <IcCheck size={14} /> 创建分镜组{pickedCount ? `（${pickedCount}）` : ""}
+      </button>
+    </>
+  );
+}
+
+/* ================= 参数卡：AI 模板（分类大面板 → 铺生成节点，LibTV「九宫格 ▾」同款动线） ================= */
+
+function aiPresetIcon(p: AiPreset) {
+  switch (p.id) {
+    case "ai-after3":
+    case "ai-before5":
+      return <IcTimer size={15} />;
+    case "ai-portrait":
+      return <IcPerson size={15} />;
+    case "ai-cinema":
+      return <IcEnhance size={15} />;
+    case "ai-pano":
+      return <IcOrbit size={15} />;
+    case "ai-face3":
+      return <IcScan size={15} />;
+    case "ai-char3":
+      return <IcPose size={15} />;
+    case "ai-char-sheet":
+      return <IcIdCard size={15} />;
+    case "ai-scene-sheet":
+      return <IcImage size={15} />;
+    case "ai-product-sheet":
+      return <IcBox size={15} />;
+    default:
+      return <IcGrid size={15} />;
+  }
+}
+
+function AiPresetMenu({ id, onDone }: { id: string; onDone: () => void }) {
+  const pick = (p: AiPreset) => {
+    const upstreamText = collectUpstreamParts(id)
+      .filter((x) => x.kind === "text")
+      .map((x) => x.value)
+      .join("\n")
+      .trim();
+    const nid = spawnAiPresetNode(id, p, upstreamText);
+    onDone();
+    if (nid)
+      toast(
+        p.kind === "grid"
+          ? `已铺「${p.label}」生成节点：可补场景描述后点生成；出图后「编辑 → 宫格切分」勾选创建分镜组`
+          : `已铺「${p.label}」生成节点：可直接生成，也可先补场景描述`,
+        "ok",
+      );
+  };
+  return (
+    <div className="ai-menu" role="group" aria-label="AI 模板分类">
+      {AI_PRESET_GROUPS.map((group) => (
+        <div key={group} className="ai-col">
+          <div className="ai-col-t">{group}</div>
+          {AI_PRESETS.filter((p) => p.group === group).map((p) => (
+            <button key={p.id} className="ai-item" title={p.desc} onClick={() => pick(p)}>
+              <span className="ai-ic">{aiPresetIcon(p)}</span>
+              <span className="ai-label">{p.label}</span>
+            </button>
+          ))}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function ResizeCard({ id, onBack, onDone }: { id: string; onBack: () => void; onDone: () => void }) {
   const [params, setParams] = useState<ResizeParams>({ mode: "mp", mp: 1, sideRef: "long", sideLen: 1024, scalePct: 50 });
   const [dims, setDims] = useState<{ w: number; h: number } | null>(null);

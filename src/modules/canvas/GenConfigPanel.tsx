@@ -1,3 +1,4 @@
+import { CanvasInputReview } from "./CanvasInputReview";
 /**
  * 生成参数栏 — LibLib 式底部生成栏：选中生成节点时出现在画布下方。
  * 结构 = 提示词区（GenPromptBar）+ 底部 chips 工具栏：
@@ -11,7 +12,10 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useBoard } from "../../core/stores/boardStore";
 import { modelKey, providersOfRole, resolveModelCard, useSettings } from "../../core/stores/settingsStore";
 import { toast, useUi } from "../../core/stores/uiStore";
-import { collectUpstream, runBatchImages, runBatchPrompts, runModelCompare } from "../../core/runner";
+import { collectUpstream, collectUpstreamParts, runBatchImages, runBatchPrompts, runFlow, runModelCompare } from "../../core/runner";
+import { GRID_ASPECTS, GRID_PRESETS, buildGridPrompt, gridDims, gridSizePatch, presetById } from "../../core/gridPresets";
+import type { GridAspect } from "../../core/types";
+import { applyGridSplit } from "../../core/nodeEdit";
 import {
   BANANA_ASPECTS,
   BANANA_SIZES,
@@ -31,7 +35,7 @@ import { PopLayer, PopSelect } from "../../ui/PopSelect";
 import { NodeParamsPop } from "../../ui/NodeParamsPop";
 import { AspectSelector, ArIcon } from "../../ui/AspectSelector";
 import { CARD_STYLES, CHAR_DELIVERABLES } from "../../core/charPresets";
-import { IcArrowL, IcArrowR, IcChevronD, IcCheck, IcClose, IcEcom, IcGlobe, IcIdCard, IcImage, IcLayers, IcPlus, IcRows, IcText, IcVideo } from "../../ui/icons";
+import { IcArrowL, IcArrowR, IcChevronD, IcCheck, IcClose, IcEcom, IcGlobe, IcGrid, IcIdCard, IcImage, IcLayers, IcLoading, IcPlus, IcRows, IcText, IcVideo } from "../../ui/icons";
 import { useAssets } from "../../core/stores/assetStore";
 import { assetToDataUrl, assetUrl } from "../../core/services/assetFiles";
 import { errMsg } from "../../core/utils";
@@ -213,7 +217,7 @@ function ParallelChip({ parallel, onChange }: { parallel: number; onChange: (n: 
 /** 「更多」菜单：批量出图 / 多模型对比，菜单 → 子表单在同一弹卡内切换 */
 function MorePicker({ nodeId, refCount, currentModel, role }: { nodeId: string; refCount: number; currentModel?: string; role: "image" | "video" }) {
   const [open, setOpen] = useState(false);
-  const [view, setView] = useState<"menu" | "batch" | "compare">("menu");
+  const [view, setView] = useState<"menu" | "batch" | "compare" | "grid">("menu");
   const wrapRef = useRef<HTMLDivElement>(null);
   const compareOptions = providersOfRole(role).flatMap((p) =>
     (p.models[role]?.models ?? []).map((m) => ({ key: modelKey(p.id, m), label: m, provider: p.name })),
@@ -233,6 +237,18 @@ function MorePicker({ nodeId, refCount, currentModel, role }: { nodeId: string; 
         <PopLayer anchorRef={wrapRef} onClose={close} up className="gd-more-pop">
           {view === "menu" ? (
             <div className="pop-list">
+              {role === "image" ? (
+                <button className="pop-item" onClick={() => setView("grid")}>
+                  <span className="pi-icon">
+                    <IcGrid size={16} />
+                  </span>
+                  <span className="pi-text">
+                    <span className="pi-label">九宫格抽卡</span>
+                    <span className="pi-desc">一张网格图装 N×N 个关键帧，切分后首尾帧连拍</span>
+                  </span>
+                  <IcArrowR size={13} />
+                </button>
+              ) : null}
               <button className="pop-item" onClick={() => setView("batch")}>
                 <span className="pi-icon">
                   <IcRows size={16} />
@@ -258,6 +274,8 @@ function MorePicker({ nodeId, refCount, currentModel, role }: { nodeId: string; 
             </div>
           ) : view === "batch" ? (
             <BatchView nodeId={nodeId} refCount={refCount} onBack={() => setView("menu")} onDone={close} />
+          ) : view === "grid" ? (
+            <GridView nodeId={nodeId} onBack={() => setView("menu")} onDone={close} />
           ) : (
             <CompareView
               nodeId={nodeId}
@@ -324,6 +342,114 @@ function BatchView({ nodeId, refCount, onBack, onDone }: { nodeId: string; refCo
         >
           按参考图批量（{refCount} 路各出一遍）
         </button>
+      ) : null}
+    </>
+  );
+}
+
+/** 九宫格抽卡：按模板一次生成 N×N 关键帧网格图 → 一键切分成独立图片节点（相邻两帧首尾帧连拍成片） */
+function GridView({ nodeId, onBack, onDone }: { nodeId: string; onBack: () => void; onDone: () => void }) {
+  const d = useBoard((s) => s.nodes.find((n) => n.id === nodeId)?.data as ImageGenData | undefined);
+  const upd = useBoard((s) => s.updateData);
+  const [presetId, setPresetId] = useState(() => d?.gridPresetId ?? GRID_PRESETS[0].id);
+  const preset = presetById(presetId) ?? GRID_PRESETS[0];
+  // 画幅跟随下游视频画幅（N×N 等分网格每格比例 = 整图比例），默认 16:9 横屏（LibTV 同款）
+  const [aspect, setAspect] = useState<GridAspect>(() => d?.gridAspect ?? "16:9");
+  const dims = gridDims(preset, aspect);
+  // 已抽过卡的节点提示词是包装后的模板全文，不作场景描述初始值；没抽过的带出当前提示词省得重打
+  const [desc, setDesc] = useState(() => (d?.gridPresetId ? "" : (d?.prompt ?? "").trim()));
+  const running = d?.status === "running";
+  const done = d?.status === "done" && (d?.results?.length ?? 0) > 0;
+
+  const run = () => {
+    // 尺寸按当前模型家族写：非 banana 显式宽高（customSize 优先级最高，参考图自动跟随比例不会覆盖它）
+    let family = "generic";
+    try {
+      family = imageFamily(resolveModelCard("image", d?.modelId));
+    } catch {
+      /* 未配模型/无默认：按通用家族写宽高，生成时 runImageGen 自会给出中文报错 */
+    }
+    // 场景描述优先级：表单填的 > 上游提示词文本（场景描述完全从之前传入的提示词获取）
+    const upstreamText = collectUpstreamParts(nodeId)
+      .filter((p) => p.kind === "text")
+      .map((p) => p.value)
+      .join("\n")
+      .trim();
+    upd(nodeId, {
+      prompt: buildGridPrompt(preset, desc.trim() || upstreamText, aspect),
+      ...gridSizePatch(preset, family, aspect),
+      count: 1,
+      parallel: 1,
+      gridPresetId: preset.id,
+      gridAspect: aspect,
+      results: [],
+      picked: 0,
+      status: "idle",
+      error: undefined,
+    });
+    void runFlow(nodeId);
+  };
+
+  return (
+    <>
+      <MoreHead title="九宫格抽卡" onBack={onBack} />
+      <div className="gd-more-note">一张网格图装下 N×N 个关键帧（同次生成，主体/风格天然连贯）→ 切分成独立图片 → 框选后右键「首尾帧连拍」成片。</div>
+      <div className="pop-list">
+        {GRID_PRESETS.map((p) => (
+          <button key={p.id} className={`pop-item ${presetId === p.id ? "on" : ""}`} onClick={() => setPresetId(p.id)}>
+            <span className="pi-icon">
+              <IcGrid size={15} />
+            </span>
+            <span className="pi-text">
+              <span className="pi-label">
+                {p.label}（{p.n}×{p.n}）
+              </span>
+              <span className="pi-desc">{p.desc}</span>
+            </span>
+            {presetId === p.id ? <IcCheck size={15} /> : null}
+          </button>
+        ))}
+      </div>
+      <div className="gp-sec-title">
+        整图画幅<span className="gp-hint">每格比例 = 整图比例，跟随目标视频画幅选</span>
+      </div>
+      <div className="gp-seg">
+        {GRID_ASPECTS.map((a) => (
+          <button key={a.value} className={aspect === a.value ? "on" : ""} onClick={() => setAspect(a.value)}>
+            {a.label}
+          </button>
+        ))}
+      </div>
+      <textarea
+        className="textarea nodrag nowheel"
+        rows={3}
+        placeholder="场景描述：谁、在哪、干什么（各格围绕它展开；有上游参考图会一并参考）"
+        value={desc}
+        onChange={(e) => setDesc(e.target.value)}
+      />
+      <button className="btn primary" disabled={running} onClick={run}>
+        {running ? (
+          <>
+            <IcLoading size={15} /> 抽卡生成中…
+          </>
+        ) : (
+          `开始抽卡（${dims.w}×${dims.h}）`
+        )}
+      </button>
+      {d?.status === "error" && d.error ? <div className="gd-more-note">上次抽卡失败：{d.error}</div> : null}
+      {done ? (
+        <>
+          <div className="gd-more-note">生成完成。每格约 {Math.round(dims.w / preset.n)}×{Math.round(dims.h / preset.n)}，连拍前可先「超清放大」补分辨率。</div>
+          <button
+            className="btn"
+            onClick={() => {
+              onDone();
+              void applyGridSplit(nodeId, preset.n, preset.n);
+            }}
+          >
+            切分成 {preset.n * preset.n} 张图片节点
+          </button>
+        </>
       ) : null}
     </>
   );
@@ -466,7 +592,8 @@ export function GenConfigPanel() {
 
   if (!selId || !d || suppressed) return null;
 
-  const maxN = familyMaxCount(family);
+  const isCodex=(d.modelId??models.defaults.image)?.startsWith("codex-membership")??false;
+  const maxN = isCodex?1:familyMaxCount(family);
   // remember 由 updateData 统一挂钩，panel 只负责写节点数据
   const patch = (p: Partial<ImageGenData>) => upd(selId, p);
   const setWH = (w: number, h: number, ratio?: string) => patch({ width: w, height: h, aspect: ratio, size: "default" });
@@ -504,7 +631,9 @@ export function GenConfigPanel() {
         kind="imageGen"
         toolbar={
           <>
-            <ModelPicker role="image" value={d.modelId} onChange={(v) => patch({ modelId: v })} up />
+            <ModelPicker role="image" value={d.modelId} onChange={(v) => patch({ modelId: v,...((v??models.defaults.image)?.startsWith("codex-membership")?{count:1,parallel:1}:{}) })} up />
+            {(d.modelId??useSettings.getState().settings.models.defaults.image)?.startsWith("codex-membership")&&<label className="gd-chip" title="关闭时，引用 Codex 上一张结果会自动延续原对话；开启则只把图片当新参考"><input type="checkbox" checked={d.newConversation??false} onChange={e=>patch({newConversation:e.target.checked})}/>新会话</label>}
+            <ParamsPop icon={<IcImage size={14}/>} label="生成输入"><CanvasInputReview nodeId={selId}/></ParamsPop>
             <ParamsPop icon={chipAr(ratioNow)} label={paramLabel}>
               {family === "banana" ? (
                 <>
@@ -943,7 +1072,7 @@ export function AudioConfigPanel() {
             <input
               className="input gd-voice nodrag"
               placeholder="音色（如 alloy）"
-              title="openai 协议 = voice 字段（alloy/echo/nova…）；自定义协议用 {{voice}} 占位"
+              title="openai 协议 = voice 字段（alloy/echo/nova…）；预设协议用 {{voice}} 占位"
               value={d.voice ?? ""}
               onChange={(e) => patch({ voice: e.target.value || undefined })}
             />

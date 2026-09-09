@@ -67,6 +67,12 @@ let recorder: MediaRecorder | null = null;
 let rafId = 0;
 let player: HTMLAudioElement | null = null;
 let active = false;
+let starting = false;
+let callEpoch = 0;
+let callAbort: AbortController | null = null;
+let finishRecording: (() => void) | null = null;
+let finishSpeaking: (() => void) | null = null;
+let finishWaiting: (() => void) | null = null;
 /** 助手正在回复：这一轮的 running 由 sendSideChat/sendAgentMessage 控制，靠订阅感知结束 */
 let unsubAgent: (() => void) | null = null;
 
@@ -119,18 +125,20 @@ function recordUtterance(): Promise<Blob | null> {
       if (done) return;
       done = true;
       cancelAnimationFrame(rafId);
-      try {
-        if (rec.state !== "inactive") rec.stop();
-      } catch {
-        /* 已停 */
-      }
       rec.onstop = () => {
-        recorder = null;
+        if(recorder===rec)recorder = null;
+        if(finishRecording===cancelRecording)finishRecording = null;
         if (!ok || !spoke) return resolve(null);
         resolve(new Blob(chunks, { type: rec.mimeType || "audio/webm" }));
       };
-      if (rec.state === "inactive") rec.onstop?.(new Event("stop"));
+      // stop() 会立即变成 inactive，但最后一块 dataavailable 与 stop 事件稍后到达。
+      // 必须等真实 stop，不能据 inactive 手动提前 resolve，否则尾部音频丢失。
+      try { if(rec.state!=="inactive")rec.stop();else rec.onstop?.(new Event("stop")); }
+      catch { resolve(null); }
     };
+    const cancelRecording=()=>finish(false);
+    finishRecording=cancelRecording;
+    rec.onerror=()=>finish(false);
 
     rec.ondataavailable = (e) => {
       if (e.data.size) chunks.push(e.data);
@@ -157,20 +165,22 @@ function recordUtterance(): Promise<Blob | null> {
 /** 等助手这一轮回复结束（running: true → false） */
 function waitAssistantDone(): Promise<void> {
   return new Promise((resolve) => {
-    if (!useAgent.getState().running) return resolve();
+    if (!useAgent.getState().running || useAgent.getState().resolver) return resolve();
     unsubAgent?.();
     unsubAgent = useAgent.subscribe((s) => {
-      if (!s.running) {
+      if (!s.running || s.resolver) {
         unsubAgent?.();
         unsubAgent = null;
+        finishWaiting=null;
         resolve();
       }
     });
+    finishWaiting=()=>{unsubAgent?.();unsubAgent=null;resolve();};
   });
 }
 
 /** 朗读一段文本；播放期间监听用户插话，一开口立刻停下（barge-in） */
-async function speak(text: string): Promise<void> {
+async function speak(text: string, signal: AbortSignal): Promise<void> {
   const clean = text.replace(/[*#`>_~]/g, "").trim();
   if (!clean) return;
   let card;
@@ -180,8 +190,8 @@ async function speak(text: string): Promise<void> {
     return; // 没配音频模型 = 只做语音输入，不朗读
   }
   emit({ phase: "speaking" });
-  const url = await generateAudio(card, { text: clean.slice(0, 900) });
-  if (!active) return;
+  const url = await generateAudio(card, { text: clean.slice(0, 900), signal });
+  if (!active || signal.aborted) return;
   await new Promise<void>((resolve) => {
     const a = new Audio(url);
     player = a;
@@ -191,9 +201,11 @@ async function speak(text: string): Promise<void> {
       stopped = true;
       cancelAnimationFrame(rafId);
       stopPlayback();
+      finishSpeaking=null;
       resolve();
     };
     a.onended = end;
+    finishSpeaking=end;
     a.onerror = end;
     void a.play().catch(end);
     // 播放中持续读音量：用户开口即打断
@@ -209,25 +221,26 @@ async function speak(text: string): Promise<void> {
 }
 
 /** 通话主循环：听 → 认 → 答 → 读 → 再听 */
-async function loop() {
-  while (active) {
+async function loop(epoch:number,signal:AbortSignal) {
+  while (active && epoch===callEpoch && !signal.aborted) {
     emit({ phase: "listening", heard: "" });
     const blob = await recordUtterance();
-    if (!active) break;
+    if (!active || epoch!==callEpoch) break;
     if (!blob) continue; // 这一轮没说话，继续听
 
     emit({ phase: "recognizing", level: 0 });
     let text = "";
     try {
       const card = resolveModelCard("asr");
-      text = await transcribe(card, { audio: blob, lang: "zh" });
+      text = await transcribe(card, { audio: blob, lang: "zh", signal });
     } catch (e) {
+      if(signal.aborted||epoch!==callEpoch)break;
       pushError("语音识别", errMsg(e));
       emit({ phase: "idle", error: errMsg(e) });
       active = false;
       break;
     }
-    if (!active) break;
+    if (!active || epoch!==callEpoch) break;
     if (!text.trim()) continue; // 识别为空（环境噪音），继续听
 
     emit({ phase: "thinking", heard: text });
@@ -237,25 +250,32 @@ async function loop() {
     if (st.mode === "chat") void sendSideChat();
     else void sendAgentMessage();
     await waitAssistantDone();
-    if (!active) break;
+    if (!active || epoch!==callEpoch) break;
 
     const msgs = useAgent.getState().messages;
-    const last = [...msgs].reverse().find((m) => m.role === "assistant" && m.text.trim());
+    const last = [...msgs].reverse().find((m) => m.role === "assistant" && (m.text.trim()||m.question));
     if (last) {
       try {
-        await speak(last.text);
+        await speak(last.question && !last.question.answer ? last.question.text : last.text,signal);
       } catch (e) {
         // 朗读失败不影响继续通话（回复文字已经在面板上）
-        toast(`朗读失败：${errMsg(e)}`, "err");
+        if(!signal.aborted)toast(`朗读失败：${errMsg(e)}`, "err");
       }
     }
   }
-  emit({ phase: "idle", level: 0 });
+  if(epoch===callEpoch)stopVoiceCall();
+}
+
+function setupAudio(input:MediaStream) {
+  audioCtx = new AudioContext();
+  analyser = audioCtx.createAnalyser();analyser.fftSize = 1024;
+  audioCtx.createMediaStreamSource(input).connect(analyser);
+  void audioCtx.resume().catch(()=>{});
 }
 
 /** 开始通话：申请麦克风 → 进入循环 */
 export async function startVoiceCall(): Promise<void> {
-  if (active) return;
+  if (active || starting) return;
   // 前置检查：没配语音识别模型直接给出可操作的中文提示，别等录完再报错
   try {
     resolveModelCard("asr");
@@ -263,27 +283,32 @@ export async function startVoiceCall(): Promise<void> {
     toast("还没配置语音识别模型：设置 → 模型配置 → 给服务商添加「语音识别」模型（如 gpt-4o-transcribe / whisper-1）", "err");
     return;
   }
+  starting=true;const epoch=++callEpoch;const controller=new AbortController();callAbort=controller;
   try {
-    stream = await navigator.mediaDevices.getUserMedia({
+    const acquired = await navigator.mediaDevices.getUserMedia({
       audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },
     });
+    if(epoch!==callEpoch){acquired.getTracks().forEach(t=>t.stop());return;}stream=acquired;
   } catch (e) {
+    if(epoch!==callEpoch)return;
+    starting=false;
     toast(`无法使用麦克风：${errMsg(e)}`, "err");
     return;
   }
-  audioCtx = new AudioContext();
-  const srcNode = audioCtx.createMediaStreamSource(stream);
-  analyser = audioCtx.createAnalyser();
-  analyser.fftSize = 1024;
-  srcNode.connect(analyser);
+  try { setupAudio(stream); } catch(e) { stopVoiceCall();toast(`麦克风初始化失败：${errMsg(e)}`,"err");return; }
+  starting=false;
   active = true;
   emit({ phase: "listening", level: 0, heard: "", error: undefined });
-  void loop();
+  void loop(epoch,controller.signal).catch(e=>{if(epoch===callEpoch){pushError("语音通话",errMsg(e));stopVoiceCall();}});
 }
 
 /** 挂断：停录音、停播放、释放麦克风 */
 export function stopVoiceCall() {
+  callEpoch++;starting=false;callAbort?.abort();callAbort=null;
   active = false;
+  finishRecording?.();finishRecording=null;
+  finishSpeaking?.();finishSpeaking=null;
+  finishWaiting?.();finishWaiting=null;
   cancelAnimationFrame(rafId);
   stopPlayback();
   unsubAgent?.();
@@ -296,7 +321,7 @@ export function stopVoiceCall() {
   recorder = null;
   stream?.getTracks().forEach((t) => t.stop());
   stream = null;
-  void audioCtx?.close();
+  void audioCtx?.close().catch(()=>{});
   audioCtx = null;
   analyser = null;
   emit({ phase: "idle", level: 0, heard: "" });
@@ -304,30 +329,32 @@ export function stopVoiceCall() {
 
 /** 单次语音输入（不进通话循环）：录一句 → 识别 → 填进输入框，由用户确认后发送 */
 export async function voiceInputOnce(): Promise<void> {
-  if (active) return;
+  if (active || starting) return;
   try {
     resolveModelCard("asr");
   } catch {
     toast("还没配置语音识别模型：设置 → 模型配置 → 添加「语音识别」模型", "err");
     return;
   }
+  starting=true;const epoch=++callEpoch;const controller=new AbortController();callAbort=controller;
   try {
-    stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
+    const acquired = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } });
+    if(epoch!==callEpoch){acquired.getTracks().forEach(t=>t.stop());return;}stream=acquired;
   } catch (e) {
+    if(epoch!==callEpoch)return;starting=false;
     toast(`无法使用麦克风：${errMsg(e)}`, "err");
     return;
   }
-  audioCtx = new AudioContext();
-  analyser = audioCtx.createAnalyser();
-  analyser.fftSize = 1024;
-  audioCtx.createMediaStreamSource(stream).connect(analyser);
+  try { setupAudio(stream); } catch(e) { stopVoiceCall();toast(`麦克风初始化失败：${errMsg(e)}`,"err");return; }
+  starting=false;
   active = true;
   emit({ phase: "listening", level: 0, heard: "" });
   try {
     const blob = await recordUtterance();
     if (blob) {
       emit({ phase: "recognizing" });
-      const text = await transcribe(resolveModelCard("asr"), { audio: blob, lang: "zh" });
+      const text = await transcribe(resolveModelCard("asr"), { audio: blob, lang: "zh", signal:controller.signal });
+      if(epoch!==callEpoch)return;
       if (text.trim()) {
         const cur = useAgent.getState().draft;
         useAgent.getState().setDraft(cur ? `${cur} ${text}` : text);
@@ -336,8 +363,8 @@ export async function voiceInputOnce(): Promise<void> {
       }
     }
   } catch (e) {
-    pushError("语音识别", errMsg(e));
+    if(!controller.signal.aborted)pushError("语音识别", errMsg(e));
   } finally {
-    stopVoiceCall();
+    if(epoch===callEpoch)stopVoiceCall();
   }
 }

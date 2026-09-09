@@ -87,9 +87,14 @@ export function compileShotStructure(ctx: ShotContext): {
   return parts;
 }
 
-/** 把镜头结构编译成最终提示词字符串（按目标模型类型） */
-export function compilePrompt(ctx: ShotContext, target: CompileTarget): string {
-  const p = compileShotStructure(ctx);
+/** 把镜头结构编译成最终提示词字符串（按目标模型类型）。
+ *  ctx 可传单个镜头上下文或整段全部镜头（导演台 2.0：通用编译路径从「只编译第一个 Shot」
+ *  改为编译片段内所有 Shot，方案 §13.1——多镜头段落逐时段输出）。 */
+export function compilePrompt(ctx: ShotContext | ShotContext[], target: CompileTarget): string {
+  const ctxs = Array.isArray(ctx) ? ctx : [ctx];
+  const first = ctxs[0];
+  if (!first) return "";
+  const p = compileShotStructure(first);
   const isImage = target.startsWith("image");
 
   // 图片配方：静态构图，不混入视频时序
@@ -106,9 +111,27 @@ export function compilePrompt(ctx: ShotContext, target: CompileTarget): string {
   }
 
   // 视频配方：带时间点的镜头描述
-  const timeAxis = ctx.shot
-    ? `${ctx.shot.startSec}-${ctx.shot.endSec}秒`
-    : `0-${ctx.segment.durationSec}秒`;
+  if (ctxs.length > 1 && ctxs.every((c) => c.shot)) {
+    // 多镜头：每 Shot 一行「起-止秒：景别/运镜/动作/音频」，共享字段（角色/场景/风格）只写一次
+    const shotLines = ctxs.map((c) => {
+      const sp = compileShotStructure(c);
+      const head = [sp.shotSize, sp.camera].filter(Boolean).join("，");
+      const audio = sp.audio ? `（音频：${sp.audio}）` : "";
+      return `${c.shot!.startSec}–${c.shot!.endSec}秒：${head ? `${head}，` : ""}${sp.action}${audio}`;
+    });
+    return [
+      ...shotLines,
+      p.subject && `角色：${p.subject}`,
+      p.scene && `场景：${p.scene}`,
+      p.lighting && `光线：${p.lighting}`,
+      p.continuity && `承接：${p.continuity}`,
+      p.style && `风格：${p.style}`,
+    ].filter(Boolean).join("\n");
+  }
+
+  const timeAxis = ctxs[0].shot
+    ? `${ctxs[0].shot.startSec}-${ctxs[0].shot.endSec}秒`
+    : `0-${ctxs[0].segment.durationSec}秒`;
   return [
     `${timeAxis}：${p.action}`,
     p.subject && `角色：${p.subject}`,
@@ -248,11 +271,35 @@ export function parseH3Prompt(text: string): ParsedH3Prompt | null {
   };
 }
 
-/** 收集一个 segment 的完整镜头上下文（供 UI 预览编译结果用） */
+/**
+ * 判断角色是否在本段出场（方案 §13.1：角色按本段实际出场过滤，不默认把项目全部角色写进每段）。
+ * 判定素材：摘要、对白、镜头动作/音频、承接说明、剧本原文——正文提及角色名即视为出场。
+ */
+export function appearingCharacters(
+  project: DirectorProject,
+  segment: DirectorSegment,
+): DirectorCharacter[] {
+  const all = project.characters ?? [];
+  if (!all.length) return [];
+  const text = [
+    segment.summary,
+    segment.dialogue.join("\n"),
+    segment.shots.map((s) => `${s.action}\n${s.audio}`).join("\n"),
+    segment.continuityIn ?? "",
+    segment.continuityOut ?? "",
+    segment.scriptText ?? "",
+  ].join("\n");
+  const hit = all.filter((c) => c.name && text.includes(c.name));
+  // 一个都匹配不上时不冒险丢主角（可能正文用了代词）：回退全部角色
+  return hit.length ? hit : all;
+}
+
+/** 收集一个 segment 的完整镜头上下文（供 UI 预览编译结果用）。
+ *  角色列表按本段实际出场过滤（导演台 2.0，方案 §13.1）。 */
 export function segmentShotContexts(project: DirectorProject, segment: DirectorSegment): ShotContext[] {
   const scene = project.scenes.find((s) => s.id === segment.sceneId);
   if (!scene) return [];
-  const chars = project.characters;
+  const chars = appearingCharacters(project, segment);
   return segment.shots.map((shot) => ({
     segment,
     shot,
@@ -260,4 +307,72 @@ export function segmentShotContexts(project: DirectorProject, segment: DirectorS
     characters: chars,
     ruleSet: project.ruleSet,
   }));
+}
+
+/* ---------------- 提示词来源图谱与引用编号校验（导演台 2.0，方案 §13.2 / §8.2） ---------------- */
+
+/** 来源图谱的一节：最终提示词由这些来源拼接而成，检查器按节展示 */
+export type PromptSourcePart = {
+  key: string;
+  label: string;
+  text: string;
+};
+
+/**
+ * 解析最终提示词的来源构成（只读分析，不改编译结果）：
+ * 项目风格 / 角色连续性 / 片段镜头 / 用户修改 / Skill / 负向规则 / 参考编号。
+ */
+export function promptSourceMap(project: DirectorProject, segment: DirectorSegment, finalText: string): PromptSourcePart[] {
+  const parts: PromptSourcePart[] = [];
+  const gStyle = project.ruleSet?.positive.style?.trim();
+  if (gStyle) parts.push({ key: "style", label: "项目风格", text: gStyle });
+  const chars = appearingCharacters(project, segment);
+  if (chars.length) {
+    parts.push({
+      key: "chars",
+      label: "角色连续性",
+      text: chars.map((c) => `${c.name}（${c.continuity}）`).join("；"),
+    });
+  }
+  if (segment.shots.length) {
+    parts.push({
+      key: "shots",
+      label: "片段镜头",
+      text: segment.shots
+        .map((s, i) => `镜${i + 1} ${s.startSec}-${s.endSec}s ${s.shotSize} ${s.camera} ${s.action}`.trim())
+        .join("\n"),
+    });
+  }
+  if (segment.promptOverride?.trim()) parts.push({ key: "user", label: "用户修改（片段提示词）", text: segment.promptOverride.slice(0, 400) });
+  if (segment.promptFinalOverride?.trim()) parts.push({ key: "final", label: "最终稿（锁定自动编译）", text: segment.promptFinalOverride.slice(0, 400) });
+  if (/^参考素材（按序/m.test(finalText)) {
+    const m = finalText.match(/^参考素材（按序[^\n]*\n([\s\S]*?)(?=\n\n|$)/m);
+    if (m) parts.push({ key: "refs", label: "参考编号", text: m[1] });
+  }
+  const neg = finalText.match(/负向：(.+)$/m);
+  if (neg) parts.push({ key: "neg", label: "负向规则", text: neg[1] });
+  return parts;
+}
+
+/**
+ * 校验提示词里的 <Picture N> / <Video N> / <Audio N> 引用编号是否越界（方案 §8.2）。
+ * counts 为三类素材的实际投喂数量；返回问题列表（空 = 全部合法）。
+ */
+export function validateRefTags(
+  prompt: string,
+  counts: { pictures: number; videos: number; audios: number },
+): string[] {
+  const problems: string[] = [];
+  const check = (tag: "Picture" | "Video" | "Audio", max: number) => {
+    const re = new RegExp(`<${tag}\\s+(\\d+)>`, "gi");
+    for (const m of prompt.matchAll(re)) {
+      const n = Number(m[1]);
+      if (n < 1) problems.push(`<${tag} ${n}> 编号从 1 开始`);
+      else if (n > max) problems.push(`<${tag} ${n}> 超出实际素材数（${max} 张）——编号会指错图`);
+    }
+  };
+  check("Picture", counts.pictures);
+  check("Video", counts.videos);
+  check("Audio", counts.audios);
+  return problems;
 }

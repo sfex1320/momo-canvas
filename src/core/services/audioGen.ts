@@ -1,17 +1,16 @@
 /**
  * 音频模型服务 — TTS 朗读 / 音乐生成
  *  - openai    OpenAI 兼容：POST /audio/speech（tts-1 / gpt-4o-mini-tts 等，返回二进制音频）
- *  - custom:*  自定义协议（设置 → 协议，用途 = 音频生成）：{{prompt}} 文本、{{voice}} 音色
+ *  - custom:*  预设协议（用途 = 音频生成）：{{prompt}} 文本、{{voice}} 音色
  */
 import type { CustomProtocol, ModelCard } from "../types";
 import { xfetch, trimBase, readErrorBody } from "./http";
 import { absolutize, extractResultStrings, resolveCustomProto, runCustomFlow } from "./customProto";
-import { runWithSelfHeal } from "./protoSelfHeal";
 
 export type AudioGenReq = {
   /** 朗读文本 / 音乐描述 */
   text: string;
-  /** 音色（openai 的 voice；自定义协议 {{voice}} 占位） */
+  /** 音色（openai 的 voice；预设协议 {{voice}} 占位） */
   voice?: string;
   onProgress?: (msg: string) => void;
   /** 停止信号（节点上的停止按钮） */
@@ -28,7 +27,7 @@ function blobToDataUrl(blob: Blob): Promise<string> {
   });
 }
 
-/** 最终响应 → 音频地址（纯解析步骤，自愈重解析时复用，避免重复合成扣费） */
+/** 最终响应 → 音频地址 */
 function parseAudio(p: CustomProtocol, final: unknown, base = ""): string | null {
   const first = extractResultStrings(final, p.resultPath, "audio")[0];
   if (!first) return null;
@@ -40,35 +39,24 @@ function parseAudio(p: CustomProtocol, final: unknown, base = ""): string | null
 
 async function genCustomAudio(card: ModelCard, req: AudioGenReq): Promise<string> {
   const proto = await resolveCustomProto(card.protocol, "audio");
-  return runWithSelfHeal(
-    proto,
-    "生成音频",
-    async (p, ctx) => {
-      const vars: Record<string, string> = {
-        baseUrl: trimBase(card.baseUrl),
-        apiKey: card.apiKey,
-        model: card.model,
-        // 完整 JSON 转义（手动 replace 只转义 " 和 \n 会漏掉反斜杠本身与 \r \t，破坏请求体）
-        prompt: JSON.stringify(req.text).slice(1, -1),
-        // 音色名可能含引号/换行（自定义音色 ID），同样按 JSON 字符串转义再进模板
-        voice: JSON.stringify(req.voice ?? "").slice(1, -1),
-        size: "",
-        n: "1",
-        taskId: "",
-      };
-      req.onProgress?.("提交任务…");
-      const final = await runCustomFlow(p, vars, req.onProgress, ctx.trace, req.signal);
-      ctx.lastFinal = final;
-      const a = parseAudio(p, final, trimBase(card.baseUrl));
-      if (!a)
-        throw new Error(`协议「${p.name}」未取到音频（路径 ${p.resultPath}）。响应：${JSON.stringify(final).slice(0, 250)}`);
-      return a;
-    },
-    req.onProgress,
-    // 自愈重解析：只重读这次的响应，不重新合成
-    (p, final) => parseAudio(p, final, trimBase(card.baseUrl)),
-    trimBase(card.baseUrl),
-  );
+  const vars: Record<string, string> = {
+    baseUrl: trimBase(card.baseUrl),
+    apiKey: card.apiKey,
+    model: card.model,
+    // 完整 JSON 转义（手动 replace 只转义 " 和 \n 会漏掉反斜杠本身与 \r \t，破坏请求体）
+    prompt: JSON.stringify(req.text).slice(1, -1),
+    // 音色名可能含引号/换行（自定义音色 ID），同样按 JSON 字符串转义再进模板
+    voice: JSON.stringify(req.voice ?? "").slice(1, -1),
+    size: "",
+    n: "1",
+    taskId: "",
+  };
+  req.onProgress?.("提交任务…");
+  const final = await runCustomFlow(proto, vars, req.onProgress, req.signal);
+  const a = parseAudio(proto, final, trimBase(card.baseUrl));
+  if (!a)
+    throw new Error(`协议「${proto.name}」未取到音频（路径 ${proto.resultPath}）。响应：${JSON.stringify(final).slice(0, 250)}`);
+  return a;
 }
 
 export async function generateAudio(card: ModelCard, req: AudioGenReq): Promise<string> {

@@ -1,3 +1,4 @@
+import { sampleMotion } from "../../../core/previzMotion";
 /**
  * 3D 导演台 · three.js 场景引擎（非 React 封装）
  *
@@ -6,9 +7,12 @@
  *   通过 onTransformCommit 一次性写回 store（拖动中不写，避免高频持久化）。
  */
 import * as THREE from "three";
+import { stageFrame } from "./stageFraming";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { TransformControls } from "three/examples/jsm/controls/TransformControls.js";
+import { clone as cloneSkeleton } from "three/examples/jsm/utils/SkeletonUtils.js";
 import { GLTFLoader } from "three/examples/jsm/loaders/GLTFLoader.js";
+import { SkeletalRig } from "./skeletalRig";
 import type { PrevizEntity } from "../../../core/types";
 import { assetUrl } from "../../../core/services/assetFiles";
 import { applyPose, buildEntity, entityPos, entityRotY, type BuiltEntity } from "./mannequin";
@@ -36,7 +40,7 @@ const rad = (r: number) => (r * 180) / Math.PI;
 
 /** 结构签名：这些字段变了才重建 three 对象（颜色/名称/变换走热更新） */
 function structKey(e: PrevizEntity): string {
-  return [e.kind, e.preset ?? "", e.modelAssetPath ?? "", e.preset?.startsWith("crowd") ? e.color : ""].join("|");
+  return [e.kind, e.preset ?? "", e.modelAssetPath ?? "", e.appearance ?? "", e.preset?.startsWith("crowd") ? e.color : ""].join("|");
 }
 
 /** 生成径向渐变地面纹理（中央微亮的舞台光晕） */
@@ -56,6 +60,14 @@ function groundTexture(): THREE.CanvasTexture {
 }
 
 export class StageEngine {
+  private rigs = new WeakMap<THREE.Object3D, SkeletalRig>();
+  rigInfo(id: string) {
+    const root = this.entities.get(id)?.built.root;
+    const rig = root && this.rigs.get(root);
+    return rig ? { bones: rig.bones.map(b=>({key:b.key,name:b.name})), clips: rig.clips.map(c=>({name:c.name,duration:c.duration})) } : {bones:[],clips:[]};
+  }
+  private motionTrails = new THREE.Group();
+  private recording = false;
   private renderer: THREE.WebGLRenderer;
   private scene = new THREE.Scene();
   private camera: THREE.PerspectiveCamera;
@@ -68,7 +80,8 @@ export class StageEngine {
   private disposed = false;
 
   private entities = new Map<string, { built: BuiltEntity; skey: string; poseKey: string }>();
-  private loading = new Set<string>();
+  private loading = new Map<string, symbol>();
+  private latestEntities = new Map<string, PrevizEntity>();
   private selectedId: string | null = null;
   private dragging = false;
   private viewMode: ViewMode = "director";
@@ -87,6 +100,7 @@ export class StageEngine {
     this.canvas = canvas;
     this.cb = cb;
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true, preserveDrawingBuffer: true });
+    this.scene.add(this.motionTrails);
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.renderer.setClearColor(0x04060a, 1);
     this.renderer.shadowMap.enabled = true;
@@ -129,6 +143,7 @@ export class StageEngine {
     this.controls = new OrbitControls(this.camera, canvas);
     this.controls.target.copy(this.savedView.target);
     this.controls.enableDamping = true;
+    this.controls.mouseButtons = { LEFT: THREE.MOUSE.ROTATE, MIDDLE: THREE.MOUSE.PAN, RIGHT: THREE.MOUSE.PAN };
     this.controls.dampingFactor = 0.08;
     this.controls.maxPolarAngle = Math.PI / 2 - 0.02;
     this.controls.minDistance = 1.2;
@@ -140,7 +155,7 @@ export class StageEngine {
     this.scene.add(this.gizmo.getHelper());
     this.gizmo.addEventListener("dragging-changed", (e) => {
       this.dragging = !!e.value;
-      this.controls.enabled = !e.value;
+      this.controls.enabled = !e.value && this.viewMode === "director";
       if (!e.value) this.commitDrag();
     });
     this.gizmo.addEventListener("objectChange", () => this.cb.onTransformLive?.());
@@ -170,6 +185,10 @@ export class StageEngine {
     this.controls.dispose();
     for (const { built } of this.entities.values()) this.disposeObject(built.root);
     this.entities.clear();
+    for (const cached of this.glbCache.values()) this.disposeObject(cached);
+    this.glbCache.clear();
+    this.loading.clear();
+    this.latestEntities.clear();
     this.scene.traverse((o) => {
       if (o instanceof THREE.Mesh) {
         o.geometry.dispose();
@@ -177,17 +196,23 @@ export class StageEngine {
         (Array.isArray(m) ? m : [m]).forEach((x) => x.dispose());
       }
     });
+    this.clearMotionTrails();
     this.renderer.dispose();
   }
 
   private disposeObject(root: THREE.Object3D) {
-    root.traverse((o) => {
-      if (o instanceof THREE.Mesh) {
-        o.geometry.dispose();
-        const m = o.material;
-        (Array.isArray(m) ? m : [m]).forEach((x) => x.dispose());
+    this.rigs.get(root)?.dispose(); this.rigs.delete(root);
+    const geometries = new Set<THREE.BufferGeometry>(), materials = new Set<THREE.Material>(), textures = new Set<THREE.Texture>();
+    root.traverse(o => {
+      if (o instanceof THREE.Mesh || o instanceof THREE.LineSegments) {
+        geometries.add(o.geometry);
+        for (const m of Array.isArray(o.material) ? o.material : [o.material]) {
+          materials.add(m);
+          for (const value of Object.values(m)) if (value instanceof THREE.Texture) textures.add(value);
+        }
       }
     });
+    geometries.forEach(g => g.dispose()); materials.forEach(m => m.dispose()); textures.forEach(t => t.dispose());
   }
 
   private resize() {
@@ -203,8 +228,10 @@ export class StageEngine {
   /* ---------- 视图 ---------- */
 
   setViewMode(mode: ViewMode) {
+    if(this.recording)return;
     if (mode === this.viewMode) return;
     this.viewMode = mode;
+    this.motionTrails.visible=mode==="director";
     if (mode === "camera") {
       // 进入机位视角：保存导演机位
       this.savedView.pos.copy(this.camera.position);
@@ -240,6 +267,37 @@ export class StageEngine {
     }
   }
 
+  /** 操作吸附：移动 10 cm / 旋转 15 度 / 缩放 0.1。 */
+  setSnap(enabled: boolean) {
+    this.gizmo.setTranslationSnap(enabled ? 0.1 : null);
+    this.gizmo.setRotationSnap(enabled ? Math.PI / 12 : null);
+    this.gizmo.setScaleSnap(enabled ? 0.1 : null);
+  }
+
+  focusEntity(id?: string) {
+    this.setViewMode("director");
+    const box = new THREE.Box3();
+    for (const [key, rec] of this.entities) if (!id || key === id) box.expandByObject(rec.built.root);
+    if (box.isEmpty()) { this.resetView(); return; }
+    const center = box.getCenter(new THREE.Vector3()), size = box.getSize(new THREE.Vector3());
+    const distance = Math.max(2, size.length() * 1.5);
+    this.controls.target.copy(center);
+    this.camera.position.copy(center).add(new THREE.Vector3(0.8, 0.45, 1).normalize().multiplyScalar(distance));
+    this.controls.update();
+  }
+
+  groundEntity(id: string) {
+    const rec = this.entities.get(id); if (!rec) return;
+    // 朝向箭头不纳入包围盒，避免把它贴地而人物仍然悬空。
+    const box = new THREE.Box3();
+    rec.built.root.updateMatrixWorld(true);
+    rec.built.root.traverse(o => { if (o instanceof THREE.Mesh && !o.parent?.userData.groundArrow) box.expandByObject(o); });
+    if (box.isEmpty()) return;
+    rec.built.root.position.y -= box.min.y;
+    this.selectedId = id;
+    this.commitDrag();
+  }
+
   setGizmoMode(mode: GizmoMode) {
     this.gizmo.setMode(mode);
   }
@@ -251,13 +309,18 @@ export class StageEngine {
 
   /* ---------- 实体同步 ---------- */
 
+  peekLiveTransform(id:string) { return this.dragging && this.selectedId===id ? this.peekTransform(id) : null; }
+
   syncEntities(list: PrevizEntity[]) {
+    if(this.disposed)return;
+    this.latestEntities = new Map(list.map(e => [e.id, e]));
     const seen = new Set<string>();
     for (const e of list) {
       seen.add(e.id);
       const skey = structKey(e);
       let rec = this.entities.get(e.id);
       if (rec && rec.skey !== skey) {
+        this.loading.delete(e.id);
         // 结构变化：重建
         if (this.selectedId === e.id) this.gizmo.detach();
         // 拖动中遇到重建（如 crowd 改色触发）：detach 不会发 dragging-changed 事件，
@@ -303,6 +366,7 @@ export class StageEngine {
         pt.intensity = e.intensity ?? 26;
       }
       // 姿势
+      this.rigs.get(rec.built.root)?.sample(e);
       const poseKey = JSON.stringify(e.pose ?? {});
       if (rec.poseKey !== poseKey) {
         applyPose(rec.built.root, e.pose);
@@ -312,6 +376,7 @@ export class StageEngine {
     // 删除
     for (const [id, rec] of [...this.entities]) {
       if (!seen.has(id)) {
+        this.loading.delete(id);
         if (this.selectedId === id) {
           this.gizmo.detach();
           this.selectedId = null;
@@ -326,17 +391,26 @@ export class StageEngine {
   /** GLB 模型异步加载（归一化到 1.7m 高、落地、居中） */
   private loadGlb(e: PrevizEntity, skey: string) {
     if (this.loading.has(e.id)) return;
-    this.loading.add(e.id);
+    const token = Symbol(e.id);
+    this.loading.set(e.id, token);
     const path = e.modelAssetPath!;
     const finish = (model: THREE.Group | null) => {
+      const current = this.latestEntities.get(e.id);
+      if (this.disposed || !model || !current || structKey(current) !== skey || this.loading.get(e.id) !== token) {
+        if (model) this.disposeObject(model);
+        return;
+      }
       this.loading.delete(e.id);
-      if (this.disposed || !model) return;
+      const old = this.entities.get(e.id);
+      if (old) { this.scene.remove(old.built.root); this.disposeObject(old.built.root); this.entities.delete(e.id); }
+      e = current;
       // 加载期间实体可能已被删除
       const holder = new THREE.Group();
       holder.add(model);
       holder.userData.entityId = e.id;
       holder.userData.kind = e.kind; // applyCameraView/refreshGizmo 靠 kind==="camera" 识别机位（GLB 机位也要能当机位用）
       const built: BuiltEntity = { root: holder, height: 1.7, mats: [] };
+      const rig = new SkeletalRig(model, model.animations); this.rigs.set(holder, rig); rig.sample(e);
       this.scene.add(holder);
       this.entities.set(e.id, { built, skey, poseKey: "" });
       // 触发一次变换同步（位置/旋转/缩放）
@@ -348,7 +422,18 @@ export class StageEngine {
       if (this.selectedId === e.id) this.refreshGizmo();
     };
     const applyCache = (src: THREE.Group) => {
-      const inst = src.clone(true);
+      const inst = cloneSkeleton(src) as THREE.Group;
+      inst.traverse(o => {
+        if (o instanceof THREE.Mesh) {
+          o.geometry = o.geometry.clone();
+          const copy = (mat: THREE.Material) => {
+            const m = mat.clone();
+            for (const [key, value] of Object.entries(m)) if (value instanceof THREE.Texture) (m as unknown as Record<string, unknown>)[key] = value.clone();
+            return m;
+          };
+          o.material = Array.isArray(o.material) ? o.material.map(copy) : copy(o.material);
+        }
+      });
       finish(inst);
     };
     const cached = this.glbCache.get(path);
@@ -362,39 +447,37 @@ export class StageEngine {
       if (o instanceof THREE.Mesh) (o.material as THREE.MeshStandardMaterial).wireframe = true;
     });
     this.scene.add(ph.root);
-    this.entities.set(e.id, { built: ph, skey: skey + "|loading", poseKey: "" });
+    this.entities.set(e.id, { built: ph, skey, poseKey: "" });
 
     const url = assetUrl(path);
     this.gltfLoader.load(
       url,
       (gltf) => {
         const model = gltf.scene;
+        if (this.disposed) { this.disposeObject(model); return; }
         // 归一化：高度 → 1.7m，底部贴地，中心对齐
         const box = new THREE.Box3().setFromObject(model);
         const size = box.getSize(new THREE.Vector3());
         const scale = 1.7 / Math.max(size.y, 0.001);
-        model.scale.setScalar(scale);
-        const box2 = new THREE.Box3().setFromObject(model);
+        const wrapper = new THREE.Group();
+        wrapper.add(model);
+        wrapper.scale.setScalar(scale);
+        const box2 = new THREE.Box3().setFromObject(wrapper);
         const center = box2.getCenter(new THREE.Vector3());
-        model.position.sub(center);
-        model.position.y += (box2.max.y - box2.min.y) / 2;
+        wrapper.position.sub(center);
+        wrapper.position.y += (box2.max.y - box2.min.y) / 2;
         model.traverse((o) => {
           if (o instanceof THREE.Mesh) o.castShadow = true;
         });
-        const wrapper = new THREE.Group();
-        wrapper.add(model);
+        wrapper.animations = gltf.animations ?? [];
+        const oldCache = this.glbCache.get(path);
+        if (oldCache) this.disposeObject(oldCache);
         this.glbCache.set(path, wrapper);
-        // 移除占位盒
-        const rec = this.entities.get(e.id);
-        if (rec && rec.skey.endsWith("|loading")) {
-          this.scene.remove(rec.built.root);
-          this.disposeObject(rec.built.root);
-          this.entities.delete(e.id);
-        }
         applyCache(wrapper);
       },
       undefined,
       () => {
+        if (this.disposed || this.loading.get(e.id) !== token) return;
         this.loading.delete(e.id);
         // 加载失败：占位线框盒转正（写回正式 skey，不再每次同步都重试加载）
         const rec = this.entities.get(e.id);
@@ -458,6 +541,7 @@ export class StageEngine {
   private loop = () => {
     if (this.disposed) return;
     this.raf = requestAnimationFrame(this.loop);
+    if(this.recording)return;
     if (this.viewMode === "camera") this.applyCameraView();
     else this.controls.update();
     this.renderer.render(this.scene, this.camera);
@@ -479,9 +563,11 @@ export class StageEngine {
     if (!camRoot) {
       // 没有机位实体：退回自由环绕，避免视角被锁死
       this.restoreHiddenCam();
+      this.controls.enabled = true;
       this.controls.update();
       return;
     }
+    this.controls.enabled = false;
     // 渲染相机架在该机位实体内部：必须隐藏它自身的网格，
     // 否则机身/镜头在近平面内渲染成一团黑（此前「机位视角黑圆圈」的根因）
     if (this.hiddenCamRoot !== camRoot) {
@@ -524,11 +610,11 @@ export class StageEngine {
     const labels: LabelInfo[] = [];
     for (const [id, rec] of this.entities) {
       // 隐藏的机位（机位视角下被透视的那台）与相机重合，投影会出 NaN/无限大，跳过
-      if (!rec.built.root.visible) continue;
+      if (!rec.built.root.visible) { labels.push({ id, x: 0, y: 0, visible: false }); continue; }
       v.copy(rec.built.root.position);
       v.y += rec.built.height * (rec.built.root.scale.y || 1) + 0.28;
       v.project(this.camera);
-      const visible = v.z < 1 && Number.isFinite(v.x) && Number.isFinite(v.y);
+      const visible = v.z >= -1 && v.z <= 1 && Number.isFinite(v.x) && Number.isFinite(v.y);
       labels.push({
         id,
         x: (v.x * 0.5 + 0.5) * rect.width,
@@ -550,14 +636,66 @@ export class StageEngine {
 
   /* ---------- 导出 ---------- */
 
+  private clearMotionTrails() {
+    for(const child of [...this.motionTrails.children]){this.motionTrails.remove(child);const line=child as THREE.Line;line.geometry?.dispose();if(!Array.isArray(line.material))line.material?.dispose();}
+  }
+  setMotionTrails(entities:PrevizEntity[]) {
+    this.clearMotionTrails();
+    for(const e of entities){if(!e.motion?.length)continue;
+      const keys=sampleMotion([e],0)[0];
+      const points=[new THREE.Vector3(...(keys.pos??[0,0,0])),...e.motion.map(k=>new THREE.Vector3(...k.pos))];
+      this.motionTrails.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(points),new THREE.LineBasicMaterial({color:e.color,depthTest:false,transparent:true,opacity:0.75})));
+    }
+    this.motionTrails.visible=this.viewMode==="director";
+  }
+  /** 实时录制明确的时间采样；不修改项目，只输出当前取景框。 */
+  async recordMotion(entities:PrevizEntity[],duration:number,aspect:string,signal:AbortSignal,onProgress:(pct:number)=>void):Promise<Blob>{
+    if(this.recording)throw new Error("正在录制预演");
+    if(this.loading.size)throw new Error("模型仍在加载，请加载完成后录制");
+    if(!Number.isFinite(duration)||duration<=0||duration>120)throw new Error("预演时长须为1至120秒");
+    signal.throwIfAborted();
+    const mime=["video/webm;codecs=vp9","video/webm;codecs=vp8","video/webm"].find(m=>MediaRecorder.isTypeSupported(m));
+    if(!mime)throw new Error("当前环境不支持 WebM 录制");
+    const output=document.createElement("canvas"),r=stageFrame(this.canvas.width,this.canvas.height,aspect);
+    const scale=Math.min(1,1920/Math.max(r.w,r.h));output.width=Math.round(r.w*scale);output.height=Math.round(r.h*scale);
+    const ctx=output.getContext("2d")!,stream=output.captureStream(30),rec=new MediaRecorder(stream,{mimeType:mime,videoBitsPerSecond:6_000_000});
+    const parts:Blob[]=[];rec.ondataavailable=e=>{if(e.data.size)parts.push(e.data);};
+    let recorderError:Error|undefined;
+    const done=new Promise<void>(resolve=>{rec.onstop=()=>resolve();rec.onerror=()=>{recorderError=new Error("录制编码失败");resolve();};});
+    this.recording=true;this.controls.enabled=false;this.gizmo.enabled=false;
+    let raf=0,started=false;
+    try{
+      rec.start(200);started=true;
+      await new Promise<void>((resolve,reject)=>{
+        const start=performance.now();
+        const abort=()=>{cancelAnimationFrame(raf);signal.removeEventListener("abort",abort);reject(new DOMException("已取消","AbortError"));};
+        signal.addEventListener("abort",abort,{once:true});
+        const tick=()=>{try{
+          if(this.disposed)throw new Error("3D 视口已关闭");
+          signal.throwIfAborted();if(recorderError)throw recorderError;
+          const t=Math.min(duration,(performance.now()-start)/1000);this.syncEntities(sampleMotion(entities,t));
+          if(this.viewMode==="camera")this.applyCameraView();this.renderClean(false);
+          ctx.drawImage(this.canvas,r.x,r.y,r.w,r.h,0,0,output.width,output.height);onProgress(Math.round(t/duration*100));
+          if(t>=duration){signal.removeEventListener("abort",abort);resolve();}else raf=requestAnimationFrame(tick);
+        }catch(e){signal.removeEventListener("abort",abort);reject(e);}};tick();
+      });
+    }finally{
+      cancelAnimationFrame(raf);if(rec.state!=="inactive")rec.stop();if(started)await done;stream.getTracks().forEach(t=>t.stop());
+      this.recording=false;this.gizmo.enabled=true;this.controls.enabled=this.viewMode==="director";
+      if(!this.disposed)this.syncEntities(entities);
+    }
+    if(recorderError)throw recorderError;
+    return new Blob(parts,{type:"video/webm"});
+  }
+
   /** 当前视角彩色截图 */
-  exportImage(): string {
+  exportImage(aspect?: string): string {
     this.renderClean(false);
-    return this.renderer.domElement.toDataURL("image/png");
+    return this.captureFrame(aspect);
   }
 
   /** 深度参考图（近亮远暗，供 ControlNet 粗略参考） */
-  exportDepth(): string {
+  exportDepth(aspect?: string): string {
     const oldBg = this.scene.background;
     const oldFog = this.scene.fog;
     const depthMat = new THREE.MeshDepthMaterial();
@@ -566,7 +704,7 @@ export class StageEngine {
     this.scene.fog = null;
     this.setHelpersVisible(false);
     this.renderer.render(this.scene, this.camera);
-    const url = this.renderer.domElement.toDataURL("image/png");
+    const url = this.captureFrame(aspect);
     this.scene.overrideMaterial = null;
     depthMat.dispose();
     this.scene.background = oldBg;
@@ -577,7 +715,7 @@ export class StageEngine {
   }
 
   /** 语义分区图（每个实体一块纯色，其余纯黑，供 ControlNet 分区控制） */
-  exportSegment(colorOf: (id: string) => string): string {
+  exportSegment(colorOf: (id: string) => string, aspect?: string): string {
     const oldBg = this.scene.background;
     const oldFog = this.scene.fog;
     this.scene.background = new THREE.Color(0x000000);
@@ -598,7 +736,7 @@ export class StageEngine {
       });
     }
     this.renderer.render(this.scene, this.camera);
-    const url = this.renderer.domElement.toDataURL("image/png");
+    const url = this.captureFrame(aspect);
     for (const s of swapped) s.mesh.material = s.mat;
     flats.forEach((m) => m.dispose());
     this.ground.visible = true;
@@ -607,6 +745,16 @@ export class StageEngine {
     this.setHelpersVisible(true);
     this.renderer.render(this.scene, this.camera);
     return url;
+  }
+
+  private captureFrame(aspect?: string) {
+    const source = this.renderer.domElement;
+    if (!aspect) return source.toDataURL("image/png");
+    const rect = stageFrame(source.width, source.height, aspect);
+    const out = document.createElement("canvas"); out.width = rect.w; out.height = rect.h;
+    const ctx = out.getContext("2d"); if (!ctx) throw new Error("无法导出取景画面");
+    ctx.drawImage(source, rect.x, rect.y, rect.w, rect.h, 0, 0, rect.w, rect.h);
+    return out.toDataURL("image/png");
   }
 
   private renderClean(hideGround: boolean) {
@@ -618,6 +766,7 @@ export class StageEngine {
   }
 
   private setHelpersVisible(v: boolean) {
+    this.motionTrails.visible=v && this.viewMode==="director";
     this.grid.visible = v;
     this.gizmo.getHelper().visible = v;
     // 朝向箭头也藏起来（它是 UI 提示不是画面内容）

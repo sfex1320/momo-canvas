@@ -39,9 +39,9 @@ export const IcLogo = (p: IconProps) => (
     <circle cx="36.5" cy="11.5" r="3" fill="#fff" opacity="0.95" />
     <defs>
       <linearGradient id="momoG" x1="4" y1="4" x2="44" y2="44">
-        <stop stopColor="#5B8CFF" />
-        <stop offset="0.6" stopColor="#9A6BFF" />
-        <stop offset="1" stopColor="#C86BFF" />
+        <stop stopColor="var(--logo-from, #5B8CFF)" />
+        <stop offset="0.6" stopColor="var(--logo-mid, #9A6BFF)" />
+        <stop offset="1" stopColor="var(--logo-to, #C86BFF)" />
       </linearGradient>
     </defs>
   </svg>
@@ -88,6 +88,14 @@ export const IcCrop = (p: IconProps) => (
     <path d="M7 3v12a2 2 0 0 0 2 2h12" />
     <path d="M3 7h12a2 2 0 0 1 2 2v12" />
     <circle cx="12" cy="12" r="1.4" fill="currentColor" strokeWidth="0" />
+  </I>
+);
+
+/* 宫格切分：整图九宫格等分（抽卡关键帧拆格） */
+export const IcGrid = (p: IconProps) => (
+  <I {...p}>
+    <rect x="3.5" y="3.5" width="17" height="17" rx="2" />
+    <path d="M9.2 3.5v17M14.8 3.5v17M3.5 9.2h17M3.5 14.8h17" />
   </I>
 );
 
@@ -283,6 +291,22 @@ export const IcDownload = (p: IconProps) => (
 export const IcPlay = (p: IconProps) => (
   <I {...p} fill>
     <path d="M8.2 5.6a1 1 0 0 1 1.5-.9l9.2 6.4a1 1 0 0 1 0 1.7l-9.2 6.4a1 1 0 0 1-1.5-.8V5.6Z" />
+  </I>
+);
+
+/** 暂停（Comfy 同步中心的来源/工作流暂停按钮） */
+export const IcPause = (p: IconProps) => (
+  <I {...p} fill>
+    <rect x="7" y="5" width="3.4" height="14" rx="1.2" />
+    <rect x="13.6" y="5" width="3.4" height="14" rx="1.2" />
+  </I>
+);
+
+/** 差异对比（Comfy 同步中心的「查看差异」） */
+export const IcDiff = (p: IconProps) => (
+  <I {...p}>
+    <rect x="3" y="4.5" width="8" height="15" rx="2" />
+    <path d="M14 8.5h7M17.5 5v7M14 15.5h7" />
   </I>
 );
 
@@ -768,3 +792,11 @@ export const IcTimer = (p: IconProps) => (
   </I>
 );
 
+
+/* Eagle 资产桥：展翅鹰形 */
+export const IcEagle = (p: IconProps) => (
+  <I {...p}>
+    <path d="M12 8.5c-1.2-2.4-3.4-3.9-6.6-4.4 2 1 3.2 2.2 3.7 3.5-2.4-.6-4.6-.2-6.6 1.3 1.9.2 3.4.8 4.4 1.8-1.5.5-2.6 1.5-3.3 3 1.8-1 3.6-1.3 5.4-.9L12 15l3-2.2c1.8-.4 3.6-.1 5.4.9-.7-1.5-1.8-2.5-3.3-3 1-1 2.5-1.6 4.4-1.8-2-1.5-4.2-1.9-6.6-1.3.5-1.3 1.7-2.5 3.7-3.5-3.2.5-5.4 2-6.6 4.4Z" />
+    <path d="M10.6 16.4c.4 1 .8 1.8 1.4 2.6.6-.8 1-1.6 1.4-2.6" />
+  </I>
+);

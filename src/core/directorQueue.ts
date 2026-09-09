@@ -16,18 +16,29 @@
  *  ③ 中断恢复（启动时把 running 标 interrupted）
  */
 import { useDirector } from "./stores/directorStore";
+import { jobCenter } from "./studio/jobCenter";
+import { resolveVideoSpec } from "./studio/videoSpec";
+import { specCapabilityFor, mergeAdapterReport, mergeComfySpecReport } from "./studio/specCapability";
+import type { AdapterSpecReport } from "./services/videoGen";
+import { mirrorProjectAsset } from "./studio/projectAssetRouter";
 import { useAssets } from "./stores/assetStore";
 import { useSettings } from "./stores/settingsStore";
 import { useComfy } from "./stores/comfyStore";
 import { resolveModelCard } from "./stores/settingsStore";
+import { budgetGate } from "./capability/budget";
+import { estimateCost } from "./pricing";
+import { useUsage } from "./stores/usageStore";
+import { toast } from "./stores/uiStore";
 import { generateImage } from "./services/imageGen";
 import { generateVideo } from "./services/videoGen";
 import { runComfyTemplate, analyzeCapsV3, isImageLoaderClass, isVideoLoaderClass, freeComfyMemory, freeResultText, interruptComfy, defaultParamValues } from "./services/comfy";
 import { compilePrompt, compileNegative, segmentShotContexts } from "./directorPrompt";
-import { buildSkillSystem } from "./skillEngine";
-import { directorError, createTake, isH3ReadyPrompt, mpToSize } from "./directorEngine";
+import { directorError, createTake, isH3ReadyPrompt, isOfficialH3Prompt, mpToSize } from "./directorEngine";
+import {isOfficialH3BasePrompt} from "./studio/h3AuthoringCore";
 import { constrainPictureCapacity, refsNoteFromSnapshot, resolveSlotMedia, rewriteOmittedSpatialPictureRefs, type ResolvedMedia } from "./directorRefs";
+import { recordCapsule } from "./directorContinuity";
 import { directorReferenceSupport, type DirectorReferenceSupport } from "./directorRecipeSupport";
+import { routeCtxOfRecipe, routeSkillBindings } from "./studio/skillRoute";
 import { useSkills } from "./stores/skillStore";
 import { assetToDataUrl, assetToBlobUrl, assetUrl } from "./services/assetFiles";
 import { grabFrame, trimVideo } from "./videoEdit";
@@ -153,14 +164,21 @@ async function existingRelayFrame(segment: DirectorSegment, sourceTakeId: string
  * 把接力帧填进下一段参考槽末位（尾帧接力的持久化部分，runBatch 抽帧后调用）：
  * 收录为参考资产 → 追加到该段 slots 尾部（referenceImage 语义 + RELAY_LABEL 标记，auto:false 防同步对账清掉）。
  * 分镜卡参考图区最后一格即时可见，用户可删可拖；同段重跑先摘除旧接力槽再追加，不叠加。
+ * 成功后同时记录连续性上下文胶囊（方案 §10：来源片段/Take + 状态摘要，UI 显示「继承自 06 · Take 2」）。
  */
-async function fillRelaySlots(projectId: string, segmentId: string, bundle: RelayBundle): Promise<void> {
+async function fillRelaySlots(
+  projectId: string,
+  segmentId: string,
+  sourceSegmentId: string,
+  bundle: RelayBundle,
+): Promise<void> {
   const frameAsset = await useAssets.getState().collect({
     src: bundle.frame,
     kind: "image",
     name: "空间接力帧",
     director: { projectId, segmentId, role: "reference" },
   });
+  if (frameAsset) void mirrorProjectAsset({ projectId, segmentId, category: "relay", assetId: frameAsset.id });
   let clipAssetId: string | undefined;
   if (bundle.clip) {
     try {
@@ -170,6 +188,7 @@ async function fillRelaySlots(projectId: string, segmentId: string, bundle: Rela
         name: "空间接力片段_末尾2秒",
         director: { projectId, segmentId, role: "reference" },
       });
+      if (clipAsset) void mirrorProjectAsset({ projectId, segmentId, category: "relay", assetId: clipAsset.id });
       clipAssetId = clipAsset?.id;
     } finally {
       if (bundle.clip.startsWith("blob:")) URL.revokeObjectURL(bundle.clip);
@@ -206,6 +225,8 @@ async function fillRelaySlots(projectId: string, segmentId: string, bundle: Rela
       }),
     })),
   });
+  // 胶囊记录（方案 §10）：来源 + 状态摘要，上游换版本时可标记过期
+  recordCapsule(projectId, segmentId, sourceSegmentId, bundle.sourceTakeId);
 }
 
 /** 摘除片段里的自动接力槽；资产本体保留在资产库，避免误删历史参考。 */
@@ -328,7 +349,7 @@ function withRelayFrame(
  *  3. 追加负向规则（compileNegative）
  * 返回编译后的真实请求文本 + 实际执行的 Skill 快照（方案 §17.4：写进 Take 可追溯）。
  */
-function compileSegmentPrompt(
+export function compileSegmentPrompt(
   project: DirectorProject,
   segment: DirectorSegment,
   target: "image-t2i" | "video-t2v",
@@ -336,32 +357,41 @@ function compileSegmentPrompt(
   // 最终提示词覆盖：用户在「预览最终提示词」弹窗里改定的整段最终文本，原样发送
   // （风格/Skill/负向都已在文本里，不再自动拼接；参考素材编号说明由执行层按当前素材槽前置）
   if (segment.promptFinalOverride?.trim()) return { prompt: segment.promptFinalOverride, snapshots: [] };
+  // 官方六段执行稿已经包含完整风格、保留策略与声音设计，必须原样发送；
+  // 项目风格、Skill 原文或通用负向词再次包裹都会制造第二套语法。
+  if (segment.promptOverride?.trim() && (isOfficialH3Prompt(segment.promptOverride)||isOfficialH3BasePrompt(segment.promptOverride))) {
+    return { prompt: segment.promptOverride, snapshots: [] };
+  }
   const ctxs = segmentShotContexts(project, segment);
-  let prompt = segment.promptOverride ?? (ctxs.length ? compilePrompt(ctxs[0], target) : segment.summary);
+  // 导演台 2.0（§13.1）：编译片段内全部 Shot（多镜头逐时段），角色按本段出场过滤（segmentShotContexts 内完成）
+  let prompt = segment.promptOverride ?? (ctxs.length ? compilePrompt(ctxs, target) : segment.summary);
   // 全局风格锚定：编译路径的 compilePrompt 已消费 ruleSet.positive.style；promptOverride（H3 成品/直录）路径这里补拼
   const gStyle = project.ruleSet?.positive.style?.trim();
   if (segment.promptOverride && gStyle) prompt = `${gStyle}\n\n${prompt}`;
   const snapshots: SkillRunSnapshot[] = [];
-  // 项目级 Skill 栈：把每个启用绑定的 Skill 指令拼进 prompt
-  // 段提示词已是 H3 成品（Skill 精炼/成品直录产物）时跳过拼接，避免指令重复与超长
+  const recipe = resolveRecipe(project, segment);
+  // 3.3 §7（阶段化硬规则）：**Skill instructions 原文一律不进最终提示词**——
+  // 指令是给「写提示词的 LLM」（精炼阶段）看的规范，视频模型只需要阶段产物：
+  //  - 已精炼/直录段：promptOverride 本身就是 model-adapter 阶段产物，直发；
+  //  - 未精炼段：自动编译结果直发（用户想上模型方言 → 走「Skill 精炼提示词」）。
+  // 这里只做「当前路线生效的 Skill 栈」快照记录（Take 可追溯），不再拼接文本。
   const h3Ready = !!segment.promptOverride && isH3ReadyPrompt(segment.promptOverride);
-  const skills = useSkills.getState();
-  const bindings = (project.skillBindings ?? []).filter((b) => b.enabled);
-  if (bindings.length && !h3Ready) {
-    const skillChunks: string[] = [];
-    for (const b of bindings) {
-      const sk = skills.getById(b.skillId);
-      if (!sk) continue;
-      skillChunks.push(buildSkillSystem(sk, b.values));
-      snapshots.push({
-        skillId: sk.id,
-        name: sk.name,
-        version: sk.version,
-        instructionFingerprint: sk.instructionFingerprint ?? "",
-        values: b.values,
-      });
+  if (!h3Ready) {
+    const stack = routeSkillBindings(project, routeCtxOfRecipe(project, recipe), undefined, { excludePlanning: true });
+    if (stack.length) {
+      snapshots.push(
+        ...stack.map(({ binding, skillName }) => {
+          const sk = useSkills.getState().getById(binding.skillId);
+          return {
+            skillId: binding.skillId,
+            name: skillName,
+            version: sk?.version ?? "",
+            instructionFingerprint: sk?.instructionFingerprint ?? "",
+            values: binding.values,
+          } satisfies SkillRunSnapshot;
+        }),
+      );
     }
-    if (skillChunks.length) prompt = `${prompt}\n\n${skillChunks.join("\n\n")}`;
   }
   // 负向规则
   if (ctxs.length) {
@@ -369,6 +399,21 @@ function compileSegmentPrompt(
     if (neg) prompt = `${prompt}\n\n负向：${neg}`;
   }
   return { prompt, snapshots };
+}
+
+/**
+ * 把 MOMO 的真实槽位/容量降级说明放进官方 detailed_description 内，保持六段结构不被前缀破坏。
+ * 非官方提示词仍沿用历史的前置说明形式。
+ */
+function composeRuntimePrompt(prompt: string, runtimeNotes: string[]): string {
+  const notes = runtimeNotes.filter(Boolean).join("\n");
+  if (!notes) return prompt;
+  if(isOfficialH3BasePrompt(prompt))return prompt.replace(/^(integrated_multimodal_description\s*:)/m,`$1\nRuntime reference binding supplied by MOMO for this request only:\n${notes}\n`);
+  if (!isOfficialH3Prompt(prompt)) return [notes, prompt].join("\n\n");
+  return prompt.replace(
+    /^(detailed_description\s*:)\s*$/im,
+    `$1\nRuntime reference binding supplied by MOMO for this request only:\n${notes}`,
+  );
 }
 
 /**
@@ -389,14 +434,46 @@ export async function previewSegmentPrompt(project: DirectorProject, segment: Di
   const media = capped.media;
   const note = media ? refsNoteFromSnapshot(media.snapshot, "video") : "";
   const runtimePrompt = rewriteOmittedSpatialPictureRefs(prompt, capped.omittedPictureNumbers);
-  return [note, capped.spatialTextNote, runtimePrompt].filter(Boolean).join("\n\n");
+  return composeRuntimePrompt(runtimePrompt, [note, capped.spatialTextNote]);
 }
 
-/** 解析 segment 当前使用的 recipe：segment.recipeId > 项目默认 defaultRecipeId > null（走 provider 远程） */
-function resolveRecipe(project: DirectorProject, segment: DirectorSegment): DirectorRecipe | undefined {
+/** 片段当前生效配方：片段 recipeId > 项目默认（无配方的老项目返回 undefined，走远程默认模型） */
+export function resolveRecipe(project: DirectorProject, segment: DirectorSegment): DirectorRecipe | undefined {
   const rid = segment.recipeId ?? project.defaultRecipeId;
   if (rid) return project.recipes.find((r) => r.id === rid);
   return undefined;
+}
+
+/** 片段预估时长（秒）：手改规格 > 分段默认（估算用，真实执行以 resolveVideoSpec 为准） */
+export function estDurationSec(segment: DirectorSegment): number {
+  return segment.videoSpec?.user?.durationSec ?? segment.durationSec ?? 5;
+}
+
+/**
+ * 批量生成的花费预估（runBatch 预检与能力层 director.run_batch 的 estimate 共用）：
+ * 本地 ComfyUI 配方不计费；远程配方按模型单价 × 时长/张数累加。
+ * 拿不到可用模型（未配置）时按 0 估——真正的报错留给执行时的 resolveModelCard。
+ */
+export function estimateBatchTasks(
+  project: DirectorProject,
+  tasks: Array<{ segment: DirectorSegment; kind: "image" | "video" }>,
+): { cost: number; remote: number } {
+  let cost = 0;
+  let remote = 0;
+  for (const t of tasks) {
+    const recipe = resolveRecipe(project, t.segment);
+    if (recipe?.engine === "comfy" && recipe.templateId) continue;
+    try {
+      const card = recipe?.providerModelKey
+        ? resolveModelCard(t.kind === "image" ? "image" : "video", recipe.providerModelKey)
+        : resolveModelCard(t.kind === "image" ? "image" : "video");
+      cost += estimateCost(card.model, t.kind === "image" ? { images: 1 } : { videoSec: estDurationSec(t.segment) });
+      remote++;
+    } catch {
+      /* 未配模型：计 0，执行时自有中文报错 */
+    }
+  }
+  return { cost, remote };
 }
 
 /**
@@ -490,7 +567,7 @@ export async function executeImageTake(
     // 前置引用说明：图N / 视频N / 音频N 编号与模型实际收到的素材顺序严格一致
     const refNote = media ? refsNoteFromSnapshot(media.snapshot, "image") : "";
     const runtimePrompt = rewriteOmittedSpatialPictureRefs(prompt, capped.omittedPictureNumbers);
-    const finalPrompt = [refNote, capped.spatialTextNote, runtimePrompt].filter(Boolean).join("\n\n");
+    const finalPrompt = composeRuntimePrompt(runtimePrompt, [refNote, capped.spatialTextNote]);
     let results: string[];
     let modelLabel: string;
     if (comfyTpl) {
@@ -517,7 +594,10 @@ export async function executeImageTake(
       const card = recipe?.providerModelKey
         ? resolveModelCard("image", recipe.providerModelKey)
         : resolveModelCard("image");
+      const t0 = Date.now();
       results = await generateImage(card, { prompt: finalPrompt, aspect: project.aspect, n: 1, refImages: media?.images.orderedAll });
+      // 用量记账（与画布/助手同一本账）
+      useUsage.getState().record(card, { ok: true, images: results.length, durMs: Date.now() - t0 });
       modelLabel = card.model;
     }
     if (!results.length) throw new Error("图片生成未返回结果");
@@ -530,6 +610,8 @@ export async function executeImageTake(
       director: { projectId, segmentId: segment.id, takeId: take.id, role: "generated" },
     });
     if (!asset) throw new Error("资产收录失败");
+    // 3.5 P2：图片 Take 同样镜像进项目目录（分段资产库/NN_标题/Takes/）
+    void mirrorProjectAsset({ projectId, segmentId: segment.id, category: "take", assetId: asset.id, segTitle: segment.summary.slice(0, 20) });
     // 完整快照写入（方案 §7.9：保存编译后的真实请求提示词 + 配方 + Skill 栈快照）
     patchTake(projectId, segment.id, take.id, {
       status: "done",
@@ -547,6 +629,16 @@ export async function executeImageTake(
       return;
     }
     const msg = e instanceof Error ? e.message : String(e);
+    // 失败也记账（远程配方才可能计费；本地 ComfyUI 失败无 API 费）
+    try {
+      const r = resolveRecipe(project, segment);
+      if (!(r?.engine === "comfy" && r.templateId)) {
+        const card = r?.providerModelKey ? resolveModelCard("image", r.providerModelKey) : resolveModelCard("image");
+        useUsage.getState().record(card, { ok: false });
+      }
+    } catch {
+      /* 模型都解析不到时无从记账 */
+    }
     patchTake(projectId, segment.id, take.id, { status: "error", error: msg });
     directorError(`片段 ${segment.summary.slice(0, 12)}`, msg);
   }
@@ -589,15 +681,21 @@ export async function executeVideoTake(
     // 前置引用说明：图N / 视频N / 音频N 编号与模型实际收到的素材顺序严格一致
     const refNote = media ? refsNoteFromSnapshot(media.snapshot, "video") : "";
     const runtimePrompt = rewriteOmittedSpatialPictureRefs(prompt, capped.omittedPictureNumbers);
-    const finalPrompt = [refNote, capped.spatialTextNote, runtimePrompt].filter(Boolean).join("\n\n");
+    const finalPrompt = composeRuntimePrompt(runtimePrompt, [refNote, capped.spatialTextNote]);
     let videoUrl: string;
     let modelLabel: string;
+    let remoteParams: Record<string, string | number | boolean> | undefined;
+    let resolvedSpec: ReturnType<typeof resolveVideoSpec> | undefined;
+    const t0 = Date.now();
     if (comfyTpl) {
       // ComfyUI 配方：走 runComfyTemplate（视频分支；提示词 + 图/视/音参考全部透传模板）
       // 首尾帧模板按需降级：缺首帧/尾帧素材时忽略对应 LoadImage，退化为 T2V/I2V（接力帧顶上的 firstFrame 不算缺）
       const tpl = media ? withOptionalFrameDrop(comfyTpl, media) : comfyTpl;
       const host = useSettings.getState().settings.comfy.host;
       if (!host) throw new Error("请先配置 ComfyUI 地址");
+      // 3.5 统一视频规格：ComfyUI 通道同样只消费 resolveVideoSpec（与远程通道同一份解析结果）。
+      // 分辨率优先用解析出的宽高；无宽高（只有档位标签）时沿用项目 MP 换算——两条路径都保留画幅。
+      const comfySpec = resolveVideoSpec(project, segment, specCapabilityFor(recipe));
       const r = await runComfyTemplate(host, tpl, recipe!.defaultParams as Record<string, string | number | boolean>, {
         variantId: recipe!.variantId,
         onProgress: onSub,
@@ -607,36 +705,67 @@ export async function executeVideoTake(
         upstreamAudios: media?.audios.length ? media.audios : undefined,
         upstreamTexts: [finalPrompt],
         imageSlotMap: media ? buildSlotMap(tpl, media) : undefined,
-        // 画幅与像素（顶栏设置）→ 模板分辨率参数（百万像素 / 宽高 / 比例，各有则各写）
+        // 分辨率：解析值（宽高）> 项目 MP 换算（兜底保画幅）
         resolution: (() => {
+          const applied = comfySpec.applied.resolution;
+          if (applied?.width && applied.height) return { aspect: project.aspect, width: applied.width, height: applied.height };
           const size = mpToSize(project.aspect, project.resolutionMP ?? 1);
           return { aspect: project.aspect, mp: project.resolutionMP ?? 1, width: size.width, height: size.height };
         })(),
-        // 片段时长写入模板的时长槽位（如 H3 的「时长（秒）」→ 自动对齐帧数节点换算）；配方有能力上限则 clamp
-        durationSec: recipe?.capabilitySnapshot?.maxDurationSec
-          ? Math.min(segment.durationSec, recipe.capabilitySnapshot.maxDurationSec)
-          : segment.durationSec,
+        // 时长与帧率：解析结果（帧数换算在 runComfyTemplate 内用 fps × duration 完成）
+        durationSec: comfySpec.applied.durationSec,
+        fps: comfySpec.applied.fps,
       });
       videoUrl = r.videos[0] ?? "";
       modelLabel = `ComfyUI · ${tpl.name}`;
+      // 3.5 §6.8：Take 的 appliedVideoSpec 只认工作流真实注入结果（模板没入口的项转 adjustment，不假装已应用）
+      resolvedSpec = mergeComfySpecReport(comfySpec, r.videoSpecApplyReport);
     } else {
       // 远程配方或无配方：走 generateVideo；时长按配方能力 clamp，不能超上限（方案 §7.6）
       onSub?.("已提交远程生成任务…");
       const card = recipe?.providerModelKey
         ? resolveModelCard("video", recipe.providerModelKey)
         : resolveModelCard("video");
-      const maxDur = recipe?.capabilitySnapshot?.maxDurationSec;
-      const duration = maxDur ? String(Math.min(segment.durationSec, maxDur)) : String(segment.durationSec);
+      // 3.5 统一视频规格：远程通道只消费 resolveVideoSpec——能力 = 配方快照 + 适配器协议（无 FPS 直出参数的引擎不发 fps）
+      const spec = resolveVideoSpec(project, segment, specCapabilityFor(recipe, card));
+      const duration = spec.applied.durationSec !== undefined ? String(spec.applied.durationSec) : undefined;
+      let adapterReport: AdapterSpecReport | undefined;
       // 首帧 = 本段显式首帧 ?? 上一段尾帧（显式优先已在接力注入时处理）
       videoUrl = await generateVideo(card, {
         prompt: finalPrompt,
         aspect: project.aspect,
         duration,
+        // 3.5：分辨率与帧率真正随请求提交（此前远程通道从未传过，分段写了 1080p/24fps 也只留在文本里）
+        resolution: spec.applied.resolution?.label,
+        fps: spec.applied.fps,
         image: media?.images.firstFrame,
         lastFrame: media?.images.lastFrame,
         refImages: media?.images.refs.length ? media.images.refs : undefined,
+        // 3.3 §2.5：参考视频/音频与原生音频从导演片段贯通（VideoGenReq 早已预留，此前从未传入）；
+        // 官方适配器（ark/dashscope/google）真实消费，通用协议按家族尽力透传
+        video: media?.videos[0],
+        refAudio: media?.audios[0],
+        audio: recipe?.capabilitySnapshot?.nativeAudio ? true : undefined,
+        // 3.5 §6.8：适配器构造完请求体如实上报发送值（含内部钳制）——Take 快照消费，不照抄 requested
+        onSpecApplied: (rep) => {
+          adapterReport = rep;
+        },
+        // 3.4：硬停止真正可中断远程轮询、细粒度进度回流任务条（此前两者都没传）
+        signal,
+        onProgress: (m) => onSub?.(m),
       });
+      // 用量记账（与画布/助手同一本账）：远程 Take 不再游离在用量看板之外
+      useUsage.getState().record(card, { ok: true, videoSec: duration ? Number(duration) : estDurationSec(segment), durMs: Date.now() - t0 });
       modelLabel = card.model;
+      resolvedSpec = adapterReport ? mergeAdapterReport(spec, adapterReport) : spec;
+      // 3.4：远程配方的 paramSnapshot 记录实际请求参数（此前照抄 defaultParams，与真实请求不一致）
+      remoteParams = {
+        aspect: project.aspect,
+        ...(duration ? { duration } : {}),
+        ...(spec.applied.resolution ? { resolution: spec.applied.resolution.label } : {}),
+        ...(spec.applied.fps !== undefined ? { fps: spec.applied.fps } : {}),
+        ...(recipe?.capabilitySnapshot?.nativeAudio ? { audio: true } : {}),
+      };
     }
     if (!videoUrl) throw new Error("视频生成未返回结果");
     // 落资产库
@@ -648,26 +777,42 @@ export async function executeVideoTake(
       director: { projectId, segmentId: segment.id, takeId: take.id, role: "generated" },
     });
     if (!asset) throw new Error("资产收录失败");
+    // 3.5 P2：绑定项目文件夹时镜像落盘到 分段资产库/NN_标题/Takes/（失败不阻断）
+    void mirrorProjectAsset({ projectId, segmentId: segment.id, category: "take", assetId: asset.id, segTitle: segment.summary.slice(0, 20) });
     // 完整快照写入（方案 §7.9：编译后的真实请求提示词 + 配方 + Skill 栈快照）
     patchTake(projectId, segment.id, take.id, {
       status: "done",
       assetId: asset.id,
       promptSnapshot: finalPrompt,
       recipeSnapshot: recipe,
-      paramSnapshot: recipe?.defaultParams,
+      paramSnapshot: remoteParams ?? recipe?.defaultParams,
       skillSnapshots: snapshots.length ? snapshots : undefined,
       slotSnapshot: media?.snapshot,
+      requestedVideoSpec: resolvedSpec?.requested,
+      appliedVideoSpec: resolvedSpec?.applied,
+      videoSpecSources: resolvedSpec?.source,
+      videoSpecAdjustments: resolvedSpec?.adjustments,
     });
-  } catch (e) {
-    // 「停止」按钮主动掐断：标取消、不进报错中心、不计失败
-    if (signal?.aborted) {
-      patchTake(projectId, segment.id, take.id, { status: "cancelled", error: "已手动停止" });
-      return;
+    } catch (e) {
+      // 「停止」按钮主动掐断：标取消、不进报错中心、不计失败
+      if (signal?.aborted) {
+        patchTake(projectId, segment.id, take.id, { status: "cancelled", error: "已手动停止" });
+        return;
+      }
+      const msg = e instanceof Error ? e.message : String(e);
+      // 失败也记账（远程配方才可能计费；本地 ComfyUI 失败无 API 费）
+      try {
+        const r = resolveRecipe(project, segment);
+        if (!(r?.engine === "comfy" && r.templateId)) {
+          const card = r?.providerModelKey ? resolveModelCard("video", r.providerModelKey) : resolveModelCard("video");
+          useUsage.getState().record(card, { ok: false });
+        }
+      } catch {
+        /* 模型都解析不到时无从记账 */
+      }
+      patchTake(projectId, segment.id, take.id, { status: "error", error: msg });
+      directorError(`片段 ${segment.summary.slice(0, 12)}`, msg);
     }
-    const msg = e instanceof Error ? e.message : String(e);
-    patchTake(projectId, segment.id, take.id, { status: "error", error: msg });
-    directorError(`片段 ${segment.summary.slice(0, 12)}`, msg);
-  }
 }
 
 /** 批量操作类型 */
@@ -682,6 +827,7 @@ export function cancelBatch(): void {
 
 /** 在途生成的硬中断信号（「停止」按钮用）：与 batchAbort 分设——batchAbort 只在片段间断点生效，这个直接掐断在途的 ComfyUI 轮询等待 */
 let runAbort: AbortController | null = null;
+let batchRunning = false; // 批量重入锁（3.4）
 
 /**
  * 停止按钮（硬停止）：立即中断在途生成 + 强停 ComfyUI（/interrupt + 清空排队）+ 清空显存内存（/free）。
@@ -711,7 +857,7 @@ export function collectBatchTasks(project: DirectorProject, op: BatchOp, selecte
       const takes = seg.takes ?? [];
       const hasDone = takes.some((t) => t.status === "done");
       if (op === "missing" && hasDone) continue;
-      if (op === "failed" && !takes.some((t) => t.status === "error")) continue;
+      if (op === "failed" && (hasDone || !takes.some((t) => t.status === "error" || t.status === "cancelled"))) continue;
       // modified: 提示词/配方相对采用 Take 已变化的片段（promptOverride 改过、或没有采用版本）
       if (op === "modified") {
         const approved = takes.find((t) => t.id === seg.approvedTakeId);
@@ -736,11 +882,43 @@ export async function runBatch(
   op: BatchOp,
   selectedIds?: string[],
   onProgress?: (done: number, total: number, current: string, detail?: { msg?: string; pct?: number }) => void,
+  /** 预检未通过的片段（§9.4 合同：只跑通过预检的部分） */
+  excludeIds?: string[],
+  signal?: AbortSignal,
 ): Promise<{ done: number; failed: number; cancelled: number }> {
   const project = useDirector.getState().getById(projectId);
   if (!project) return { done: 0, failed: 0, cancelled: 0 };
-  const tasks = collectBatchTasks(project, op, selectedIds);
+  // 重入锁（3.4）：快速双击/确认卡打开期间再点，绝不允许两个批次并存（模块级 AbortController 会被后批覆盖）
+  signal?.throwIfAborted();
+  if (batchRunning) throw new Error("已有批量生成在运行——请等它结束或先在任务中心取消");
+  batchRunning = true;
+  const stopOwnedBatch=()=>{batchAbort?.abort();runAbort?.abort();};
+  signal?.addEventListener("abort",stopOwnedBatch,{once:true});
+  try {
+  const all = collectBatchTasks(project, op, selectedIds);
+  const tasks = excludeIds?.length ? all.filter((t) => !excludeIds.includes(t.segment.id)) : all;
   if (!tasks.length) return { done: 0, failed: 0, cancelled: 0 };
+  // 统一预算闸（capability/budget，与画布/助手同一道门）：日预算按整批预估预检（skipPerRunCap——
+  // 单次上限的语义是「单次生成」，逐段在循环里查，不能拿整批总和去比）。
+  // 确认阈值在 UI 直点路径以提示告知（能力层路径由信封的确认卡承接）。
+  const est = estimateBatchTasks(project, tasks);
+  if (est.cost > 0) {
+    const gate = budgetGate(est.cost, `批量生成 ${tasks.length} 段（远程 ${est.remote} 段）`, { skipPerRunCap: true });
+    if (gate.block) throw new Error(gate.block);
+    if (gate.confirm) toast(gate.confirm + "（可在设置 → 用量调整阈值）", "info");
+  }
+  // 3.4：H3 批量生成进统一任务中心（可观察 + 任务级取消——跑完当前段后停止，不掐正在提交的计费）
+  const opLabel = op === "selected" ? "生成所选" : op === "missing" ? "补缺" : "重跑失败";
+  const job = jobCenter.begin({
+    projectId,
+    kind: "generate",
+    label: `${opLabel} · ${tasks.length} 段`,
+    status: "running",
+    cancellable: true,
+    cancelRun: () => cancelBatch(),
+    retryNote:"只重跑本批尚无成功结果的失败或取消片段，远程提交可能计费。",
+    retryRun:async()=>{const latest=useDirector.getState().getById(projectId);if(!latest)return;const ids=latest.scenes.flatMap(s=>s.segments).filter(g=>tasks.some(t=>t.segment.id===g.id)&&!(g.takes??[]).some(t=>t.status==="done")).map(g=>g.id);if(ids.length)await runBatch(projectId,"selected",ids);},
+  });
 
   // 先为每个 task 创建 Take 并入项目
   const newTakesBySeg = new Map<string, DirectorTake>();
@@ -765,6 +943,7 @@ export async function runBatch(
   const total = tasks.length;
   batchAbort = new AbortController();
   runAbort = new AbortController();
+  if(signal?.aborted)stopOwnedBatch();
   let aborted = false;
   // 空间接力：每个任务只读取故事顺序中紧邻的上一段，绝不把「所选/缺失」列表中非相邻任务串接。
   const relayOn = !!project.tailFrameRelay;
@@ -774,6 +953,18 @@ export async function runBatch(
     const t = tasks[i];
     const take = newTakesBySeg.get(t.segment.id)!;
     onProgress?.(i, total, t.segment.summary.slice(0, 20));
+    job.stage(`第 ${i + 1}/${total} 段 · ${t.segment.summary.slice(0, 16)}`, Math.round((i / total) * 100));
+    // 单次上限/日预算逐段预检（中途日预算被其他任务吃满也在此拦）：超标段标失败并说明原因，不拦整批
+    const taskEst = estimateBatchTasks(project, [t]);
+    if (taskEst.cost > 0) {
+      const segGate = budgetGate(taskEst.cost, `片段「${t.segment.summary.slice(0, 12)}」生成`);
+      if (segGate.block) {
+        patchTake(projectId, t.segment.id, take.id, { status: "error", error: segGate.block });
+        directorError(`片段 ${t.segment.summary.slice(0, 12)}`, segGate.block);
+        failed++;
+        continue;
+      }
+    }
     // 细粒度进度（ComfyUI 节点/步数百分比、上传/参数写入各阶段）续在段级进度上
     const sub = (msg: string, pct?: number) => onProgress?.(i, total, t.segment.summary.slice(0, 20), { msg, pct });
     // 重新读项目（每轮可能被更新）。执行前从真正相邻的上一段准备接力包；首段不接力。
@@ -820,7 +1011,7 @@ export async function runBatch(
           const bundle = await takeRelayBundle(sourceTake, needClip);
           if (bundle) {
             relayFrame = bundle.frame;
-            await fillRelaySlots(projectId, curSeg.id, bundle);
+            await fillRelaySlots(projectId, curSeg.id, prevSeg!.id, bundle);
             // 槽位刚回填，刷新项目/片段，让本轮 resolveSlotMedia 立即读到桥接视频。
             curProj = useDirector.getState().getById(projectId);
             curSeg = curProj?.scenes.flatMap((s) => s.segments).find((s) => s.id === t.segment.id);
@@ -886,7 +1077,16 @@ export async function runBatch(
   onProgress?.(total, total, "");
   batchAbort = null;
   runAbort = null;
+  if (aborted) job.cancel();
+  else if (failed) job.fail(`完成 ${done}/${total}，失败 ${failed}`);
+  else job.done(`完成 ${done}/${total}`);
   return { done, failed, cancelled };
+  } finally {
+    // 无论中途抛什么（单段失败已内部消化，这里兜意外异常），重入锁必须释放
+    signal?.removeEventListener("abort",stopOwnedBatch);
+    batchAbort=null;runAbort=null;
+    batchRunning = false;
+  }
 }
 
 /**
@@ -989,7 +1189,12 @@ export async function executePostProcess(
       kind: recipe.outputKind,
       prompt: `${sourceTake.promptSnapshot}（后处理：${recipe.name}）`,
       model: `ComfyUI · ${recipe.name}`,
+      // 3.5 P2：后处理派生 Take 同样带 director 归属并镜像进项目目录（分段资产库/NN_标题/后处理/）
+      director: { projectId, segmentId, takeId: derived.id, role: "generated" },
     });
+    if (newAsset) {
+      void mirrorProjectAsset({ projectId, segmentId, category: "post", assetId: newAsset.id, segTitle: seg.summary.slice(0, 20) });
+    }
     derived.status = "done";
     derived.assetId = newAsset?.id;
     derived.note = `由「${sourceTake.note ?? "原始版本"}」经 ${recipe.name} 派生`;

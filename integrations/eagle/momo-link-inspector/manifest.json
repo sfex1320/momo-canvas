@@ -1,0 +1,18 @@
+{
+    "id": "momo-link-inspector",
+    "version": "1.0.0",
+    "platform": "all",
+    "arch": "all",
+    "name": "MOMO Link · 素材面板",
+    "keywords": [],
+    "devTools": false,
+    "preview": {
+        "png,jpg,jpeg,webp,gif,avif,bmp,tif,tiff,svg,mp4,webm,mov,mkv,m4v,mp3,wav,ogg,flac,m4a,aac,pdf": {
+            "inspector": {
+                "path": "index.html",
+                "height": 260,
+                "multiSelect": true
+            }
+        }
+    }
+}

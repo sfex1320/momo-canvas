@@ -75,7 +75,7 @@ export const ImageGenNode = memo(function ImageGenNode({ id, data, selected }: N
       <div className="mnode-body">
         {running ? (
           <div className="skeleton">
-            <span>正在绘制…</span>
+            <span>{d.progress??"正在绘制…"}</span>
           </div>
         ) : main ? (
           <div className="media-main">

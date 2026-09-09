@@ -436,7 +436,9 @@
   --set-w: 1180px;
   --set-shift: 464px;
   position: fixed;
-  z-index: 401;
+  /* 必须高于设置窗遮罩（.modal-mask 470），否则整个编辑面板被压在灰黑遮罩之下；
+     低于 toast(500) 与 pop-layer(640) */
+  z-index: 480;
   top: 50%;
   transform: translateY(-50%);
   /* 主窗右缘 = 50vw - shift/2 + w/2，再留 12px 间距 */
@@ -472,6 +474,13 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+/* 标题栏操作组：保存/取消/测试固定在此，不随内容区滚动 */
+.prov-float .pf-head-acts {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
 }
 .prov-float .pf-body {
   padding: 13px 16px 6px;
@@ -1414,3 +1423,8 @@
   gap: 6px;
   flex-shrink: 0;
 }
+.codex-bridge-card{padding:18px;border:1px solid var(--border);border-radius:14px;background:var(--panel);margin-bottom:20px}
+.codex-bridge-card>div:first-child{display:flex;align-items:center;gap:16px;flex-wrap:wrap}
+.codex-bridge-card p,.codex-bridge-card small,.codex-bridge-card span{color:var(--text-2);font-size:12px;line-height:1.7}
+.codex-bridge-actions{display:flex;gap:8px;flex-wrap:wrap;margin:12px 0}
+.codex-quota{display:flex;gap:24px;margin:12px 0}.codex-quota>div{display:grid;gap:5px;min-width:190px}.codex-quota progress{width:100%;accent-color:var(--accent)}

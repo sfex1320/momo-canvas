@@ -21,7 +21,7 @@ export type StreamCallbacks = {
 
 type StreamOpts = StreamCallbacks & {
   system?: string;
-  /** 使用模型自带的联网搜索能力（Kimi/MiniMax/GLM 等，按家族注入 tools 请求体） */
+  /** 使用模型请求内的服务端联网能力（GLM/混元等，按家族注入 tools 请求体） */
   builtinSearch?: boolean;
   /**
    * 禁用思考模式（创作助手的一键开关用）：
@@ -154,7 +154,8 @@ async function streamAnthropic(card: ModelCard, msgs: ChatMsg[], opts: StreamOpt
         ]
       : m.text,
   }));
-  // 自带联网（Anthropic 协议）：服务端 web_search 工具（MiniMax/GLM 的 Anthropic 兼容端点支持）。
+  // 自带联网（Anthropic 协议）：仅注入已确认支持服务端 web_search 的家族（当前为 GLM）。
+  // MiniMax Anthropic 的 Web Search 是外部 MCP / 普通工具调用，不是服务端工具；Agent 改走内置 webSearch 服务。
   // 流里的 server_tool_use / web_search_tool_result 等内容块不被下面的解析处理、自然忽略，
   // 模型最终输出的 text 块照常累积
   const tools = opts.builtinSearch ? anthropicWebSearchTools(card.model) : undefined;

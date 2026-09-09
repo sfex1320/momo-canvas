@@ -1,18 +1,39 @@
 /**
  * 组（主节点）：虚线框容器，拖动组时成员跟随；
  * 右侧统一出口把成员输出按位置顺序聚合给下游（端口统一后，按成员各自输出类型分流：文本/图片/视频/音频）
- * 头部可把整组（含内部连线）存为画布模板，Spotlight / 双击菜单可反复实例化
+ * 头部可把整组（含内部连线）存为画布模板，Spotlight / 双击菜单可反复实例化；
+ * 图层组（元素工坊拆解产物）额外提供「合成图层」：按成员顺序叠加成一张图。
+ * 分镜组（frameless）：平时只见贴片，悬停显示组框与工具条——重排(每行N格)/拼接/序号/转普通组/解组。
  */
-import { memo, useState } from "react";
+import "../designTools.css";
+import { memo, useEffect, useMemo, useState } from "react";
 import { Handle, Position, type NodeProps } from "@xyflow/react";
 import { useBoard } from "../../../core/stores/boardStore";
 import { useTemplates } from "../../../core/stores/templateStore";
 import { toast } from "../../../core/stores/uiStore";
-import { IcCheck, IcGroup, IcLayers, IcTrash } from "../../../ui/icons";
+import { composeLayerGroup } from "../../../core/elementSplit";
+import { reflowStoryboardGroup, stitchStoryboardGroup, storyboardToNormalGroup } from "../../../core/nodeEdit";
+import { PopSelect } from "../../../ui/PopSelect";
+import { IcCheck, IcGrid, IcGroup, IcImage, IcLayers, IcTag, IcTrash, IcWand } from "../../../ui/icons";
+import type { GroupData } from "../../../core/types";
 
 export const GroupNode = memo(function GroupNode({ id, selected }: NodeProps) {
-  const count = useBoard((s) => s.nodes.filter((n) => n.parentId === id).length);
+  // 订阅整个 nodes 原数组（引用稳定），成员在 useMemo 里派生——避免 selector 返回新引用（zustand v5 禁忌）
+  const nodes = useBoard((s) => s.nodes);
+  const fit = useBoard((s) => s.fitGroupToMembers);
+  const members = useMemo(() => nodes.filter((n) => n.parentId === id), [nodes, id]);
+  const count = members.length;
+  // 组框自适应成员（只扩不缩）：成员被拖动/尺寸变化（measured 更新）后自动扩组框，解决「元素过大被固定区域关住」
+  useEffect(() => {
+    fit(id);
+  }, [members, fit, id]);
   const removeNode = useBoard((s) => s.removeNode);
+  const updateData = useBoard((s) => s.updateData);
+  const gdata = useBoard((s) => s.nodes.find((n) => n.id === id)?.data as GroupData | undefined);
+  const artboard = gdata?.artboard;
+  const layerGroup = gdata?.layerGroup ?? false;
+  const frameless = gdata?.frameless ?? false;
+  const showOrder = gdata?.showOrder ?? false;
   const [naming, setNaming] = useState(false);
   const [name, setName] = useState("");
 
@@ -32,10 +53,56 @@ export const GroupNode = memo(function GroupNode({ id, selected }: NodeProps) {
   };
 
   return (
-    <div className={`group-node ${selected ? "sel" : ""}`}>
+    <div className={`group-node ${selected ? "sel" : ""} ${frameless ? "frameless" : ""}`}>
+      {artboard && <div className="artboard-paper" style={{height:720*artboard.heightMm/artboard.widthMm,background:artboard.background}}><div className="artboard-safe" style={{inset:720*artboard.safeMm/artboard.widthMm}} /></div>}
       <div className="gn-head">
         <IcGroup size={15} />
-        <span>组 · {count} 个节点</span>
+        <span>{artboard ? `画板 · ${artboard.widthMm}×${artboard.heightMm}mm` : frameless ? `分镜组 · ${count} 格` : layerGroup ? `图层组 · ${count} 层` : `组 · ${count} 个节点`}</span>
+        {frameless ? (
+          <>
+            <PopSelect
+              title="每行格数（按分镜顺序严格网格重排）"
+              value={String(gdata?.storyCols ?? 3)}
+              options={[1, 2, 3, 4, 5].map((n) => ({ value: String(n), label: `每行 ${n} 格`, icon: <IcGrid size={14} /> }))}
+              onChange={(v) => reflowStoryboardGroup(id, Number(v))}
+              className="gn-pop nodrag"
+            />
+            <button
+              className="icon-btn nodrag"
+              title="按分镜顺序把全部切片拼成一张长边 2K 的网格整图（生成新图片节点）"
+              aria-label="拼接切片"
+              onClick={() => void stitchStoryboardGroup(id)}
+            >
+              <IcImage size={15} />
+            </button>
+            <button
+              className={`icon-btn nodrag ${showOrder ? "on" : ""}`}
+              title={showOrder ? "隐藏分镜顺序角标" : "在切片上显示分镜顺序角标"}
+              aria-label="序号"
+              onClick={() => updateData(id, { showOrder: !showOrder })}
+            >
+              <IcTag size={15} />
+            </button>
+            <button
+              className="icon-btn nodrag"
+              title="转为普通组：恢复组框与瀑布流自动排布"
+              aria-label="转普通组"
+              onClick={() => storyboardToNormalGroup(id)}
+            >
+              <IcWand size={15} />
+            </button>
+          </>
+        ) : null}
+        {layerGroup && !frameless && !artboard ? (
+          <button
+            className="icon-btn nodrag"
+            title="按成员顺序叠加合成一张图（组内排在上面/靠左的成员在底层），生成合成图节点"
+            aria-label="合成图层"
+            onClick={() => void composeLayerGroup(id)}
+          >
+            <IcImage size={15} />
+          </button>
+        ) : null}
         {naming ? (
           <span className="gn-name nodrag">
             <input
@@ -65,7 +132,7 @@ export const GroupNode = memo(function GroupNode({ id, selected }: NodeProps) {
         )}
         <button
           className="icon-btn danger nodrag"
-          title="解散组（成员保留在画布上）"
+          title={frameless ? "解组（切片保留在画布上）" : "解散组（成员保留在画布上）"}
           aria-label="解散组（成员保留在画布上）"
           onClick={() => removeNode(id)}
         >

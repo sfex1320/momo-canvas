@@ -35,6 +35,9 @@ export const BODY_PRESETS: Record<string, { label: string; spec: BodySpec }> = {
 /* ---------- 道具几何体预设 ---------- */
 
 export const PROP_PRESETS: Record<string, { label: string; make: () => THREE.BufferGeometry }> = {
+  wall: { label: "文化墙", make: () => new THREE.BoxGeometry(6, 3, 0.16) },
+  platform: { label: "展示台", make: () => new THREE.CylinderGeometry(1.1, 1.1, 0.6, 48) },
+  panel: { label: "立牌", make: () => new THREE.BoxGeometry(1, 2, 0.08) },
   box: { label: "立方体", make: () => new THREE.BoxGeometry(0.8, 0.8, 0.8) },
   sphere: { label: "球体", make: () => new THREE.SphereGeometry(0.45, 32, 24) },
   cylinder: { label: "圆柱", make: () => new THREE.CylinderGeometry(0.36, 0.36, 0.9, 32) },
@@ -45,6 +48,7 @@ export const PROP_PRESETS: Record<string, { label: string; make: () => THREE.Buf
 
 /** 道具默认落地高度（几何体中心 y），让道具默认贴地 */
 const PROP_GROUND_Y: Record<string, number> = {
+  wall: 1.5, platform: 0.3, panel: 1,
   box: 0.4,
   sphere: 0.45,
   cylinder: 0.45,
@@ -171,6 +175,7 @@ function ball(r: number, mat: THREE.Material): THREE.Mesh {
 /** 朝向指示：脚下前方的扁平箭头（贴地，实体色） */
 function facingArrow(color: string, dist: number): THREE.Group {
   const g = new THREE.Group();
+  g.userData.groundArrow = true;
   const mat = new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.9 });
   const tri = new THREE.Mesh(new THREE.ConeGeometry(0.1, 0.3, 3), mat);
   tri.rotation.x = Math.PI / 2; // 尖端朝 +Z
@@ -184,9 +189,11 @@ function facingArrow(color: string, dist: number): THREE.Group {
 }
 
 /** 构建带关节木偶人。root 原点在两脚之间地面 */
-function buildMannequin(spec: BodySpec, color: string): BuiltEntity {
+function buildMannequin(spec: BodySpec, color: string, appearance: PrevizEntity["appearance"] = "mannequin"): BuiltEntity {
   const h = spec.height;
-  const mat = new THREE.MeshStandardMaterial({ color, roughness: 0.58, metalness: 0.06 });
+  const mat = new THREE.MeshStandardMaterial({ color, roughness: appearance === "clay" ? 1 : 0.7, metalness: 0 });
+  const skin = appearance === "costume" ? new THREE.MeshStandardMaterial({ color: "#e7bda0", roughness: 0.9 }) : mat;
+  const detail = new THREE.MeshStandardMaterial({ color: "#303846", roughness: 0.9 });
   const joints = new Map<string, THREE.Group>();
 
   // 比例分解（以正常人为基准，头大的体型压缩躯干腿）
@@ -234,10 +241,22 @@ function buildMannequin(spec: BodySpec, color: string): BuiltEntity {
   const neckM = capsule(limbR * 0.62, 0.03 * h, mat);
   neckM.position.y = 0.02 * h;
   neck.add(neckM);
-  const head = ball(headR, mat);
+  const head = ball(headR, skin);
   head.position.y = 0.035 * h + headR;
   head.scale.y = 1.12; // 微椭圆更人形
   neck.add(head);
+  // 眼、鼻、耳提供朝向与姿态读数；服装风格增加头发，仍保持中性的预演造型。
+  for (const sign of [-1, 1]) {
+    const eye = ball(headR * 0.075, detail); eye.position.set(sign * headR * 0.34, headR * 0.12, headR * 0.94); head.add(eye);
+    const ear = ball(headR * 0.18, skin); ear.scale.set(0.45, 1, 0.7); ear.position.set(sign * headR * 0.98, 0, 0); head.add(ear);
+  }
+  const nose = ball(headR * 0.14, skin); nose.scale.z = 1.35; nose.position.set(0, -headR * 0.06, headR * 0.97); head.add(nose);
+  if (appearance === "costume") {
+    const hair = new THREE.Mesh(new THREE.SphereGeometry(headR * 1.04, 28, 18, 0, Math.PI * 2, 0, Math.PI * 0.47), detail);
+    hair.position.y = headR * 0.05; hair.castShadow = true; head.add(hair);
+    const belt = new THREE.Mesh(new THREE.CylinderGeometry(torsoR * 1.03, torsoR * 1.03, h * 0.018, 28), detail);
+    belt.position.y = h * 0.035; waist.add(belt);
+  }
 
   // 手臂（挂在胸上，肩高）
   const armY = shoulderY - hipH - 0.04 * h;
@@ -260,7 +279,7 @@ function buildMannequin(spec: BodySpec, color: string): BuiltEntity {
     const fa = capsule(limbR * 0.86, forearm - jointR * 1.4, mat);
     fa.position.y = -forearm / 2;
     el.add(fa);
-    const hand = ball(limbR * 1.05, mat);
+    const hand = ball(limbR * 1.05, skin);
     hand.position.y = -forearm - limbR * 0.6;
     hand.scale.y = 1.3;
     el.add(hand);
@@ -288,7 +307,9 @@ function buildMannequin(spec: BodySpec, color: string): BuiltEntity {
     sh2.position.y = -shin / 2;
     knee.add(sh2);
     // 脚：向前的小方块
-    const foot = new THREE.Mesh(new THREE.BoxGeometry(limbR * 1.7, limbR * 0.9, limbR * 3.1), mat);
+    const foot = new THREE.Mesh(new THREE.CapsuleGeometry(limbR * 0.65, limbR * 1.7, 6, 16), appearance === "costume" ? detail : mat);
+    foot.rotation.x = Math.PI / 2;
+    foot.scale.y = 0.8;
     foot.castShadow = true;
     foot.position.set(0, -(hipH - limbR * 0.5) + thigh + shin - 0, limbR * 0.9);
     // 简化：直接挂在膝下末端
@@ -423,7 +444,7 @@ export function buildEntity(e: PrevizEntity): BuiltEntity {
   let built: BuiltEntity;
   if (e.kind === "character") {
     if (e.preset?.startsWith("crowd")) built = buildCrowd(e.preset, e.color);
-    else built = buildMannequin(BODY_PRESETS[e.preset ?? "male"]?.spec ?? BODY_PRESETS.male.spec, e.color);
+    else built = buildMannequin(BODY_PRESETS[e.preset ?? "male"]?.spec ?? BODY_PRESETS.male.spec, e.color, e.appearance);
   } else if (e.kind === "camera") {
     built = buildCameraRig(e.color);
   } else if (e.kind === "light") {

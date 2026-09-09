@@ -7,7 +7,7 @@
  * media 变体：图片/视频节点无边框，预览充满整个节点。
  */
 import { useEffect, useRef, type ReactNode } from "react";
-import { Handle, Position } from "@xyflow/react";
+import { Handle, Position, useReactFlow } from "@xyflow/react";
 import { useShallow } from "zustand/react/shallow";
 import { NODE_INPUTS, useBoard } from "../../core/stores/boardStore";
 import { useUi } from "../../core/stores/uiStore";
@@ -30,12 +30,19 @@ function DirtyBadge({ id }: { id: string }) {
   );
 }
 
-/** 上游组合预览弹窗：图N 顺序 + 各段文本来源 + 合并预览（从工具条「传入」按钮向下弹出） */
+/** 上游组合预览弹窗：图N 顺序 + 各段文本来源 + 合并预览（从工具条「传入」按钮向下弹出）；
+ *  点击任一行选中并飞到来源节点——「传入 N 却找不到谁传的」时一眼定位 */
 function UpstreamPopover({ id, onClose }: { id: string; onClose: () => void }) {
   const parts = collectUpstreamParts(id);
   const images = parts.filter((p) => p.kind === "image");
   const texts = parts.filter((p) => p.kind === "text");
   const rootRef = useRef<HTMLDivElement>(null);
+  const rf = useReactFlow();
+  const locate = (nid: string) => {
+    const s = useBoard.getState();
+    s.onNodesChange(s.nodes.map((n) => ({ type: "select" as const, id: n.id, selected: n.id === nid })));
+    void rf.fitView({ nodes: [{ id: nid }], duration: 360, maxZoom: 1.3, padding: 3 });
+  };
   /* 点击弹窗外（画布空白/其他节点）自动收起；工具栏「弹窗锁定」开启时不收起 */
   useEffect(() => {
     const onDown = (e: PointerEvent) => {
@@ -52,7 +59,7 @@ function UpstreamPopover({ id, onClose }: { id: string; onClose: () => void }) {
     <div ref={rootRef} className="up-pop glass nodrag nowheel">
       <div className="up-pop-head">
         <b>上游传入组合</b>
-        <span title="按上游节点位置排序（上→下），拖动节点可调整顺序">按位置上→下排序</span>
+        <span title="按上游节点位置排序（上→下），拖动节点可调整顺序">按位置上→下排序 · 点击行定位来源</span>
         <button className="icon-btn" title="关闭" aria-label="关闭" onClick={onClose}>
           <IcClose size={14} />
         </button>
@@ -62,7 +69,14 @@ function UpstreamPopover({ id, onClose }: { id: string; onClose: () => void }) {
           <>
             <div className="up-sec">参考图 {images.length} 张 · 图N 即传给模型的顺序（提示词里可用 @ 引用）</div>
             {images.map((p, i) => (
-              <div key={i} className="up-row">
+              <div key={i} className="up-row" role="button" tabIndex={0} title={`选中并定位：${p.from}`} onClick={() => locate(p.nodeId)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    locate(p.nodeId);
+                  }
+                }}
+              >
                 <Thumb src={p.value} alt="" />
                 <b>图{i + 1}</b>
                 <span title={p.from}>{p.from}</span>
@@ -74,7 +88,14 @@ function UpstreamPopover({ id, onClose }: { id: string; onClose: () => void }) {
           <>
             <div className="up-sec">文本 {texts.length} 段 · 提示词框留空时按此顺序换行合并</div>
             {texts.map((p, i) => (
-              <div key={i} className="up-text">
+              <div key={i} className="up-text" role="button" tabIndex={0} title={`选中并定位：${p.from}`} onClick={() => locate(p.nodeId)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    locate(p.nodeId);
+                  }
+                }}
+              >
                 <div className="up-text-head">
                   <b>段{i + 1}</b>
                   <span title={p.from}>{p.from}</span>
@@ -130,14 +151,9 @@ function UpstreamTool({ id }: { id: string }) {
 }
 
 /**
- * 媒体节点宽度：随内容比例自适应（竖图窄、横图宽，如 LibLib 每个结果节点大小不同）。
- * 平方根阻尼避免极端比例失控：1:1→base，16:9→≈1.33×base，9:16→≈0.75×base。
+ * 媒体节点宽度：随内容比例自适应（实现移至 core/imageInfo 供画布布局计算同源复用，此处保留导出）
  */
-export function mediaNodeWidth(dims: { w: number; h: number } | null | undefined, base: number): number {
-  if (!dims || !dims.w || !dims.h) return base;
-  const r = dims.w / dims.h;
-  return Math.round(Math.max(230, Math.min(470, base * Math.sqrt(r))));
-}
+export { mediaNodeWidth } from "../../core/imageInfo";
 
 export function NodeShell({  id,
   title,
@@ -148,6 +164,7 @@ export function NodeShell({  id,
   width,
   headExtra,
   hideUpstream,
+  hideHead,
   media,
   children,
 }: {
@@ -162,6 +179,8 @@ export function NodeShell({  id,
   headExtra?: ReactNode;
   /** 隐藏节点上的"上游传入"徽标（生成节点改由生成设置弹窗显示上游） */
   hideUpstream?: boolean;
+  /** 隐藏顶部标题行（分镜组切片等纯图外观；工具条仍随悬停出现） */
+  hideHead?: boolean;
   /** 无边框媒体模式：图片/视频节点预览充满整个节点，无卡片底色 */
   media?: boolean;
   children: ReactNode;
@@ -182,7 +201,7 @@ export function NodeShell({  id,
   const upPopOpen = useUi((s) => s.upPop.includes(id));
   return (
     <div
-      className={`mnode ${media ? "media" : ""} ${status} ${selected ? "sel" : ""} ${hinted ? "prox" : ""} ${ignored ? "ign" : ""} ${editing ? "editing" : ""} ${upPopOpen ? "uppop" : ""}`}
+      className={`mnode ${media ? "media" : ""} ${hideHead ? "no-head" : ""} ${status} ${selected ? "sel" : ""} ${hinted ? "prox" : ""} ${ignored ? "ign" : ""} ${editing ? "editing" : ""} ${upPopOpen ? "uppop" : ""}`}
       style={{ width }}
     >
       <div className="mnode-head">

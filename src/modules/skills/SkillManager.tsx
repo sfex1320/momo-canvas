@@ -3,29 +3,24 @@
  *  - 导入 SKILL.md（快速 Skill）或 .momoskill 包（需 JSZip，懒加载）
  *  - 列表显示名称、版本、来源、适用位置、启用状态
  *  - 查看完整指令、变量定义
- *  - 内置 Skill 不可删除（只能禁用），可恢复默认
+ *  - 内置 Skill 可删除，重启不补回；可手动恢复已删除内置项
  */
 import { useEffect, useRef, useState } from "react";
 import { Modal, Row } from "../../ui/kit";
+import {AskCard} from "../director/AskCard";
+import "../director/director.css";
 import { useSkills } from "../../core/stores/skillStore";
 import { useUi } from "../../core/stores/uiStore";
 import { toast } from "../../core/stores/uiStore";
 import { importSkillMd, importSkillPackage, importClaudeSkillZip } from "../../core/skillImport";
+import { analyzeSkillMeta, type SkillKindAnalysis } from "../../core/skillAnalyzer";
 import { errMsg } from "../../core/utils";
-import { IcWand, IcStar, IcTrash, IcUpload, IcCheck } from "../../ui/icons";
-import type { MomoSkill, SkillContext } from "../../core/skillTypes";
+import { IcWand, IcStar, IcTrash, IcUpload, IcCheck, IcSparkles } from "../../ui/icons";
+import { SKILL_CONTEXTS, SKILL_CONTEXT_LABEL, type MomoSkill, type SkillContext } from "../../core/skillTypes";
 
-const CONTEXT_LABEL: Record<SkillContext, string> = {
-  "prompt.text": "文本提示词",
-  "prompt.image": "图片提示词",
-  "prompt.video": "视频提示词",
-  "director.project": "导演台·项目",
-  "director.segment": "导演台·片段",
-  "poster.layout": "海报排版",
-  "ecom.layout": "电商图",
-  "agent.image": "助手·出图",
-  "agent.video": "助手·出片",
-};
+/** 标签与合法表统一走 skillTypes 的单一来源（新增工位上下文只改那里） */
+const CONTEXT_LABEL: Record<SkillContext, string> = SKILL_CONTEXT_LABEL;
+const ALL_CONTEXTS = SKILL_CONTEXTS;
 
 const PHASE_LABEL: Record<string, string> = {
   analyze: "分析",
@@ -39,6 +34,7 @@ export function SkillManager() {
   const close = () => useUi.getState().setSkillMgrOpen(false);
   const skills = useSkills((s) => s.skills);
   const loaded = useSkills((s) => s.loaded);
+  const deletedBuiltinCount = useSkills((s) => s.deletedBuiltinIds.length);
   const toggleEnabled = useSkills((s) => s.toggleEnabled);
   const toggleStarred = useSkills((s) => s.toggleStarred);
   const remove = useSkills((s) => s.remove);
@@ -48,6 +44,11 @@ export function SkillManager() {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState<{ name: string; description: string; instructions: string } | null>(null);
   const [dragOver, setDragOver] = useState(false);
+  const [pendingDelete,setPendingDelete]=useState<MomoSkill|null>(null);
+  useEffect(()=>{if(!open)setPendingDelete(null);},[open]);
+  /** AI 分型分析（kind/triggers）：分析 → 预览 → 用户点应用才写入 */
+  const [analysis, setAnalysis] = useState<SkillKindAnalysis | null>(null);
+  const [analyzing, setAnalyzing] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
 
   // 打开管理器时确保 store 已加载（未加载就导入会把内置 Skill 与已存数据整体覆盖落盘）
@@ -57,10 +58,11 @@ export function SkillManager() {
 
   if (!open) return null;
 
-  /** 打开详情（同时退出编辑态） */
+  /** 打开详情（同时退出编辑态与上一次的分型分析） */
   const openView = (s: MomoSkill | null) => {
     setViewing(s);
     setEditing(false);
+    setAnalysis(null);
     setDraft(null);
   };
 
@@ -102,7 +104,7 @@ export function SkillManager() {
   return (
     <Modal
       title={viewing ? `${editing ? "编辑" : "查看"} Skill · ${viewing.name}` : "Skill 管理"}
-      onClose={() => (viewing ? openView(null) : close())}
+      onClose={() => (pendingDelete ? setPendingDelete(null) : viewing ? openView(null) : close())}
       width={viewing ? 720 : 880}
     >
       <div
@@ -150,6 +152,23 @@ export function SkillManager() {
             <span className="sec-desc">· {PHASE_LABEL[viewing.phase] ?? viewing.phase}</span>
             <span className="sec-desc">· {viewing.source === "builtin" ? "内置" : "导入"}</span>
             <span className="spacer" style={{ flex: 1 }} />
+            {!editing ? (
+              <button
+                className="btn sm"
+                disabled={analyzing}
+                title="用对话模型读指令正文，判定 rule/workflow 分型并提炼触发条件（预览后手动应用）"
+                onClick={() => {
+                  setAnalyzing(true);
+                  setAnalysis(null);
+                  void analyzeSkillMeta(viewing)
+                    .then((r) => setAnalysis(r))
+                    .catch((e) => toast(`分型分析失败：${errMsg(e)}`, "err"))
+                    .finally(() => setAnalyzing(false));
+                }}
+              >
+                <IcSparkles size={13} /> {analyzing ? "分析中…" : "AI 分析分型"}
+              </button>
+            ) : null}
             {editing && draft ? (
               <>
                 <button
@@ -196,10 +215,43 @@ export function SkillManager() {
           ) : viewing.description ? (
             <div className="sec-desc">{viewing.description}</div>
           ) : null}
+          {viewing.kind || viewing.triggers?.length ? (
+            <div className="sec-desc">
+              分型：{viewing.kind === "workflow" ? "工作流型（带分步执行计划）" : "规则型"}
+              {viewing.triggers?.length ? ` · 触发：${viewing.triggers.join("；")}` : ""}
+            </div>
+          ) : null}
+          {analysis ? (
+            <div style={{ border: "1px solid var(--border, rgba(128,128,128,.3))", borderRadius: 8, padding: 10, background: "var(--panel)" }}>
+              <div style={{ fontSize: 12.5, marginBottom: 4 }}>
+                <b>AI 判定：{analysis.kind === "workflow" ? "工作流型" : "规则型"}</b>
+                {analysis.note ? <span className="sec-desc"> · {analysis.note}</span> : null}
+              </div>
+              {analysis.triggers.length ? (
+                <div className="sec-desc" style={{ marginBottom: 6 }}>触发条件：{analysis.triggers.join("；")}</div>
+              ) : null}
+              <Row gap={8}>
+                <button
+                  className="btn sm primary"
+                  onClick={() => {
+                    const next = { ...viewing, kind: analysis.kind, triggers: analysis.triggers };
+                    install(next);
+                    setViewing(next);
+                    setAnalysis(null);
+                    toast(`已应用分型：${analysis.kind === "workflow" ? "工作流型" : "规则型"}`, "ok");
+                  }}
+                >
+                  应用
+                </button>
+                <button className="btn sm" onClick={() => setAnalysis(null)}>忽略</button>
+                <span className="sec-desc">triggers 只作 Agent 路由提示，不会据此放行任何扣费/写入</span>
+              </Row>
+            </div>
+          ) : null}
           <div>
             <div className="sec-desc" style={{ marginBottom: 4 }}>适用位置（点击切换，即改即存，决定 Skill 出现在哪些入口）</div>
             <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
-              {(Object.keys(CONTEXT_LABEL) as SkillContext[]).map((c) => {
+              {ALL_CONTEXTS.map((c) => {
                 const on = viewing.contexts.includes(c);
                 return (
                   <button
@@ -261,6 +313,7 @@ export function SkillManager() {
             <button className="btn sm" onClick={() => fileRef.current?.click()}>
               <IcUpload size={14} /> 导入 Skill
             </button>
+            {deletedBuiltinCount > 0 && <button className="btn sm" onClick={()=>useSkills.getState().restoreDeletedBuiltins()}>恢复已删除内置（{deletedBuiltinCount}）</button>}
             <input
               ref={fileRef}
               type="file"
@@ -280,7 +333,7 @@ export function SkillManager() {
             </div>
           ) : skills.length === 0 ? (
             <div className="sec-desc" style={{ padding: "24px 0", textAlign: "center" }}>
-              还没有 Skill。导入一个 SKILL.md 或点击齿轮试试内置 Skill。
+              还没有 Skill。可以导入 SKILL.md，或在上方恢复已删除的内置 Skill。
             </div>
           ) : (
             <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
@@ -324,22 +377,14 @@ export function SkillManager() {
                     >
                       {s.enabled ? "已启用" : "已禁用"}
                     </button>
-                    {s.source !== "builtin" ? (
                       <button
                         className="icon-btn danger"
                         title="删除"
-                        onClick={() => {
-                          if (confirm(`确定删除 Skill「${s.name}」吗？历史生成记录中的快照不受影响。`)) {
-                            remove(s.id);
-                            // 详情视图可能正显示此项（外层 viewing 已被 TS narrow，用 getState 安全读取）
-                            setViewing((v) => (v && v.id === s.id) ? null : v);
-                            toast(`已删除「${s.name}」`, "ok");
-                          }
-                        }}
+                        aria-label={`删除 Skill「${s.name}」`}
+                        onClick={() => setPendingDelete(s)}
                       >
                         <IcTrash size={15} />
                       </button>
-                    ) : null}
                   </span>
                 </div>
               ))}
@@ -348,6 +393,10 @@ export function SkillManager() {
         </div>
       )}
       </div>
+      {pendingDelete && <AskCard danger okText="删除 Skill"
+        text={`确定删除 Skill「${pendingDelete.name}」吗？历史生成记录中的快照不受影响。${pendingDelete.source === "builtin" ? "内置项删除后重启不会自动恢复，可通过列表顶部恢复。" : ""}`}
+        onCancel={()=>setPendingDelete(null)}
+        onConfirm={()=>{remove(pendingDelete.id);setViewing(v=>v?.id===pendingDelete.id?null:v);toast(`已删除「${pendingDelete.name}」`,"ok");setPendingDelete(null);}} />}
     </Modal>
   );
 }

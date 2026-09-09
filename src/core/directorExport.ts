@@ -329,6 +329,12 @@ export async function generateAudioTrack(
       model: card.model,
     });
     if (!asset) throw new Error("音频资产收录失败");
+    // 3.5 P2：绑定项目文件夹时镜像到 分段资产库/NN_标题/音频/
+    if (track.segmentId) {
+      const { mirrorProjectAsset } = await import("./studio/projectAssetRouter");
+      const segTitle = useDirector.getState().getById(projectId)?.scenes.flatMap((sc) => sc.segments).find((x) => x.id === track.segmentId)?.summary.slice(0, 20);
+      void mirrorProjectAsset({ projectId, segmentId: track.segmentId, category: "audio", assetId: asset.id, segTitle });
+    }
     // 写回项目
     const audioTracks = (proj.audioTracks ?? []).map((t) =>
       t.id === trackId

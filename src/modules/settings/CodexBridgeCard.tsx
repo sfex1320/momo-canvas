@@ -1,0 +1,22 @@
+import {useEffect,useState} from "react";
+import {codexStatus,codexExecutable,saveCodexExecutable,type CodexStatus,type CodexLimits} from "../../core/codexBridge";
+import {errMsg,isTauri} from "../../core/utils";
+import {openExternal} from "../../core/external";
+import {useSettings} from "../../core/stores/settingsStore";
+
+export function CodexBridgeCard(){
+ const [status,setStatus]=useState<CodexStatus>(),[busy,setBusy]=useState(false),[error,setError]=useState("");
+ const defaults=useSettings(s=>s.settings.models.defaults);
+ const refresh=async()=>{setBusy(true);setError("");try{setStatus(await codexStatus());}catch(e){setError(errMsg(e));}finally{setBusy(false);}};
+ useEffect(()=>{if(isTauri)void refresh();},[]);
+ useEffect(()=>{const update=(e:Event)=>setStatus(s=>s?{...s,limits:(e as CustomEvent<CodexLimits>).detail}:s);window.addEventListener("momo-codex-limits",update);return()=>window.removeEventListener("momo-codex-limits",update);},[]);
+ const choose=async()=>{const {open}=await import("@tauri-apps/plugin-dialog");const p=await open({title:"选择 codex.exe",filters:[{name:"Codex",extensions:["exe"]}],defaultPath:(await codexExecutable())||undefined});if(typeof p==="string"){await saveCodexExecutable(p);await refresh();}};
+ const limits=status?.limits?.rateLimits;
+ return <section className="codex-bridge-card"><div><b>Codex 会员生图</b><span>图片自动回画布 · 引用上一张图继续修改</span></div>
+ <p>使用本机 Codex 的 ChatGPT 登录与共享额度。画布按需启动后台进程，无需保持 Codex 窗口开启。网络沿用本机环境；不自动切换付费 API。</p>
+ <div className="codex-bridge-actions"><button className="btn sm" disabled={busy||!isTauri} onClick={()=>void refresh()}>{busy?"连接中…":"检查连接与额度"}</button><button className="btn sm" disabled={busy||!isTauri} onClick={()=>void choose()}>选择 Codex 程序</button><button className="btn sm" onClick={()=>void openExternal("https://learn.chatgpt.com/docs/auth")}>登录说明</button><button className="btn sm" disabled={status?.account.type!=="chatgpt"||defaults.image==="codex-membership::codex-image"} onClick={()=>useSettings.getState().setDefault("image","codex-membership::codex-image")}>{defaults.image==="codex-membership::codex-image"?"已用于默认生图":"设为默认生图"}</button></div>
+ {status&&<p role="status">{status.account.type==="chatgpt"?`已连接 · ${status.account.planType??"ChatGPT"} 会员`:"请在 Codex 中用 ChatGPT 登录，然后重新检查连接"}</p>}
+ {status?.account.type==="chatgpt"&&<div className="codex-quota">{(["primary","secondary"] as const).map(k=>{const w=limits?.[k];return w?<div key={k}><span>{w.windowDurationMins===10080?"每周额度":w.windowDurationMins?`${w.windowDurationMins/60} 小时额度`:"共享额度"} · 剩余 {Math.max(0,100-w.usedPercent)}%</span><progress max={100} value={Math.max(0,100-w.usedPercent)}/>{w.resetsAt&&<small>{new Date(w.resetsAt*1000).toLocaleString("zh-CN")} 恢复</small>}</div>:null;})}{!limits&&<span>额度暂时不可用，请稍后刷新</span>}</div>}
+ <small>每次生成 1 张；尺寸由 Codex 生图能力决定。额度用完会停止，不自动购买或兑换重置券。</small>{error&&<p role="alert">{error}</p>}
+ </section>;
+}

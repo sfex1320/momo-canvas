@@ -13,12 +13,19 @@
  */
 import { chatOnce } from "./services/llm";
 import { resolveModelCard } from "./stores/settingsStore";
+import { parseVideoSpecFromSegment } from "./studio/videoSpec";
+import { h3PatchForSegment } from "./studio/h3Bilingual";
+import { parseH3PromptBody } from "./studio/h3BilingualCore";
+import * as segmentParse from "./segmentParse";
+import type { H3BilingualPrompt } from "./types";
 import { useDirector } from "./stores/directorStore";
 import { useSkills } from "./stores/skillStore";
-import { pushError } from "./stores/uiStore";
+import { pushError, useUi } from "./stores/uiStore";
 import { buildSkillSystem } from "./skillEngine";
+import { planningSkillSystem, purposeOfSkill } from "./studio/skillRoute";
 import { isVideoLoaderClass, isAudioLoaderClass } from "./services/comfy";
 import { resolveSlotImages, refsNoteFromSnapshot } from "./directorRefs";
+import { markStaleCapsules } from "./directorContinuity";
 import { errMsg, uid } from "./utils";
 import type {
   DirectorCharacter,
@@ -342,46 +349,16 @@ export function detectScriptKind(script: string, delimiter?: string): ScriptKind
   return "full";
 }
 
-/** 统计「序号-标题-时长」裸标题行数量（无围栏成品包的段头） */
-function countBareTitleHeads(t: string): number {
-  return [...t.matchAll(new RegExp(BARE_TITLE_SRC, "gim"))].length;
-}
-
-/**
- * 把围栏内容替换为等长空白（``` 行与 <<<PROMPT_START/END>>> 标记行本身保留，外部索引不变）。
- * 标题/标记扫描用遮罩文本，防止提示词正文里的 `## xxx` 行被误认成小节头把一段提示词切碎；
- * 围栏行保留意味着「正文带围栏块」的判定在遮罩文本上同样成立。
- */
-function maskFencedBodies(t: string): string {
-  return t
-    .replace(/<<<PROMPT_START>>>([\s\S]*?)<<<PROMPT_END>>>/gi, (_all, body: string) => "<<<PROMPT_START>>>" + body.replace(/[^\n]/g, " ") + "<<<PROMPT_END>>>")
-    .replace(/(^|\n)([ \t]*```[^\n]*\n)([\s\S]*?)([ \t]*```[ \t]*(?=\n|$))/g, (_all, nl: string, open: string, body: string, close: string) =>
-      nl + open + body.replace(/[^\n]/g, " ") + close,
-    );
-}
-
-/** 显式提示词围栏 <<<PROMPT_START>>> 的出现次数（一对 START/END = 一个片段） */
-const countPromptMarks = (t: string): number => t.match(/<<<PROMPT_START>>>/gi)?.length ?? 0;
-
-/** 统计「标题 + 代码围栏内容块」的小节数（通用提示词包特征；标题认 1-4 级） */
-function countFencedSections(t: string): number {
-  const heads = [...maskFencedBodies(t).matchAll(/^#{1,4}\s+(.+)$/gm)];
-  let n = 0;
-  for (let i = 0; i < heads.length; i++) {
-    const body = t.slice(heads[i].index!, i + 1 < heads.length ? heads[i + 1].index! : t.length);
-    if (/```/.test(body)) n++;
-  }
-  return n;
-}
-
-/**
- * 「序号-标题-时长」裸标题行（01-古刹闻客-11秒 / 02｜青衣叩门｜11s）：
- * 无围栏成品提示词包的段头特征——不用 markdown 头、不用代码围栏，每段标题行自带时长。
- */
-const BARE_TITLE_SRC = "^\\d{1,3}\\s*[-－—–|｜][^\\n]{1,60}?[-－—–|｜]\\s*\\d+(?:\\.\\d+)?\\s*(?:秒|s|sec)\\s*$";
-const isBareTitleLine = (l: string) => new RegExp(BARE_TITLE_SRC, "i").test(l);
-/** 纯分段序号头（# 第一分段 / 共十五分段）：只承载序号，真实标题（01-古刹闻客-11秒）在其后一行 */
-const INDEX_HEAD_RE = /^#{1,4}\s*第\s*[0-9一二三四五六七八九十百零两]+\s*(?:分段|场|幕)(?:\s*[/／][^\n]*)?$/;
+/* —— 切段/标题解析已提取到纯函数模块 segmentParse（本地别名保持文件内调用不变；对外由文件尾 re-export）—— */
+const {
+  countBareTitleHeads,
+  maskFencedBodies,
+  countPromptMarks,
+  countFencedSections,
+  isBareTitleLine,
+  isSegmentMetaLine,
+  INDEX_HEAD_RE,
+} = segmentParse;
 
 /** 判断提示词是否已是 H3 成品格式（精炼/直录产物），生成时不再重复拼 Skill 全文指令 */
 export function isH3ReadyPrompt(text: string): boolean {
@@ -389,24 +366,30 @@ export function isH3ReadyPrompt(text: string): boolean {
 }
 
 /**
+ * 严格识别官方 H3 六段执行稿：正文必须从 subject_definitions 开始，六个字段各一次且顺序固定。
+ * 生产元数据、资产清单和 MOMO 说明不得放在六段正文之前；它们应保留在项目清单或运行时注入到段内。
+ */
+export function isOfficialH3Prompt(text: string): boolean {
+  const body = text.trim();
+  if (!/^subject_definitions\s*:/i.test(body)) return false;
+  const fields = [
+    "subject_definitions",
+    "summary",
+    "retention_analysis",
+    "detailed_description",
+    "overall_soundscape",
+    "non_diegetic_music",
+  ];
+  const headings = [...body.matchAll(/^(subject_definitions|summary|retention_analysis|detailed_description|overall_soundscape|non_diegetic_music)\s*:/gim)]
+    .map((m) => m[1].toLowerCase());
+  return headings.length === fields.length && headings.every((field, index) => field === fields[index]);
+}
+
+/**
  * 通用片段标题解析：`## H3-01｜三岁的画｜12 秒` / `## 分镜1 开场` / `## 回家第一句 16s` 都认。
  * 剥掉 H3-N 序号前缀与尾部时长（全角｜/半角|/中文「秒」都行），返回净标题与时长。
  */
-function parseSegmentTitle(line: string): { title?: string; durationSec?: number } {
-  let s = line.replace(/^#{1,4}\s*/, "").trim();
-  // H3-01 / 分镜01 / 第一分段（中文数字）等序号前缀
-  s = s.replace(/^(?:H3[-_ ]?\d+|分镜\s*\d+|第\s*[0-9一二三四五六七八九十百零两]+\s*分段?|Scene\s*\d+)\s*[|｜:：\-—]?\s*/i, "");
-  // 裸序号标题（01-古刹闻客-11秒）的 NN- 前缀：只认 1-3 位数字 + 分隔符，避免误吞 1988- 这类年份
-  s = s.replace(/^\d{1,3}\s*[-－—–.、)）]\s*/, "");
-  // 尾部时长：｜12 秒 / | 12s / 12秒
-  let durationSec: number | undefined;
-  const dm = s.match(/[|｜]\s*(\d+(?:\.\d+)?)\s*(?:s|秒|sec)?\s*$/i) ?? s.match(/(\d+(?:\.\d+)?)\s*(?:秒|s|sec)\s*$/i);
-  if (dm) {
-    durationSec = Number(dm[1]);
-    s = s.slice(0, dm.index).replace(/[|｜\s\-—]+$/, "").trim();
-  }
-  return { title: s || undefined, durationSec };
-}
+export const parseSegmentTitle = segmentParse.parseSegmentTitle;
 
 /** 剥掉 markdown 代码围栏行（```text / ```），保留正文内容 */
 function stripFenceLines(text: string): string {
@@ -442,69 +425,10 @@ export function extractGlobalStyle(prefix: string): string | undefined {
 }
 
 /** 统计成品提示词段数（识别条显示用）：显式围栏 / H3 头 / subject_definitions / 带围栏块的通用小节 */
-export function countPromptSegments(script: string): number {
-  const t = script.trim();
-  if (!t) return 0;
-  const masked = maskFencedBodies(t);
-  const pm = countPromptMarks(masked);
-  if (pm > 0) return pm;
-  const heads = masked.match(/^#{1,4}\s*H3-/gim)?.length ?? 0;
-  if (heads > 0) return heads;
-  const sd = masked.match(/subject_definitions\s*:/g)?.length ?? 0;
-  if (sd > 0) return sd;
-  const bare = countBareTitleHeads(masked);
-  if (bare > 0) return bare;
-  return countFencedSections(t);
-}
+export const countPromptSegments = segmentParse.countPromptSegments;
 
 /** 收集片段起点：显式围栏 → H3 头 → subject_definitions → 通用「标题」（序号标题或带围栏块的小节，认 1-4 级） */
-function collectSegmentMarks(t: string): number[] {
-  const masked = maskFencedBodies(t);
-  // 显式围栏 <<<PROMPT_START>>> 每处即一段起点（最可靠，优先于一切启发式）；
-  // 段起点回吃紧邻上方的标题行（## H3-01｜标题｜12 秒 / 裸标题 / # 第X分段），否则标题会落进前言或上一段
-  const pm = [...masked.matchAll(/<<<PROMPT_START>>>/gi)].map((m) => m.index!);
-  if (pm.length) {
-    return pm.map((idx) => {
-      let start = masked.lastIndexOf("\n", idx - 1) + 1; // 标记所在行的行首
-      for (let k = 0; k < 3; k++) {
-        if (start <= 0) break;
-        const prevEnd = start - 1; // 上一行的 \n 位置
-        const prevStart = masked.lastIndexOf("\n", prevEnd - 1) + 1;
-        const line = masked.slice(prevStart, prevEnd).trim();
-        if (!line || /^#{1,4}\s+\S/.test(line) || isBareTitleLine(line) || INDEX_HEAD_RE.test(line)) {
-          start = prevStart; // 空行与标题行都回吃；遇到 PROMPT_END 或正文行即停
-          continue;
-        }
-        break;
-      }
-      return start;
-    });
-  }
-  const h3 = [...masked.matchAll(/^#{1,4}\s*H3-[\w-]+.*$/gim)].map((m) => m.index!);
-  if (h3.length) return h3;
-  const sd = [...masked.matchAll(/subject_definitions\s*:/g)].map((m) => m.index!);
-  if (sd.length) return sd;
-  // 通用提示词包：标题（1-4 级）带序号（H3-N/第N段/分镜N/Scene N/1.）或正文带围栏块的算片段；
-  // 定调/风格/说明类小节永远不作片段起点（其围栏块是风格内容，不是分镜提示词），内容自然并入前言
-  const STYLE_HEAD = /风格|定调|锚定|说明|规则|注意|前言|简介|资产|附录|参考|原则/;
-  const heads = [...masked.matchAll(/^#{1,4}\s+(.+)$/gm)];
-  const segMarks: number[] = [];
-  heads.forEach((h, i) => {
-    const title = h[1];
-    if (STYLE_HEAD.test(title)) return;
-    const body = t.slice(h.index!, i + 1 < heads.length ? heads[i + 1].index! : t.length);
-    const looksSegment =
-      /(?:H3[-_ ]?\d+|第\s*[0-9一二三四五六七八九十百零两]+\s*(?:分段|段|集|镜)|分镜\s*\d+|Scene\s*\d+|^\d+\s*[.、)）])/i.test(title) ||
-      /```/.test(body) ||
-      /subject_definitions\s*:/.test(body);
-    if (looksSegment) segMarks.push(h.index!);
-  });
-  if (segMarks.length) return segMarks;
-  // 无 markdown 头的包：「序号-标题-时长」裸标题行自己当段头
-  const bare = [...masked.matchAll(new RegExp(BARE_TITLE_SRC, "gim"))].map((m) => m.index!);
-  if (bare.length >= 2) return bare;
-  return segMarks;
-}
+export const collectSegmentMarks = segmentParse.collectSegmentMarks;
 
 /**
  * 成品分段提示词包直录（通用）：剧本 = 定调前言 + 片段列表（片段标题 + 片段内容/围栏提示词块）。
@@ -526,7 +450,7 @@ export function importPromptSegments(script: string, maxSegmentSec: number): { s
   if (!parts.length) throw new Error("没有识别出任何分段提示词");
   const globalStyle = extractGlobalStyle(prefix);
   // 主标题（前言里的 markdown 标题行）作为唯一场景的场名，没有就「分镜提示词」
-  const mainTitle = prefix.match(/^#{1,4}\s+(.+)$/m)?.[1]?.trim();
+  const mainTitle = prefix.match(/^#{1,4}\s*(\S.+)$/m)?.[1]?.trim();
   const sceneId = "scene_prompts";
   const segments: DirectorSegment[] = parts.map((raw, i) => {
     // 段尾的 --- 分隔线先剥掉（按下一分段头切时，分隔线会落在上一段尾部），再剥围栏行
@@ -535,14 +459,24 @@ export function importPromptSegments(script: string, maxSegmentSec: number): { s
     let li = 0;
     while (li < lines.length && !lines[li].trim()) li++;
     let titleLine = (lines[li] ?? "").trim();
-    // 纯分段序号头（# 第一分段 / 共十五分段）只承载序号：真正的标题在下一非空行
+    // 纯分段序号头（# 第一分段）只承载序号：跳过它**和它后面的纯元信息行**（共六分段 / 分段数：6 /
+    // 总时长 60 秒——此前只跳一行，标题落到了「共六分段」上，全部片段名都变成「××分段」），
+    // 直到找到像标题的行（裸标题 01-××-11秒 / markdown 头 / 编号说明之外的正文首行）
     if (INDEX_HEAD_RE.test(titleLine)) {
+      li++;
+      while (li < lines.length && (!lines[li].trim() || isSegmentMetaLine(lines[li]))) li++;
+      titleLine = (lines[li] ?? "").trim();
+    }
+    // 首行即使不是序号头也可能直接是元信息行（无「# 第X分段」前缀的包）
+    while (titleLine && isSegmentMetaLine(titleLine)) {
       li++;
       while (li < lines.length && !lines[li].trim()) li++;
       titleLine = (lines[li] ?? "").trim();
     }
     // 显式围栏段：<<<PROMPT_START>>>…<<<PROMPT_END>>> 之间即提示词本体；标记前的标题行照常解析
     const marked = raw.match(/<<<PROMPT_START>>>([\s\S]*?)<<<PROMPT_END>>>/i);
+    // 3.5：分段三项规格（分辨率/帧率/时长）确定性识别——标题、元数据、正文全扫，保留命中原文
+    const videoSpec = parseVideoSpecFromSegment(raw, titleLine);
     // 标题行就是标记行本身（裸围栏段）时不参与标题解析，落到「提示词 N」兜底名
     const head: { title?: string; durationSec?: number } = /<<<PROMPT_START>>>/i.test(titleLine) ? {} : parseSegmentTitle(titleLine);
     const dur = head.durationSec && head.durationSec >= 4 && head.durationSec <= 60 ? Math.round(head.durationSec) : maxSegmentSec;
@@ -553,15 +487,19 @@ export function importPromptSegments(script: string, maxSegmentSec: number): { s
     const structuralTitle = /^#{1,4}\s+\S/.test(titleLine) || isBareTitleLine(titleLine);
     const body = structuralTitle || fenced ? lines.slice(li + 1).join("\n") : text;
     const promptBody = (marked ? marked[1] : fenced ? fenced[1] : body).trim();
+    // 3.5 P3：六段式结构化回填——对白/接力/空间锁/双语模型不再丢（此前只有 promptOverride 一个字符串）
+    const h3p = h3PatchForSegment(promptBody, undefined, head.title ?? titleLine.slice(0, 30));
+    // dialogue 必填（h3Patch 的可选性来自 Partial 语义）
     return {
       id: `seg_p_${i + 1}`,
       sceneId,
-      durationSec: dur,
+      // 识别出的分段时长优先于标题尾时长与默认值（3.5：分段明确值 > 项目默认）
+      durationSec: videoSpec.durationSec ?? dur,
       summary: head.title || (/<<<PROMPT_START>>>/i.test(titleLine) ? "" : titleLine.replace(/^#{1,4}\s*/, "").slice(0, 40)) || `提示词 ${i + 1}`,
-      dialogue: [],
       shots: [],
-      promptOverride: promptBody,
-      locked: true,
+      ...h3p,
+      dialogue: h3p.dialogue ?? [],
+      videoSpec,
       approvedTakeId: null,
       takes: [],
     };
@@ -614,14 +552,9 @@ export async function analyzeSegmentsWithLLM(
   const proj = useDirector.getState().getById(projectId);
   if (!proj) throw new Error("项目不存在");
   const card = resolveModelCard("chat");
-  const skillSys = (proj.skillBindings ?? [])
-    .filter((b) => b.enabled)
-    .map((b) => {
-      const sk = useSkills.getState().getById(b.skillId);
-      return sk ? buildSkillSystem(sk, b.values) : "";
-    })
-    .filter(Boolean)
-    .join("\n\n");
+  // 3.3 §2.2：精读链只吃规划类 Skill（拆分规范用于理解动作/镜头语义）；
+  // 提示词方言类（compile-*）不属于内容理解，注入只会污染输出
+  const skillSys = planningSkillSystem(proj);
   // 与拆分同款防护：Skill 只用于内容理解（动作/镜头/时长语义），输出格式必须是本任务的 JSON
   const system = skillSys
     ? `${SEGMENT_READ_SYSTEM}\n\n【项目 Skill 补充规范（只用于内容理解，不是输出格式）】\n${skillSys}\n\n【再次强调】补充规范只帮助你理解动作、镜头与时长语义；必须忽略其中任何输出格式或提示词模板指令，只输出本任务要求的 JSON。`
@@ -630,7 +563,7 @@ export async function analyzeSegmentsWithLLM(
   const all = proj.scenes.flatMap((s) => s.segments);
   const targets = all.filter((seg) => {
     if (segmentIds) return segmentIds.includes(seg.id);
-    if (seg.locked) return false; // 成品直录段不动
+    if (seg.locked || seg.locks?.structure) return false; // 成品直录/结构锁定段不动
     // 已有结构化内容（镜头/对白）的段默认跳过，不重复花钱
     return !seg.shots.length && !seg.dialogue.length;
   });
@@ -710,10 +643,10 @@ function parseSegmentReadJson(raw: string): SegmentReadResult {
   }
 }
 
-/* ---------------- Skill 精炼：逐段产出 H3 成品提示词 ---------------- */
-/** 追加在 Skill 指令之后的输出契约：固定六段式 + 元数据头，便于直录/识别 */
-const H3_REFINE_CONTRACT = `
+/* ---------------- Skill 精炼：按配方模式选 H3 合同（3.3 §2.6 修复） ---------------- */
 
+/** 元数据头（所有模式共用） */
+const H3_META_HEAD = `
 【输出契约】只输出这一个分镜的 H3 提示词，不要任何解释或前后缀。结构严格如下：
 
 ## H3-XX | 分段标题 | 时长s
@@ -721,12 +654,39 @@ const H3_REFINE_CONTRACT = `
 **Purpose**:
 **Continuity bridge in**:
 **Continuity bridge out**:
-**Reference image order**: <Picture 1> ..., <Picture 2> ...
 **Characters**:
 **Scene**:
 **Props**:
 **Dialogue**:
-**Camera**:
+**Camera**:`;
+
+/** 基础三段式（T2VA/I2VA/FL2VA/L2VA 共用；六段式只属于 Ref2VA，3.3 §2.6） */
+const H3_BASE_BODY = `
+
+integrated_multimodal_description:
+（一段连贯的完整描述：主体、场景、动作、镜头运动、光线、声音事件按时间顺序写进这一段）
+
+overall_soundscape:
+...
+
+non_diegetic_music:
+...`;
+
+/** 按配方模式产出 H3 输出合同：Ref2VA 六段式（含 subject/summary/retention 与参考编号），
+ *  其余模式三段式 + 各自的对齐要求；T2VA 不带任何参考对齐指令。 */
+export function h3ContractFor(mode: string | undefined): string {
+  const alignment =
+    mode === "fl2v" || mode === "extend"
+      ? `\n\n【首尾帧对齐】开场画面从首帧严格延续（不得跳变）；结尾在最后 0.5 秒内精确到达尾帧画面与构图。`
+      : mode === "i2v"
+        ? `\n\n【首帧对齐】<Picture 1> 是首帧：开场画面必须严格从首帧内容延续，不得跳变。`
+        : mode === "l2v"
+          ? `\n\n【尾帧对齐】<Picture 1> 是目标尾帧：全片动作必须自然演进到该尾帧画面，结尾时刻精确到达。`
+          : "";
+  if (mode === "r2v") {
+    // Ref2VA 六段式（唯一使用六段式的模式）：最终正文不再叠加 MOMO 私有元数据头。
+    return `
+【输出契约】只输出这一个分镜的 MiniMax H3 Ref2VA 英文执行提示词，不要标题、解释、代码围栏或任何前后缀。第一行必须是 subject_definitions:，六个顶层字段各出现一次且严格按下列顺序：
 
 subject_definitions:
 ...
@@ -744,7 +704,15 @@ overall_soundscape:
 ...
 
 non_diegetic_music:
-...`;
+...
+
+【硬约束】Picture 按本段真实图片槽从1连续编号且最多9张；Subject 只在本段从1连续编号，不使用人物/场景/道具数字区间；说话人按本段首次发声顺序从 (S1) 连续编号；对白写成 (S1) <d>[Chinese]原文</d>，方括号绝不写 S 编号。
+【参考对齐】<Picture N>/<Video N>/<Audio N> 必须与给定的真实参考槽一一对应；retention_analysis 声明每个参考的保留要素。连续性、空间锁和毫秒动作必须写进 detailed_description，不得在六段之前另加 Purpose、Characters、Reference image order 等字段。`;
+  }
+  return `${H3_META_HEAD}${H3_BASE_BODY}${alignment}`;
+}
+
+
 
 /**
  * 用项目绑定的 Skill（如 MiniMax H3 Prompt）把每个分镜精炼成 H3 成品提示词。
@@ -763,13 +731,25 @@ export async function refineSegmentPrompts(
     .filter((b) => b.enabled)
     .map((b) => ({ b, sk: skillsState.getById(b.skillId) }))
     .filter((x): x is { b: (typeof proj.skillBindings extends (infer T)[] | undefined ? T : never); sk: NonNullable<ReturnType<typeof skillsState.getById>> } => !!x.sk);
-  if (!bound.length) throw new Error("请先在「剧本」页的项目级 Skill 里勾选提示词 Skill（如 MiniMax H3 Prompt）");
-  const system = bound.map(({ b, sk }) => buildSkillSystem(sk, b.values)).join("\n\n") + H3_REFINE_CONTRACT;
+  if (!bound.length) throw new Error("请先在 H3 导演台检查器的「Skill 栈」里绑定提示词 Skill（如 MiniMax H3 Prompt）");
+  // 3.3 §2.6：精炼只吃「提示词方言」类 Skill（compile-video-prompt / model-adapter），
+  // 拆分类 Skill（剧本规划）被职能路由排除，不再互相污染。
+  // 空过滤必须 fail-loud：绑了 Skill 却全被过滤，说明绑定意图与职能不符
+  // （比如只绑了剧本拆分类），回退全量等于把拆分规范当提示词方言喂给模型（§2.2 污染回归）。
+  const compileBound = bound.filter(({ sk }) => purposeOfSkill(sk) !== "script-plan" && purposeOfSkill(sk) !== "project-package");
+  if (!compileBound.length) {
+    throw new Error(
+      `绑定的 ${bound.length} 个 Skill 里没有「提示词方言」类（职能路由把剧本规划/项目包类全部过滤了）。` +
+        `请在 H3 检查器的「Skill 栈」绑定 compile 类 Skill（如 MiniMax H3 Prompt），或停用规划类绑定——为防拆分规范污染提示词，精炼不再回退使用它们。`,
+    );
+  }
+  const skillsSystem = compileBound.map(({ b, sk }) => buildSkillSystem(sk, b.values)).join("\n\n");
   const card = resolveModelCard("chat");
   const targets = proj.scenes.flatMap((s) => s.segments).filter((seg) => !segmentIds || segmentIds.includes(seg.id));
   if (!targets.length) throw new Error("没有需要精炼的片段（请先在剧本页拆分）");
-  // 成品直录段（locked）不可精炼：它本身就是 H3 成品，精炼会用 AI 重写覆盖原文（数据事故来源）
-  const runnable = targets.filter((seg) => !seg.locked);
+  // 执行稿锁定段不可精炼（3.5 P1）：成品直录（locked/结构锁）拦结构改写；英文执行稿锁（locks.executionEn）
+  // 与最终锁定稿（promptFinalOverride）拦 Skill 精炼——AI 重写会覆盖用户锁定的请求真相（数据事故来源）
+  const runnable = targets.filter((seg) => !seg.locked && !isExecutionLocked(seg));
   // 全部锁定：不算失败（提示词已是成品，本就无需精炼），返回 skipped 让调用方给指引性提示
   if (!runnable.length) return { ok: 0, failed: 0, skipped: targets.length };
   let ok = 0;
@@ -779,6 +759,10 @@ export async function refineSegmentPrompts(
     try {
       const refs = await resolveSlotImages(proj, seg);
       const refNote = refs ? refsNoteFromSnapshot(refs.snapshot, "video") : "";
+      // 3.3 §2.6：合同按本段配方模式分流——Ref2VA 六段式，其余三段式（旧逻辑对所有模式都用六段式）
+      const recipe = proj.recipes.find((r) => r.id === (seg.recipeId ?? proj.defaultRecipeId));
+      const promptMode = recipe?.mode ?? (refNote ? "r2v" : "t2v");
+      const system = skillsSystem + h3ContractFor(promptMode);
       const user = [
         `分镜时长：${seg.durationSec} 秒`,
         `分镜摘要：${seg.summary}`,
@@ -794,13 +778,43 @@ export async function refineSegmentPrompts(
       const raw = await chatOnce(card, system, user);
       const cleaned = stripToH3Prompt(raw);
       if (!isH3ReadyPrompt(cleaned)) throw new Error("模型返回不符合 H3 格式，请重试");
-      // 写回 promptOverride（读最新项目，避免覆盖精炼期间的其它改动）
+      if (promptMode === "r2v" && !isOfficialH3Prompt(cleaned)) {
+        throw new Error("模型返回的 Ref2VA 执行稿不是官方六段结构（可能仍含私有前言），请重试");
+      }
+      // validate 阶段（3.3 §7）：按模式合同校验对齐节，只报告不改写产物
+      const warn = validateH3PromptForMode(cleaned, promptMode);
+      if (warn) useUi.getState().toast(`「${seg.summary.slice(0, 12)}」${warn}`, "info");
+      // 写回 promptOverride + 阶段产物快照（哪版 Skill、按什么模式合同精炼的，Take 可追溯）
       const cur = useDirector.getState().getById(projectId);
       if (!cur) throw new Error("项目已被关闭");
+      // 3.5 P3 §5.2：精炼结果除 promptOverride 外，解析进 h3Prompt.en 并回写结构化元数据（对白/接力/空间锁）
+      const parsed = parseH3PromptBody(cleaned, seg.summary);
+      const prevH3 = seg.h3Prompt;
+      const nextH3: H3BilingualPrompt = {
+        ...(prevH3 ?? { source: "skill", syncStatus: "synced", en: parsed }),
+        en: parsed,
+        source: "skill",
+        // 中文稿存在时英方更新 → en-newer；执行稿锁开着时外层本应已跳过（防御：不改锁稿）
+        syncStatus: prevH3?.zh ? "en-newer" : "synced",
+        generatedAt: Date.now(),
+      };
       useDirector.getState().updateProject(projectId, {
         scenes: cur.scenes.map((s) => ({
           ...s,
-          segments: s.segments.map((x) => (x.id === seg.id ? { ...x, promptOverride: cleaned } : x)),
+          segments: s.segments.map((x) =>
+            x.id === seg.id
+              ? {
+                  ...x,
+                  promptOverride: cleaned,
+                  refinedBy: { at: Date.now(), skills: compileBound.map(({ sk }) => `${sk.name} v${sk.version}`).join("、") || "内置合同", mode: recipe?.mode ?? (refNote ? "r2v" : "t2v") },
+                  h3Prompt: nextH3,
+                  // 结构化元数据回写（§5.2）：对白/接力只填空，不覆盖用户手填值
+                  dialogue: x.dialogue?.length ? x.dialogue : (parsed.dialogue ?? []),
+                  ...(x.continuityIn || !parsed.continuityIn ? {} : { continuityIn: parsed.continuityIn }),
+                  ...(x.continuityOut || !parsed.continuityOut ? {} : { continuityOut: parsed.continuityOut }),
+                }
+              : x,
+          ),
         })),
       });
       ok++;
@@ -813,15 +827,41 @@ export async function refineSegmentPrompts(
   return { ok, failed, skipped: targets.length - runnable.length };
 }
 
-/** 清洗模型输出：剥代码围栏、剥闲聊前缀，只保留 H3 提示词本体 */
+/**
+ * 执行稿锁定判定（3.5 P1）：结构锁/旧 locked 不拦精炼（精炼不改结构）；
+ * 英文执行稿锁（locks.executionEn）或存在最终锁定稿（promptFinalOverride）时，
+ * Skill 精炼不得改写 promptOverride / h3Prompt.en / promptFinalOverride 任何一个。
+ */
+export function isExecutionLocked(seg: DirectorSegment): boolean {
+  return !!(seg.locks?.executionEn ?? false) || !!seg.promptFinalOverride;
+}
+
+/**
+ * validate 阶段（3.3 §7）：按模式合同校验精炼产物，只报告问题不静默改写。
+ * 返回警告文案；null = 通过。Ref2VA 校验六段式完整；其余校验对齐节是否被提及。
+ */
+export function validateH3PromptForMode(text: string, mode: string): string | null {
+  if (mode === "r2v") {
+    return isOfficialH3Prompt(text) ? null : "Ref2VA 执行稿必须从 subject_definitions 开始，并严格保持官方六段顺序";
+  }
+  if (mode === "i2v" || mode === "fl2v") {
+    return /首帧|first\s*frame/i.test(text) ? null : `${mode.toUpperCase()} 合同要求描述首帧对齐——建议确认`;
+  }
+  if (mode === "l2v") {
+    return /尾帧|last\s*frame/i.test(text) ? null : "L2VA 合同要求描述尾帧演进——建议确认";
+  }
+  return null;
+}
+
+/** 清洗模型输出：剥代码围栏、剥闲聊前缀；Ref2VA 从 subject_definitions 起只保留官方正文。 */
 function stripToH3Prompt(raw: string): string {
   let text = raw.trim();
   const fence = text.match(/```(?:text|markdown|md)?\s*([\s\S]*?)```/);
   if (fence && isH3ReadyPrompt(fence[1])) text = fence[1].trim();
   const headIdx = text.search(/^##\s*H3-/im);
   if (headIdx > 0) return text.slice(headIdx).trim();
-  const sdIdx = text.search(/subject_definitions\s*:/);
-  if (sdIdx > 0) return text.slice(sdIdx).trim();
+  const sdIdx = text.search(/subject_definitions\s*:/i);
+  if (sdIdx >= 0) return text.slice(sdIdx).trim();
   return text;
 }
 
@@ -867,6 +907,88 @@ export function approveTake(projectId: string, segmentId: string, takeId: string
   useDirector.getState().updateProject(projectId, { scenes });
   // 采用后自动更新时间线
   rebuildTimeline(projectId);
+  // 连续性胶囊失效传播（方案 §10.3）：上游采用版本变化 → 紧邻下游标记过期，等用户确认重建
+  markStaleCapsules(projectId, segmentId);
+  // 3.0（方案 §10.1 默认自动）：空间接力开启时，采用后即为紧邻下一段提取末 22 帧微参考。
+  // 动态 import 防循环依赖；失败不阻断采用流程（胶囊留过期态，H3 工位提示重建）。
+  if (proj.tailFrameRelay) {
+    void import("./studio/microRef").then((m) => {
+      const flat = (useDirector.getState().getById(projectId) ?? proj).scenes.flatMap((s) => s.segments);
+      const nxt = flat[flat.findIndex((s) => s.id === segmentId) + 1];
+      if (nxt) void m.ensureMicroReference(projectId, nxt.id).catch(() => undefined);
+    });
+  }
+}
+
+/* ---------------- 删除类操作（3.4）—— 各工位此前只有新增没有删除，这里统一收口保持不变量 ---------------- */
+
+/** 删除剧本文档（只删库内文档；已「送入项目」的场景/片段与 Take 不受影响） */
+export function removeScriptDoc(projectId: string, docId: string): void {
+  const proj = useDirector.getState().getById(projectId);
+  if (!proj) return;
+  const ui = proj.studioUi;
+  useDirector.getState().updateProject(projectId, {
+    scripts: (proj.scripts ?? []).filter((d) => d.id !== docId),
+    ...(ui?.scriptId === docId ? { studioUi: { ...ui, scriptId: undefined } } : {}),
+  });
+}
+
+/** 删除片段：从所属场景移出（场景空了连场景一起删）；选中态清空、时间线重建；已生成 Take 的素材保留在资产库 */
+export function removeSegment(projectId: string, segmentId: string): void {
+  const proj = useDirector.getState().getById(projectId);
+  if (!proj) return;
+  const ui = proj.studioUi;
+  useDirector.getState().updateProject(projectId, {
+    scenes: proj.scenes
+      .map((s) => ({ ...s, segments: s.segments.filter((x) => x.id !== segmentId) }))
+      .filter((s) => s.segments.length > 0),
+    ...(ui?.segId === segmentId ? { studioUi: { ...ui, segId: undefined } } : {}),
+  });
+  rebuildTimeline(projectId);
+}
+
+/** 删除单个 Take 版本：删的是采用版本时同时取消采用并重建时间线；素材文件保留在资产库 */
+export function removeTake(projectId: string, segmentId: string, takeId: string): void {
+  const proj = useDirector.getState().getById(projectId);
+  if (!proj) return;
+  const seg = proj.scenes.flatMap((s) => s.segments).find((x) => x.id === segmentId);
+  if (!seg || !(seg.takes ?? []).some((t) => t.id === takeId)) return;
+  const wasApproved = seg.approvedTakeId === takeId;
+  useDirector.getState().updateProject(projectId, {
+    scenes: proj.scenes.map((s) => ({
+      ...s,
+      segments: s.segments.map((x) =>
+        x.id === segmentId
+          ? {
+              ...x,
+              takes: (x.takes ?? []).filter((t) => t.id !== takeId),
+              ...(wasApproved ? { approvedTakeId: null } : {}),
+            }
+          : x,
+      ),
+    })),
+  });
+  if (wasApproved) rebuildTimeline(projectId);
+}
+
+/** 删除角色档案（引用它生成的素材不受影响） */
+export function removeCharacter(projectId: string, charId: string): void {
+  const proj = useDirector.getState().getById(projectId);
+  if (!proj) return;
+  const ui = proj.studioUi;
+  useDirector.getState().updateProject(projectId, {
+    characters: proj.characters.filter((c) => c.id !== charId),
+    ...(ui?.characterId === charId ? { studioUi: { ...ui, characterId: undefined } } : {}),
+  });
+}
+
+/** 清空 AI 导演对话（含前情摘要；提案与历史决策审计保留）。epoch 递增作废在途的旧摘要压缩 */
+export function clearDirectorChat(projectId: string): void {
+  const proj = useDirector.getState().getById(projectId);
+  if (!proj) return;
+  useDirector.getState().updateProject(projectId, {
+    directorSession: { messages: [], epoch: (proj.directorSession?.epoch ?? 0) + 1 },
+  });
 }
 
 /**
@@ -911,6 +1033,15 @@ export function deriveTimeline(project: DirectorProject): DirectorTimelineEntry[
     }
   }
   return entries;
+}
+
+/**
+ * 未精炼片段检测（3.5 批量前置检查）：没有英文执行稿（promptOverride / promptFinalOverride / h3Prompt.en 都缺）
+ * 的段在批量生成时走「摘要自动编译」，质量明显弱于 Skill 精炼稿——预检提示用户先精炼。
+ * 直录段（locked 且已有 promptOverride）天然不在其中。
+ */
+export function unrefinedSegments(project: DirectorProject): DirectorSegment[] {
+  return project.scenes.flatMap((sc) => sc.segments).filter((seg) => !seg.promptOverride?.trim() && !seg.promptFinalOverride?.trim() && !seg.h3Prompt?.en?.promptBody?.trim());
 }
 
 /** 统计项目完成度 */

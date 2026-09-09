@@ -83,3 +83,14 @@ export function exactRatio(w: number, h: number): string {
   const r = w / h;
   return r >= 1 ? `${r.toFixed(2)}:1` : `1:${(1 / r).toFixed(2)}`;
 }
+
+/**
+ * 媒体节点宽度：随内容比例自适应（竖图窄、横图宽，如 LibLib 每个结果节点大小不同）。
+ * 平方根阻尼避免极端比例失控：1:1→base，16:9→≈1.33×base，9:16→≈0.75×base。
+ * 画布上的紧凑排布（宫格切分/分镜组）必须用同一公式算格位，才能与实际渲染宽度严丝合缝。
+ */
+export function mediaNodeWidth(dims: { w: number; h: number } | null | undefined, base: number): number {
+  if (!dims || !dims.w || !dims.h) return base;
+  const r = dims.w / dims.h;
+  return Math.round(Math.max(230, Math.min(470, base * Math.sqrt(r))));
+}

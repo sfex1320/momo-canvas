@@ -7,6 +7,15 @@ const host = process.env.TAURI_DEV_HOST;
 // https://vite.dev/config/
 export default defineConfig(async () => ({
   plugins: [react()],
+  build: {
+    rollupOptions: { output: { manualChunks(id) {
+      if (!id.includes("node_modules")) return;
+      if (/\/three\//.test(id)) return "vendor-three";
+      if (/\/(react|react-dom|scheduler|zustand|use-sync-external-store)\//.test(id)) return "vendor-react";
+      if (/\/@xyflow\//.test(id)) return "vendor-flow";
+      if (/\/ag-psd\//.test(id)) return "vendor-psd";
+    } } },
+  },
 
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
   //

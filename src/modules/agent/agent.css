@@ -141,6 +141,12 @@
   flex: none;
   color: var(--text-3);
 }
+.ag-mslot > small {
+  flex: none;
+  color: var(--text-3);
+  font-size: 10px;
+  line-height: 1;
+}
 .ag-models .model-picker {
   flex: 1;
   min-width: 0;
@@ -540,3 +546,9 @@
 .ag-input-row .send-btn {
   flex: none;
 }
+.ag-reference-plan { border: 1px solid var(--border); border-radius: var(--r-md); padding: 9px; margin-bottom: 8px; background: var(--panel-2); }
+.ag-reference-plan > div:first-child { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 12px; }
+.ag-reference-plan small { display: block; color: var(--text-3); font-size: 11px; line-height: 1.5; margin-top: 6px; }
+.ag-reference-images { display: flex; gap: 6px; margin-top: 7px; }
+.ag-reference-images button { width: 48px; height: 48px; padding: 0; border: 1px solid var(--border); border-radius: var(--r-sm); overflow: hidden; background: var(--input-bg); cursor: pointer; }
+.ag-reference-images img { width: 100%; height: 100%; object-fit: cover; }

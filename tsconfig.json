@@ -22,4 +22,6 @@
   },
   "include": ["src"],
   "references": [{ "path": "./tsconfig.node.json" }]
+,
+  "exclude": ["src/core/studio/videoSpec.test.ts", "src/core/studio/h3Bilingual.test.ts", "src/core/services/videoGenBodies.test.ts", "src/core/services/comfyVideoSpec.test.ts", "src/core/studio/projectWorkspace.test.ts", "src/core/studio/projectAssetRouter.test.ts", "src/core/directorIsolation.test.ts", "src/core/studio/specCapability.test.ts", "src/core/scriptIngest.test.ts", "src/core/comfySync/comfySync.test.ts"]
 }

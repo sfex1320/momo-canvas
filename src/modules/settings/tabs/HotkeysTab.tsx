@@ -69,6 +69,21 @@ const HOTKEY_GROUPS: { title: string; actions: HotkeyAction[] }[] = [
       "addVideoDub",
     ],
   },
+  {
+    title: "导演台监看器（导演工作区内生效）",
+    actions: [
+      "dirPlayPause",
+      "dirPrevFrame",
+      "dirNextFrame",
+      "dirPrevSeg",
+      "dirNextSeg",
+      "dirSetIn",
+      "dirSetOut",
+      "dirApprove",
+      "dirRegen",
+      "dirPrompt",
+    ],
+  },
   { title: "已并入其他功能（保留兼容）", actions: ["addChat", "addLlmText"] },
 ];
 
@@ -77,6 +92,8 @@ const FIXED_KEYS: { label: string; keys: string[] }[] = [
   { label: "多选 / 框选连线", keys: ["Ctrl", "点击或框选"] },
   { label: "粘贴图片/文字", keys: ["Ctrl", "V"] },
   { label: "Alt 拖拽复制工作流", keys: ["Alt", "拖动节点"] },
+  { label: "导演台切换 Take 1~9（监看器内）", keys: ["1~9"] },
+  { label: "导演台变速播放（监看器内）", keys: ["J 慢放", "K 暂停复位", "L 快放"] },
 ];
 
 export function HotkeysTab() {

@@ -4,6 +4,7 @@ import {
   DEFAULT_SETTINGS,
   PROTOCOLS,
   ROLE_LABEL,
+  type CustomProtocol,
   type LegacyModelsV2,
   type LegacyRoleSlotV3,
   type LegacySettingsV1,
@@ -17,13 +18,14 @@ import {
 } from "../types";
 import { loadJSON, saveJSON } from "../persist";
 import { isTauri, uid } from "../utils";
+import { PROTO_PRESETS, presetProtoId } from "../protoPresets";
 import { useLocalGguf } from "./localGgufStore";
 import { toast } from "./uiStore";
 
 /** API Key 落盘加密前缀（DPAPI 密文 hex）；内存中始终是明文，只有写盘/读盘时转换 */
 const KEY_ENC_PREFIX = "dpapi:";
 
-/** 落盘前把 providers/search 的 apiKey 换成 DPAPI 密文（返回浅拷贝；加密失败保持明文——不比现状更差） */
+/** 落盘前把 providers/search/eagle 的密钥换成 DPAPI 密文（返回浅拷贝；加密失败保持明文——不比现状更差） */
 async function encryptKeysForDisk(s: Settings): Promise<Settings> {
   if (!isTauri) return s; // 浏览器预览无 DPAPI：保持明文
   const { invoke } = await import("@tauri-apps/api/core");
@@ -37,12 +39,16 @@ async function encryptKeysForDisk(s: Settings): Promise<Settings> {
     providers.push(p.apiKey ? { ...p, apiKey: await enc(p.apiKey) } : p);
   }
   const search = s.search.apiKey ? { ...s.search, apiKey: await enc(s.search.apiKey) } : s.search;
-  return { ...s, models: { ...s.models, providers }, search };
+  const eagleToken = s.eagle?.apiToken ? { ...s.eagle, apiToken: await enc(s.eagle.apiToken) } : s.eagle;
+  return { ...s, models: { ...s.models, providers }, search, eagle: eagleToken };
 }
 
 /** 加载后把 dpapi: 前缀的 apiKey 解回明文（失败保留原值并提示重填——换机器/换用户后 DPAPI 解不开） */
 async function decryptKeysFromDisk(s: Settings): Promise<Settings> {
-  const need = s.models.providers.some((p) => p.apiKey?.startsWith(KEY_ENC_PREFIX)) || !!s.search.apiKey?.startsWith(KEY_ENC_PREFIX);
+  const need =
+    s.models.providers.some((p) => p.apiKey?.startsWith(KEY_ENC_PREFIX)) ||
+    !!s.search.apiKey?.startsWith(KEY_ENC_PREFIX) ||
+    !!s.eagle?.apiToken?.startsWith(KEY_ENC_PREFIX);
   if (!need || !isTauri) return s;
   const { invoke } = await import("@tauri-apps/api/core");
   let failed = 0;
@@ -58,8 +64,9 @@ async function decryptKeysFromDisk(s: Settings): Promise<Settings> {
   const providers = [];
   for (const p of s.models.providers) providers.push(p.apiKey ? { ...p, apiKey: await dec(p.apiKey) } : p);
   const search = s.search.apiKey ? { ...s.search, apiKey: await dec(s.search.apiKey) } : s.search;
+  const eagleToken = s.eagle?.apiToken ? { ...s.eagle, apiToken: await dec(s.eagle.apiToken) } : s.eagle;
   if (failed) toast(`有 ${failed} 个 API Key 解密失败（DPAPI 绑定本机用户），请到「设置 → 模型配置」重新填写`, "err");
-  return { ...s, models: { ...s.models, providers }, search };
+  return { ...s, models: { ...s.models, providers }, search, eagle: eagleToken };
 }
 
 /**
@@ -78,6 +85,7 @@ async function decryptKeysFromDisk(s: Settings): Promise<Settings> {
 const LOCAL_GGUF_PROVIDER_ID = "local-gguf";
 
 function injectLocalGgufProviders(providers: ProviderCard[]): ProviderCard[] {
+  providers = [...providers.filter(p => p.id !== "codex-membership"), {id:"codex-membership",name:"Codex 会员 · 本机桥接",baseUrl:"",apiKey:"",models:{image:{protocol:"codex",models:["codex-image"]}}}];
   const localModels = useLocalGguf.getState().models;
   if (!localModels.length) return providers;
   const chatModels = localModels.map((m) => m.name);
@@ -136,6 +144,77 @@ function normalizeProviders(providers: ProviderCard[]): ProviderCard[] {
   });
 }
 
+/* ---------------- 协议库规整（3.6：协议只来自内置预设，不再有自定义编辑链路） ---------------- */
+
+/** 历史协议名 → 精简名（只留「中转站 + 用途」）；幂等：精简后的名字不会再被改 */
+const PROTO_NAME_MAP: [RegExp, string][] = [
+  [/^65535\s*异步生图/, "65535 生图"],
+  [/^APIMart\s+GPT-Image-2\s*异步生图/i, "APIMart 生图"],
+  [/^APIMart\s+[\w.-]+\s*异步生视频/i, "APIMart 生视频"],
+  [/^Grsai\s+nano-banana/i, "Grsai 生图"],
+];
+
+/** 精简协议显示名：去掉「（…）」「·修正版」等历史标注，认得的旧预设名换成新简名 */
+function simplifyProtoName(name: string): string {
+  for (const [re, to] of PROTO_NAME_MAP) if (re.test(name)) return to;
+  return name
+    .replace(/（[^）]*）/g, "")
+    .replace(/·修正版/g, "")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+}
+
+/**
+ * 协议库与预设对账（每次加载 / 导入配置时跑一遍，幂等）：
+ *  ① 名称精简：去掉「（…）」「·修正版」等历史标注，认得的旧预设名换成新简名；
+ *  ② 同名收敛：历史导入的预设协议（旧 id）统一改绑到 preset-<key>，避免库里出现两条同名协议；
+ *  ③ 只保留仍被服务商槽位引用的协议（custom:<id>），没人用的孤儿清掉；
+ *  ④ 预设派生的协议（id=preset-*）内容强制刷新为当前预设——站点接口修了改预设即全员生效；
+ *  ⑤ baseUrl 命中预设的服务商：对应用途槽位还走内置协议（如 openai）时自动换成预设协议
+ *     （这些站的生图/生视频必须走各自的异步通道，OpenAI 兼容路径本来就不通）；
+ *     槽位已绑定任何自定义协议的一律不动。
+ */
+function syncPresetProtocols(providers: ProviderCard[], protos: CustomProtocol[]): CustomProtocol[] {
+  const named = protos.map((p) => ({
+    ...p,
+    role: (p.role === "video" || p.role === "audio" ? p.role : "image") as CustomProtocol["role"],
+    name: simplifyProtoName(p.name),
+  }));
+  for (const preset of PROTO_PRESETS) {
+    const pid = presetProtoId(preset.key);
+    const legacyIds = new Set(
+      named.filter((p) => p.id !== pid && p.name === preset.proto.name && p.role === preset.proto.role).map((p) => p.id),
+    );
+    if (!legacyIds.size) continue;
+    for (const pv of providers)
+      for (const [role, slot] of Object.entries(pv.models))
+        if (slot.protocol.startsWith("custom:") && legacyIds.has(slot.protocol.slice(7)))
+          pv.models[role as ModelRole] = { ...slot, protocol: `custom:${pid}` };
+  }
+  const bound = new Set<string>();
+  for (const p of providers)
+    for (const slot of Object.values(p.models)) if (slot.protocol.startsWith("custom:")) bound.add(slot.protocol.slice(7));
+  const list = named.filter((p) => bound.has(p.id));
+  for (const preset of PROTO_PRESETS) {
+    const id = presetProtoId(preset.key);
+    // 被引用的预设条目统一刷新/补建（②的改绑只换了引用，条目本体要在这里落进库里）
+    const i = list.findIndex((p) => p.id === id);
+    if (bound.has(id)) list[i >= 0 ? i : list.length] = { ...preset.proto, id };
+  }
+  for (const preset of PROTO_PRESETS) {
+    const id = presetProtoId(preset.key);
+    const role = preset.proto.role;
+    for (const pv of providers) {
+      if (!preset.hostMatch.test(pv.baseUrl ?? "")) continue;
+      const slot = pv.models[role];
+      if (!slot || slot.protocol.startsWith("custom:")) continue;
+      pv.models[role] = { ...slot, protocol: `custom:${id}` };
+      if (!list.some((p) => p.id === id)) list.push({ ...preset.proto, id });
+    }
+  }
+  return list;
+}
+
 type SettingsState = {
   settings: Settings;
   loaded: boolean;
@@ -151,22 +230,19 @@ type SettingsState = {
 
 /** 任意来源的部分配置 → 规整为完整 Settings（缺项补默认，槽位/默认键规整为新结构） */
 function normalize(v: Partial<Settings>): Settings {
+  const providers = normalizeProviders(v.models?.providers ?? []);
+  const protos = syncPresetProtocols(providers, v.customProtocols ?? []);
   return {
-    models: fixDefaults({ providers: normalizeProviders(v.models?.providers ?? []), defaults: v.models?.defaults ?? {} }),
+    models: fixDefaults({ providers, defaults: v.models?.defaults ?? {} }),
     search: { ...DEFAULT_SETTINGS.search, ...(v.search ?? {}) },
     save: { ...DEFAULT_SETTINGS.save, ...(v.save ?? {}) },
     comfy: { ...DEFAULT_SETTINGS.comfy, ...(v.comfy ?? {}) },
     theme: v.theme ?? "dark",
     gpuBoost: v.gpuBoost ?? true,
     sound: { ...DEFAULT_SETTINGS.sound, ...(v.sound ?? {}) },
-    protoSelfHeal: v.protoSelfHeal ?? true,
     hotkeys: { ...DEFAULT_HOTKEYS, ...(v.hotkeys ?? {}) },
     shortcuts: v.shortcuts ?? [],
-    // 旧数据的协议没有 role 或 role 非法 → 一律归为图片（可在「设置 → 协议」编辑改用途）
-    customProtocols: (v.customProtocols ?? []).map((p) => ({
-      ...p,
-      role: p.role === "video" ? ("video" as const) : p.role === "audio" ? ("audio" as const) : ("image" as const),
-    })),
+    customProtocols: protos,
     // 稳定性/成本：浅合并默认值，老数据无这些键 → 拿全默认（submitMax=0 不重复扣费）
     retry: { ...DEFAULT_SETTINGS.retry, ...(v.retry ?? {}) },
     budget: { ...DEFAULT_SETTINGS.budget, ...(v.budget ?? {}) },
@@ -175,6 +251,24 @@ function normalize(v: Partial<Settings>): Settings {
     enhance: { ...DEFAULT_SETTINGS.enhance, ...(v.enhance ?? {}) },
     // 本地 GGUF 引擎：浅合并默认值，老数据无此键 → 空对象（首次使用时引导配置）
     localLlm: { ...DEFAULT_SETTINGS.localLlm, ...(v.localLlm ?? {}) },
+    // Eagle 资产桥：浅合并默认值；metadata 深一层单独合并
+    eagle: {
+      ...DEFAULT_SETTINGS.eagle,
+      ...(v.eagle ?? {}),
+      metadata: { ...DEFAULT_SETTINGS.eagle.metadata, ...(v.eagle?.metadata ?? {}) },
+    },
+    // MCP 服务器（Streamable HTTP）：老数据无此键 → 空列表；逐项兜底必填字段
+    mcp: {
+      servers: (v.mcp?.servers ?? [])
+        .filter((s) => s && typeof s.url === "string" && s.url.trim())
+        .map((s) => ({
+          id: String(s.id ?? "").trim(),
+          name: String(s.name ?? "").trim() || s.url,
+          url: s.url.trim(),
+          enabled: s.enabled !== false,
+          headers: s.headers && typeof s.headers === "object" ? s.headers : undefined,
+        })),
+    },
   };
 }
 
@@ -194,6 +288,7 @@ function fixDefaults(cfg: ModelsCfg): ModelsCfg {
   const defaults = { ...cfg.defaults };
   for (const role of ROLES) {
     const { pid, model } = splitModelKey(defaults[role]);
+    if (role === "image" && pid === "codex-membership") { defaults[role] = "codex-membership::codex-image"; continue; }
     const p = cfg.providers.find((x) => x.id === pid && x.models[role]?.models.length);
     if (p) {
       const slot = p.models[role]!;
@@ -263,7 +358,7 @@ export const useSettings = create<SettingsState>((set, get) => {
   const commit = (next: Settings) => {
     set({ settings: next });
     // 落盘前 API Key 转 DPAPI 密文（内存保持明文，运行期无感）
-    void encryptKeysForDisk(next).then((disk) => saveJSON("settings.json", "v3", disk));
+    void encryptKeysForDisk(next).then((disk) => saveJSON("settings.json", "v4", disk));
   };
 
   return {
@@ -275,24 +370,30 @@ export const useSettings = create<SettingsState>((set, get) => {
         // 先初始化本地 GGUF 模型注册表（resolveModelCard 会在内存注入虚拟服务商）
         void useLocalGguf.getState().init();
         let merged: Settings | null = null;
-        const v3 = await loadJSON<Partial<Settings>>("settings.json", "v3");
-        if (v3) {
-          merged = normalize(v3);
+        // v4 = v3 + eagle 资产桥配置；v4 不存在时走老链路加载（normalize 自动补 eagle 默认值）
+        const v4 = await loadJSON<Partial<Settings>>("settings.json", "v4");
+        if (v4) {
+          merged = normalize(v4);
         } else {
-          // v3 不存在时依次回退：v2 → v1 → 上次自动备份（升级/异常后的兜底恢复）
-          const v2 = await loadJSON<{ models?: LegacyModelsV2 } & Partial<Omit<Settings, "models">>>("settings.json", "v2");
-          if (v2) {
-            merged = normalize({ ...v2, models: undefined });
-            merged = { ...merged, models: migrateModelsV2(v2.models ?? { cards: [], defaults: {} }) };
+          const v3 = await loadJSON<Partial<Settings>>("settings.json", "v3");
+          if (v3) {
+            merged = normalize(v3);
           } else {
-            const v1 = await loadJSON<LegacySettingsV1>("settings.json", "v1");
-            if (v1) merged = normalize(migrateV1(v1));
-            else {
-              const bak = await loadJSON<Partial<Settings>>("settings.backup.json", "v3");
-              if (bak) merged = normalize(bak);
+            // v3 不存在时依次回退：v2 → v1 → 上次自动备份（升级/异常后的兜底恢复）
+            const v2 = await loadJSON<{ models?: LegacyModelsV2 } & Partial<Omit<Settings, "models">>>("settings.json", "v2");
+            if (v2) {
+              merged = normalize({ ...v2, models: undefined });
+              merged = { ...merged, models: migrateModelsV2(v2.models ?? { cards: [], defaults: {} }) };
+            } else {
+              const v1 = await loadJSON<LegacySettingsV1>("settings.json", "v1");
+              if (v1) merged = normalize(migrateV1(v1));
+              else {
+                const bak = await loadJSON<Partial<Settings>>("settings.backup.json", "v4");
+                if (bak) merged = normalize(bak);
+              }
             }
+            if (merged) void encryptKeysForDisk(merged).then((d) => saveJSON("settings.json", "v4", d));
           }
-          if (merged) void encryptKeysForDisk(merged).then((d) => saveJSON("settings.json", "v3", d));
         }
         // 加载后把 dpapi: 密文 Key 解回明文（换机器/用户解不开 → 保留密文 + toast 提示重填）
         const final = (merged ? await decryptKeysFromDisk(merged) : null) ?? DEFAULT_SETTINGS;
@@ -300,7 +401,7 @@ export const useSettings = create<SettingsState>((set, get) => {
         applyGpu(final.gpuBoost);
         set({ settings: final, loaded: true });
         // 每次启动写一份备份（同样加密落盘），任何升级/迁移出问题都能从备份找回
-        if (merged) void encryptKeysForDisk(final).then((d) => saveJSON("settings.backup.json", "v3", d));
+        if (merged) void encryptKeysForDisk(final).then((d) => saveJSON("settings.backup.json", "v4", d));
       })()),
 
     importSettings: (raw) => {

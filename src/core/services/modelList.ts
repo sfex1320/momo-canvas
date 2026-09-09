@@ -34,7 +34,7 @@ export async function fetchModelList(protocol: ProtocolId, baseUrl: string, apiK
     }
     if (!ids.length)
       throw new Error(
-        `按 OpenAI 兼容方式尝试拉取失败（自定义协议本身没有标准的模型列表接口）。最后错误：${lastErr || "无模型返回"}。可直接输入模型名回车添加`,
+        `按 OpenAI 兼容方式尝试拉取失败（该协议本身没有标准的模型列表接口）。最后错误：${lastErr || "无模型返回"}。可直接输入模型名回车添加`,
       );
   } else if (protocol === "ollama") {
     // Ollama 原生 /api/tags，无需 API Key

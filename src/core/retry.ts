@@ -89,6 +89,11 @@ export async function runGenWithFallback<T>(
   signal: AbortSignal | undefined,
   run: (card: ModelCard) => Promise<T>,
 ): Promise<{ result: T; card: ModelCard; usedFallback: boolean }> {
+  // 会员任务不能因网络错误悄悄重复扣额度，更不能改走用户的付费 API。
+  if (primary.protocol === "codex") {
+    signal?.throwIfAborted();
+    return {result:await run(primary),card:primary,usedFallback:false};
+  }
   const { retry } = useSettings.getState().settings;
   const fbKey = role === "image" ? retry.fallbackImage : role === "video" ? retry.fallbackVideo : retry.fallbackAudio;
 

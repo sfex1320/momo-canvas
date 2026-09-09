@@ -6,13 +6,16 @@ import type { EditChannel, GalleryItem } from "../types";
 
 export type Toast = { id: string; msg: string; type: "info" | "ok" | "err" };
 
+/** n 等分的内部切割线位置（归一化，不含 0/1）——宫格切分「重置均分」与默认值共用 */
+export const evenSplit = (n: number) => Array.from({ length: Math.max(0, n - 1) }, (_, i) => (i + 1) / n);
+
 /** 报错历史条目（报错中心） */
 export type ErrLogItem = { id: string; time: number; source: string; message: string };
 
-/** 节点图片直接编辑会话（悬浮工具条「编辑」进入）：crop=裁剪；inpaint=局部重绘；mark=标记并合成 */
+/** 节点图片直接编辑会话（悬浮工具条「编辑」进入）：crop=裁剪；inpaint=局部重绘；mark=标记并合成；gridsplit=宫格切分 */
 export type MediaEditState = {
   nodeId: string;
-  mode: "crop" | "inpaint" | "mark";
+  mode: "crop" | "inpaint" | "mark" | "gridsplit";
   /** inpaint：当前蒙版 dataURL（与原图同尺寸 PNG，白=重绘区），笔触松手时写回 */
   mask?: string;
   /** inpaint：涂抹工具（画笔/框选/橡皮） */
@@ -32,6 +35,14 @@ export type MediaEditState = {
   aspect: string;
   /** crop：当前框选（归一化 0-1），松手时写回 */
   rect?: { x: number; y: number; w: number; h: number };
+  /** gridsplit：行列数（1-5，自定义选格器决定） */
+  gridRows: number;
+  gridCols: number;
+  /** gridsplit：内部切割线位置（归一化 0-1 升序，不含 0/1；竖线 cols-1 条 / 横线 rows-1 条），可在图上拖动 */
+  gridXs: number[];
+  gridYs: number[];
+  /** gridsplit：已选格子（"r-c"），按点击顺序 */
+  gridPicked: string[];
   /** 工具条按钮 → EditSurface 的动作信号（+1 触发一次） */
   undoTick: number;
   clearTick: number;
@@ -65,6 +76,8 @@ type UiState = {
   charLibOpen: boolean;
   /** Skill 管理器弹层 */
   skillMgrOpen: boolean;
+  /** Comfy 工作流同步中心弹层 */
+  comfySyncOpen: boolean;
   /** 导演台全屏工作台 */
   directorOpen: boolean;
   /** GGUF 导入向导弹层 */
@@ -73,6 +86,8 @@ type UiState = {
   localLlmSetupOpen: boolean;
   /** 打开导演台时的画布节点 id */
   directorNodeId: string | null;
+  /** 3.5 P0：当前打开的导演项目 id（canonical——按它解析项目，nodeId 仅作画布定位兜底） */
+  directorProjectId: string | null;
   lightbox: string | null;
   /** 灯箱对比模式的「原图」：非空时灯箱显示前后对比滑块 */
   lightboxBefore: string | null;
@@ -82,7 +97,8 @@ type UiState = {
   lightboxList: string[] | null;
   setLightboxList: (v: string[] | null) => void;
   /** 顺序预览播放列表（时间线粗剪「预览成片」）：非空时全屏播放器逐段自动连播 */
-  seqPreview: string[] | null;
+  /** 顺序预演条目：url + 可选入出点（秒）——与导出入出点同源 */
+  seqPreview: Array<{ url: string; inSec?: number; outSec?: number }> | null;
   addMenu: AddMenuState;
   gallery: GalleryItem[];
   toasts: Toast[];
@@ -107,6 +123,7 @@ type UiState = {
   mediaEdit: MediaEditState | null;
   /** 全屏图片分层工作台当前来源节点；不创建处理节点 */
   layerEditorNodeId: string | null;
+  planarSheetNodeId: string | null;
   /** 打开中的「上游传入」预览弹窗（节点 id 列表） */
   upPop: string[];
   /** 弹窗锁定：锁定后预览弹窗不因点击画布/其他节点而收起（全局生效） */
@@ -134,21 +151,23 @@ type UiState = {
   setTemplateMgr: (v: boolean, editId?: string | null) => void;
   setCharLibOpen: (v: boolean) => void;
   setSkillMgrOpen: (v: boolean) => void;
+  setComfySyncOpen: (v: boolean) => void;
   setDirectorOpen: (v: boolean) => void;
   setGgufImportOpen: (v: boolean) => void;
   setLocalLlmSetupOpen: (v: boolean) => void;
   setLightbox: (src: string | null, before?: string | null, kind?: "image" | "video") => void;
-  setSeqPreview: (urls: string[] | null) => void;
+  setSeqPreview: (items: Array<{ url: string; inSec?: number; outSec?: number }> | null) => void;
   setAddMenu: (v: AddMenuState) => void;
   setProxHint: (ids: string[] | null) => void;
   setAlignGuides: (g: { x: number | null; y: number | null } | null) => void;
   toggleTool: () => void;
   setGroupDraw: (v: boolean) => void;
   /** 进入节点图片直接编辑（同一时刻仅一个会话；重复进入同节点同模式 = 无操作） */
-  openMediaEdit: (nodeId: string, mode: "crop" | "inpaint" | "mark") => void;
+  openMediaEdit: (nodeId: string, mode: "crop" | "inpaint" | "mark" | "gridsplit") => void;
   patchMediaEdit: (p: Partial<MediaEditState>) => void;
   closeMediaEdit: () => void;
   setLayerEditorNodeId: (id: string | null) => void;
+  setPlanarSheetNodeId: (id: string | null) => void;
   addGallery: (item: Omit<GalleryItem, "id" | "time">) => void;
   toast: (msg: string, type?: Toast["type"]) => void;
   /** 记录一次报错：进报错中心 + 弹可点击的错误弹窗 */
@@ -168,10 +187,12 @@ export const useUi = create<UiState>((set) => ({
   templateMgrEdit: null,
   charLibOpen: false,
   skillMgrOpen: false,
+  comfySyncOpen: false,
   directorOpen: false,
   ggufImportOpen: false,
   localLlmSetupOpen: false,
   directorNodeId: null,
+  directorProjectId: null,
   lightbox: null,
   lightboxBefore: null,
   lightboxKind: "image",
@@ -193,6 +214,7 @@ export const useUi = create<UiState>((set) => ({
   genPanelSuppressed: false,
   mediaEdit: null,
   layerEditorNodeId: null,
+  planarSheetNodeId: null,
   upPop: [],
   popLock: false,
   searchOpen: false,
@@ -218,12 +240,13 @@ export const useUi = create<UiState>((set) => ({
   setTemplateMgr: (v, editId) => set({ templateMgrOpen: v, templateMgrEdit: v ? (editId ?? null) : null }),
   setCharLibOpen: (v) => set({ charLibOpen: v }),
   setSkillMgrOpen: (v) => set({ skillMgrOpen: v }),
+  setComfySyncOpen: (v) => set({ comfySyncOpen: v }),
   setDirectorOpen: (v) => set({ directorOpen: v }),
   setGgufImportOpen: (v) => set({ ggufImportOpen: v }),
   setLocalLlmSetupOpen: (v) => set({ localLlmSetupOpen: v }),
   setLightbox: (src, before, kind) =>
     set({ lightbox: src, lightboxBefore: src ? (before ?? null) : null, lightboxKind: src ? (kind ?? "image") : "image" }),
-  setSeqPreview: (urls) => set({ seqPreview: urls?.length ? urls : null }),
+  setSeqPreview: (items) => set({ seqPreview: items?.length ? items : null }),
   setAddMenu: (v) => set({ addMenu: v }),
 
   setProxHint: (ids) =>
@@ -245,7 +268,7 @@ export const useUi = create<UiState>((set) => ({
 
   openMediaEdit: (nodeId, mode) =>
     set((s) => ({
-      // 保留上一次会话的笔刷/通道/工具习惯
+      // 保留上一次会话的笔刷/通道/工具习惯；宫格切分恢复上次的行列习惯，切割线重置均分
       mediaEdit: {
         nodeId,
         mode,
@@ -257,6 +280,11 @@ export const useUi = create<UiState>((set) => ({
         prompt: "",
         channel: s.mediaEdit?.channel ?? "auto",
         aspect: "free",
+        gridRows: s.mediaEdit?.mode === "gridsplit" ? s.mediaEdit.gridRows : 3,
+        gridCols: s.mediaEdit?.mode === "gridsplit" ? s.mediaEdit.gridCols : 3,
+        gridXs: evenSplit(s.mediaEdit?.mode === "gridsplit" ? s.mediaEdit.gridCols : 3),
+        gridYs: evenSplit(s.mediaEdit?.mode === "gridsplit" ? s.mediaEdit.gridRows : 3),
+        gridPicked: [],
         undoTick: 0,
         clearTick: 0,
       },
@@ -264,6 +292,7 @@ export const useUi = create<UiState>((set) => ({
   patchMediaEdit: (p) => set((s) => (s.mediaEdit ? { mediaEdit: { ...s.mediaEdit, ...p } } : s)),
   closeMediaEdit: () => set({ mediaEdit: null }),
   setLayerEditorNodeId: (id) => set({ layerEditorNodeId: id, mediaEdit: null }),
+  setPlanarSheetNodeId: (id) => set({ planarSheetNodeId: id, mediaEdit: null }),
 
   addGallery: (item) =>
     set((s) => ({ gallery: [{ ...item, id: uid(), time: Date.now() }, ...s.gallery].slice(0, 200) })),

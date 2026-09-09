@@ -1,8 +1,8 @@
 import { create } from "zustand";
-import type { AssetFolder, AssetGenMeta, AssetItem, AssetKind } from "../types";
+import type { AssetFolder, AssetGenMeta, AssetItem, AssetKind, EagleRemoteItem } from "../types";
 import { loadJSON, saveJSON } from "../persist";
-import { errMsg, hashDataUrl, sanitizeFilename, uid } from "../utils";
-import { deleteAssetFile, extFromMime, fetchBytes, kindFromExt, mimeFromExt, sniffExt, storeAssetFile } from "../services/assetFiles";
+import { errMsg, hashDataUrl, isTauri, sanitizeFilename, uid, dataUrlToBytes } from "../utils";
+import { assetToBlobUrl, assetsDir, deleteAssetFile, extFromMime, fetchBytes, kindFromExt, makeImageThumb, makeVideoThumb, mimeFromExt, sniffExt, storeAssetFile } from "../services/assetFiles";
 import { toast } from "./uiStore";
 import { useBoard } from "./boardStore";
 
@@ -16,6 +16,7 @@ export type CollectInput = {
   catalogId?: string;
   catalogSource?: string;
   catalogRole?: AssetItem["catalogRole"];
+  catalogSegments?: AssetItem["catalogSegments"];
   spatialLockZh?: string;
   spatialLockEn?: string;
   model?: string;
@@ -35,6 +36,16 @@ export type CollectInput = {
 
 /** 回收站保留天数：超过自动彻底清理（删除磁盘文件） */
 const TRASH_DAYS = 30;
+
+/**
+ * 项目资产过滤谓词（3.5 §9.5，纯函数——AssetLibrary 与集成测试共用同一份逻辑）：
+ * 开启「本项目」时只保留 director.projectId 匹配的资产；projectId 为空时不过滤（无项目上下文）。
+ */
+export function assetVisibleInProject(item: Pick<AssetItem, "director">, projectId: string | undefined | null, projectOnly: boolean): boolean {
+  if (!projectOnly) return true;
+  if (!projectId) return true;
+  return item.director?.projectId === projectId;
+}
 
 type AssetState = {
   items: AssetItem[];
@@ -69,6 +80,18 @@ type AssetState = {
   createFolder: (name: string) => string;
   renameFolder: (id: string, name: string) => void;
   deleteFolder: (id: string) => void;
+  /** 通用字段修补（Eagle 同步引擎写绑定状态/标签合并等；带序守卫照常落盘） */
+  patchItem: (id: string, patch: Partial<AssetItem>) => void;
+  /** Eagle 拉回登记：文件已由 Rust 流式落盘进 assets，这里补缩略图并建立资产条目 */
+  registerEagleImport: (input: {
+    absPath: string;
+    size: number;
+    ext: string;
+    fingerprint: string;
+    remote: EagleRemoteItem;
+    link: AssetItem["eagle"];
+    lineage?: AssetItem["lineage"];
+  }) => Promise<AssetItem | null>;
 };
 
 let initOnce: Promise<void> | null = null;
@@ -129,6 +152,7 @@ export const useAssets = create<AssetState>((set, get) => {
               catalogId: input.catalogId ?? hit.catalogId,
               catalogSource: input.catalogSource ?? hit.catalogSource,
               catalogRole: input.catalogRole ?? hit.catalogRole,
+              catalogSegments: input.catalogSegments ?? hit.catalogSegments,
               spatialLockZh: input.spatialLockZh ?? hit.spatialLockZh,
               spatialLockEn: input.spatialLockEn ?? hit.spatialLockEn,
             };
@@ -169,6 +193,7 @@ export const useAssets = create<AssetState>((set, get) => {
           catalogId: input.catalogId,
           catalogSource: input.catalogSource,
           catalogRole: input.catalogRole,
+          catalogSegments: input.catalogSegments,
           spatialLockZh: input.spatialLockZh,
           spatialLockEn: input.spatialLockEn,
           model: input.model,
@@ -190,6 +215,8 @@ export const useAssets = create<AssetState>((set, get) => {
         set((s) => ({ items: [item, ...s.items.filter((i) => i.id !== replaced?.id)] }));
         persist();
         if (replaced) void deleteAssetFile(replaced.path, replaced.thumb);
+        // Eagle 自动推送：只异步入队，绝不等待 Eagle（生成流程零感知；引擎自行离线重试）
+        void import("../eagleSyncEngine").then((m) => m.queueEaglePush([item.id], { auto: true }));
         return item;
       } catch (e) {
         console.warn("[assets] collect failed", e);
@@ -317,6 +344,82 @@ export const useAssets = create<AssetState>((set, get) => {
         items: s.items.map((i) => (i.folderId === id ? { ...i, folderId: null } : i)),
       }));
       persist();
+    },
+
+    patchItem: (id, patch) => {
+      let changed = false;
+      set((s) => ({
+        items: s.items.map((i) => {
+          if (i.id !== id) return i;
+          const next = { ...i, ...patch };
+          if (JSON.stringify(next) !== JSON.stringify(i)) {
+            changed = true;
+            return next;
+          }
+          return i;
+        }),
+      }));
+      if (changed) persist();
+    },
+
+    registerEagleImport: async ({ absPath, size, ext, fingerprint, remote, link, lineage }) => {
+      try {
+        const kind = kindFromExt(ext);
+        // 缩略图：图片/矢量/视频现场生成（失败不阻塞导入，卡片回落类型图标）
+        let thumbPath: string | undefined;
+        let width: number | undefined;
+        let height: number | undefined;
+        const wantsThumb = kind === "image" || kind === "vector" || kind === "video";
+        if (wantsThumb && isTauri) {
+          try {
+            const blobUrl = await assetToBlobUrl(absPath, mimeFromExt(ext));
+            const meta =
+              kind === "video"
+                ? await makeVideoThumb(blobUrl)
+                : await makeImageThumb(blobUrl);
+            if (meta) {
+              const { writeFile } = await import("@tauri-apps/plugin-fs");
+              const { join } = await import("@tauri-apps/api/path");
+              const dir = await assetsDir();
+              width = meta.width;
+              height = meta.height;
+              thumbPath = await join(dir, "thumbs", `${Date.now()}_${uid(6)}_${remote.id}.webp`);
+              await writeFile(thumbPath, dataUrlToBytes(meta.thumb));
+            }
+          } catch (e) {
+            console.warn("[assets] eagle thumb failed", e);
+          }
+        }
+        const item: AssetItem = {
+          id: uid(),
+          kind,
+          name: remote.name?.replace(/\.[^.]+$/, "") || "Eagle 素材",
+          path: absPath,
+          thumb: thumbPath,
+          mime: mimeFromExt(ext),
+          size,
+          width,
+          height,
+          prompt: remote.annotation,
+          annotation: remote.annotation,
+          rating: remote.star || 0,
+          tags: remote.tags.length ? [...remote.tags] : undefined,
+          model: undefined,
+          folderId: null,
+          source: "eagle",
+          contentHash: fingerprint.slice(0, 32),
+          createdAt: Date.now(),
+          ...(link ? { eagle: link } : {}),
+          ...(lineage ? { lineage } : {}),
+        };
+        set((s) => ({ items: [item, ...s.items] }));
+        persist();
+        return item;
+      } catch (e) {
+        console.warn("[assets] eagle import failed", e);
+        toast(`登记 Eagle 素材失败：${errMsg(e)}`, "err");
+        return null;
+      }
     },
   };
 });

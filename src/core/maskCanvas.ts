@@ -82,6 +82,82 @@ export async function cropByRect(src: string, rect: { x: number; y: number; w: n
 
 export type OutpaintPadsPx = { l: number; r: number; t: number; b: number };
 
+/** 色键抠图：把与背景主色接近的像素变透明（元素拆解「保像素档」与「重绘档」共用）
+ *  key 不传时从四边采样众数色（海报背景几乎总是占据边缘）；tolerance 内全透明、soft 软带线性过渡，边缘不留硬锯齿。
+ *  与 layering 同款策略：全分辨率主线程单遍处理，调用前让调用方 rAF 让位一次。 */
+export async function chromaKey(
+  src: string,
+  opts: { key?: [number, number, number]; tolerance?: number; soft?: number } = {},
+): Promise<string> {
+  const img = await loadImg(src);
+  const w = img.naturalWidth;
+  const h = img.naturalHeight;
+  const [canvas, ctx] = canvasOf(w, h);
+  ctx.drawImage(img, 0, 0, w, h);
+  const imageData = ctx.getImageData(0, 0, w, h);
+  const data = imageData.data;
+
+  // 背景主色：四边条带采样（各边取中线一行/列，步进 4px），出现频次最高的量化色胜出
+  let key = opts.key;
+  if (!key) {
+    const buckets = new Map<string, { n: number; r: number; g: number; b: number }>();
+    const bump = (r: number, g: number, b: number) => {
+      const q = `${r >> 4},${g >> 4},${b >> 4}`;
+      const cur = buckets.get(q) ?? { n: 0, r: 0, g: 0, b: 0 };
+      cur.n++;
+      cur.r += r;
+      cur.g += g;
+      cur.b += b;
+      buckets.set(q, cur);
+    };
+    for (let x = 0; x < w; x += 4) {
+      let i = (x + 0 * w) * 4;
+      bump(data[i], data[i + 1], data[i + 2]);
+      i = (x + (h - 1) * w) * 4;
+      bump(data[i], data[i + 1], data[i + 2]);
+    }
+    for (let y = 0; y < h; y += 4) {
+      let i = (0 + y * w) * 4;
+      bump(data[i], data[i + 1], data[i + 2]);
+      i = (w - 1 + y * w) * 4;
+      bump(data[i], data[i + 1], data[i + 2]);
+    }
+    let best: { n: number; r: number; g: number; b: number } | null = null;
+    for (const v of buckets.values()) if (!best || v.n > best.n) best = v;
+    if (!best || !best.n) return src; // 采样失败（1px 图？）原样返回
+    key = [Math.round(best.r / best.n), Math.round(best.g / best.n), Math.round(best.b / best.n)];
+  }
+
+  const tolerance = opts.tolerance ?? 42;
+  const soft = opts.soft ?? 30;
+  const hard = tolerance * tolerance;
+  const softSq = (tolerance + soft) * (tolerance + soft);
+  for (let i = 0; i < data.length; i += 4) {
+    if (data[i + 3] === 0) continue;
+    const dr = data[i] - key[0];
+    const dg = data[i + 1] - key[1];
+    const db = data[i + 2] - key[2];
+    const d = dr * dr + dg * dg + db * db;
+    if (d <= hard) data[i + 3] = 0;
+    else if (d < softSq) {
+      const t = (d - hard) / (softSq - hard); // 0→透明边缘 1→保留
+      data[i + 3] = Math.round(data[i + 3] * t);
+    }
+  }
+  ctx.putImageData(imageData, 0, 0);
+  return canvas.toDataURL("image/png");
+}
+
+/** 透明图层铺纯色底：生图模型普遍不吃 alpha 通道，元素重绘/改字前先铺底，回来再色键抠掉 */
+export async function flattenToSolid(src: string, color = "#ffffff"): Promise<string> {
+  const img = await loadImg(src);
+  const [canvas, ctx] = canvasOf(img.naturalWidth, img.naturalHeight);
+  ctx.fillStyle = color;
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.drawImage(img, 0, 0);
+  return canvas.toDataURL("image/png");
+}
+
 /** 扩图画布：原图按 pads 摆入扩大的透明画布；mask 为「原图区域不透明、新区域透明」（OpenAI 语义：透明 = 待生成）
  *  长边超过 cap 时整体等比缩小，避免超出 GPT Image 尺寸上限 */
 export async function buildOutpaintCanvas(

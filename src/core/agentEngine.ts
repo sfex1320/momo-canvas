@@ -14,7 +14,8 @@ import { useAssets } from "./stores/assetStore";
 import { useUi, pushError, toast } from "./stores/uiStore";
 import { useBoard } from "./stores/boardStore";
 import { chatStream } from "./services/llm";
-import { webSearch, searchContext } from "./services/webSearch";
+import { searchContext, webSearchForModel } from "./services/webSearch";
+import { brandPrompt } from "./stores/designStore";
 import { generateImage } from "./services/imageGen";
 import { generateVideo } from "./services/videoGen";
 import { runFlow } from "./runner";
@@ -22,8 +23,24 @@ import { assetUrl } from "./services/assetFiles";
 import { clamp, errMsg, isTauri, parseJsonLoose, uid } from "./utils";
 import { beginTask, endTask, isAbortError } from "./runControl";
 import { chatCaps, familyPresets, gptSize, imageFamily, nearestAspect, parseRatio, scalePresetToTier } from "./modelMeta";
+import { normalizeAgentAction, type AgentAction } from "./agentProtocol";
+import { executeCapability, agentToolHint, getCapability } from "./capability";
+// 内置能力的注册副作用：应用加载本模块时完成（必须由消费方触发——index.ts 若直接
+// import builtin 会被静态提升，在 index 自己求值前执行注册，撞上 const registry 的 TDZ）
+import "./capability/builtin";
+import { checkAgentTurn, waitAgentTurn, generationRefs } from "./agentTurn";
+import { budgetGate } from "./capability/budget";
+import { estimateCost } from "./pricing";
+import { useUsage } from "./stores/usageStore";
 
 const MAX_ROUNDS = 12;
+let activeTurn: AbortController | null = null;
+/** 停止理解、确认等待和本轮生成；服务端已受理任务的计费以服务商为准。 */
+export function stopAssistant() { activeTurn?.abort(); }
+
+
+/** 执行轨迹与确认卡必须显示到具体模型，不能只写服务商名让直选看起来像没生效。 */
+const modelLabel = (card: Pick<ModelCard, "name" | "model">) => `${card.name} · ${card.model}`;
 
 const AGENT_SYSTEM = `你是 MOMO 智能画布的「创作 Agent」，一位全能 AI 美术指导。
 用户用自然语言描述创作需求（可能附参考图）。你的职责：理解需求 → 必要时联网搜集资料 → 关键方向与用户确认 → 撰写高质量提示词 → 调用生成工具产出图片/视频 → 简要汇报。
@@ -44,7 +61,14 @@ const AGENT_SYSTEM = `你是 MOMO 智能画布的「创作 Agent」，一位全�
 
 【生成确认闸——程序强制】
 - image / video 动作第一次执行前，程序会自动向用户确认方案（汇总提示词/画幅/模型），用户确认后**程序直接执行该动作**，执行结果下一轮告诉你——你不需要重发动作，也不要自己在 ask 里做确认。
-- 若用户选择「再改改」，先与用户完善方案（reply / ask），在用户明确要求前不要再输出生成动作。
+- 若用户选择「再想想/再改改」，先与用户完善方案（reply / ask），在用户明确要求前不要再输出生成动作。
+- 当用户已经对你上一条生成方案回答「确认/开始/生成/可以」，或明确说「立即生成/重新生成/再来一张」时，必须立刻输出对应的 image / video 动作。禁止再用 reply 说「方案已锁定」「确认后程序会自动生成」「下一轮开始生成」——reply 只是文字，不会调用生成工具。
+
+【每轮创作闭环——首轮与后续修改完全一致】
+1. 理解本轮目标与上一轮成果；涉及药品说明、产品参数、时效信息、事实核对或用户明确要求搜索时，先 search。只改颜色、构图、文字等已有方案内容时可直接沿用上下文，不为走流程而搜索。
+2. 综合搜索结果、参考图片和历史方案进行思考，形成完整成品提示词。
+3. 准备好后直接输出 image/video 动作；程序会在确认卡里向用户展示提示词，并提供「确认生成 / 再想想」。不要先用 reply 展示一遍方案再让用户另发“生成”。
+4. 用户要求修改上一轮图片时，把上一轮成图当作视觉参考，image 动作设 useRefs=true；修改完成后重新走本闭环。
 
 【行为准则】
 - 目标导向：用户要的是成品，不是聊天。需求明确（含画幅）时尽快进入生成，不要无谓地多问。用户没指定风格时，用你的专业判断直接定一个高质量方向生成——用户不满意自然会说「再改改」，这比先抛一堆方案问一圈更受欢迎。
@@ -54,38 +78,9 @@ const AGENT_SYSTEM = `你是 MOMO 智能画布的「创作 Agent」，一位全�
 - 【禁止虚构系统状态】生成是否失败、失败原因，一律以「【系统反馈】」里的原文为准——不要自己编造"通道异常/模型未返回结果/连续失败"这类说辞，也不要引用不存在的界面按钮（如「重新生成」按钮）。用户说"重新生成/再来一次"时，正确做法是你自己重新输出 image / video 动作，而不是让用户去点什么。
 - 全程使用中文。`;
 
-type AgentAction =
-  | { action: "search"; query: string }
-  | { action: "ask"; question: string; options?: string[] }
-  | { action: "image"; prompt: string; count?: number; aspect?: string; resolution?: string; useRefs?: boolean }
-  | { action: "video"; prompt: string; useRefs?: boolean; duration?: string }
-  | { action: "reply"; text: string };
-
 /** 从模型输出里抠出动作 JSON；抠不出来就返回 null（当普通文本回复处理） */
 function parseAction(raw: string): AgentAction | null {
-  const j = parseJsonLoose<Record<string, unknown>>(raw);
-  if (!j || typeof j.action !== "string") return null;
-  if (j.action === "search" && typeof j.query === "string") return { action: "search", query: j.query };
-  if (j.action === "ask" && typeof j.question === "string")
-    return {
-      action: "ask",
-      question: j.question,
-      options: Array.isArray(j.options) ? j.options.filter((x): x is string => typeof x === "string").slice(0, 4) : [],
-    };
-  if (j.action === "image" && typeof j.prompt === "string")
-    return {
-      action: "image",
-      prompt: j.prompt,
-      // count 留 undefined：模型没显式填时，用从对话里嗅探到的数量（"生成3张"），再退回 1
-      count: typeof j.count === "number" && j.count > 0 ? j.count : undefined,
-      aspect: typeof j.aspect === "string" ? j.aspect : undefined,
-      resolution: typeof j.resolution === "string" ? j.resolution : undefined,
-      useRefs: !!j.useRefs,
-    };
-  if (j.action === "video" && typeof j.prompt === "string")
-    return { action: "video", prompt: j.prompt, useRefs: !!j.useRefs, duration: typeof j.duration === "string" ? j.duration : undefined };
-  if (j.action === "reply" && typeof j.text === "string") return { action: "reply", text: j.text };
-  return null;
+  return normalizeAgentAction(parseJsonLoose<Record<string, unknown>>(raw));
 }
 
 /** 把 Agent 请求的比例/清晰度映射成该绘画模型家族的实际请求参数（ Banana 走 aspect/resolution，其余家族换算成尺寸） */
@@ -123,7 +118,7 @@ function sizingToNodeData(sizing: { aspect?: string; resolution?: string; size?:
 }
 
 /** 会话历史 → LLM 上下文（助手消息压缩成一句话摘要，附工具反馈） */
-function buildContext(scratch: string[]): ChatMsg[] {
+function buildContext(scratch: string[], includeGeneratedImages = false): ChatMsg[] {
   const st = useAgent.getState();
   const msgs = st.messages;
   const ctx: ChatMsg[] = [];
@@ -134,9 +129,13 @@ function buildContext(scratch: string[]): ChatMsg[] {
       text: `【前情摘要】以下是更早对话的要点（供你延续上下文，不必向用户复述）：\n${st.summary}`,
     });
   }
-  for (const m of msgs.slice(-14)) {
+  const recent = msgs.slice(-14);
+  const lastVisualMsgId = includeGeneratedImages
+    ? [...recent].reverse().find((m) => m.results?.some((r) => r.kind === "image"))?.id
+    : undefined;
+  for (const m of recent) {
     if (m.role === "user") {
-      ctx.push({ role: "user", text: m.text || "（参考图）", images: m.images });
+      ctx.push({ role: "user", text: (m.text || "（参考图）") + (m.referenceMode === "none" ? "\n【本轮设置】不参考历史图片，生成动作 useRefs 必须为 false。" : ""), images: m.images });
     } else {
       // 进行中的那条助手消息不进上下文
       if (!m.text && !m.results?.length) continue;
@@ -145,10 +144,19 @@ function buildContext(scratch: string[]): ChatMsg[] {
         m.text,
         m.question ? `（曾向你确认「${m.question.text}」，你选择：${m.question.answer ?? "未答"}）` : "",
         m.results?.length
-          ? `（已交付 ${m.results.length} 个${m.results[0].kind === "video" ? "视频" : "图片"}，提示词：${(m.results[0].prompt ?? "").slice(0, 80)}）`
+          ? `（已交付 ${m.results.length} 个${m.results[0].kind === "video" ? "视频" : "图片"}，提示词：${(m.results[0].prompt ?? "").slice(0, 3000)}）`
           : "",
       ].filter(Boolean).join("\n");
       ctx.push({ role: "assistant", text: done || "…" });
+      // 后续修改必须让真正支持视觉的对话模型重新看到上一轮成图，而不是只读 80 字提示词摘要。
+      // 用 user 视觉上下文块回注，兼容 OpenAI / Anthropic / Gemini 的图片输入消息形态。
+      if (m.id === lastVisualMsgId && m.results?.some((r) => r.kind === "image")) {
+        ctx.push({
+          role: "user",
+          text: "【上一轮成图视觉上下文】这是你刚才交付的图片。后续若用户要求修改，请结合图片实际画面与文字要求决定新提示词，不要把这条说明当成用户的新需求。",
+          images: m.results.filter((r) => r.kind === "image").slice(0, 2).map((r) => r.src),
+        });
+      }
     }
   }
   if (scratch.length) {
@@ -249,14 +257,6 @@ function sniffCountFromChat(): number | undefined {
 }
 
 /** 用户最近一次附带的参考图 */
-function lastUserImages(): string[] | undefined {
-  const msgs = useAgent.getState().messages;
-  for (let i = msgs.length - 1; i >= 0; i--) {
-    if (msgs[i].role === "user" && msgs[i].images?.length) return msgs[i].images;
-  }
-  return undefined;
-}
-
 /** 收录成果：资产库 + 生成记录（与画布节点生成同等待遇） */
 function collectResults(results: AgentResult[]) {
   const group = results.length > 1
@@ -277,7 +277,11 @@ function collectResults(results: AgentResult[]) {
 /** Agent 循环里，启用模型自带联网时追加到系统提示后的说明段 */
 const NET_HINT = `\n\n【联网——已启用】本次请求已启用你自带的联网搜索能力（tools 已注入请求）。需要实时资料、潮流、事实核查时，直接自行联网检索，再基于结果输出下一个动作；**禁止输出 search 动作**——它专供没有内置联网时使用，在你联网开启期间会被程序直接拒绝执行。若你发现自己实际无法联网（检索不到结果），基于已有知识创作并在回复中说明。`;
 
-async function agentLoop(asstId: string) {
+/** 第二次创作的语义动作复核：由对话模型理解意图，程序不靠固定口令猜“是否生成”。 */
+const ACTION_AUDIT_HINT = `\n\n【当前轮次：动作审计】你上一轮准备输出普通回复，但本会话此前已经交付过生成成果。请以用户最新自然语言、参考图片和完整上下文为准，重新判断用户此刻真正需要的是继续讨论/修改方案，还是实际制作新的图片或视频。若需要实际制作，必须输出 image/video 动作；reply 只能表达文字，绝不能承诺稍后、下一轮或自动生成。不要根据某个关键词机械判断，要理解整句话与上下文。`;
+
+async function agentLoop(asstId: string, signal: AbortSignal) {
+  const ask = (id: string, question: string, options: string[]) => waitAgentTurn(useAgent.getState().askQuestion(id, question, options), signal);
   const st = () => useAgent.getState();
   const scratch: string[] = [];
   /** 最近生成的图片（视频动作的首帧来源） */
@@ -286,45 +290,102 @@ async function agentLoop(asstId: string) {
   const spec: { aspect?: string; resolution?: string } = {};
   /** 生成确认闸：已确认过的方案签名（prompt+画幅+张数）。生成扣费前必须先向用户确认一次 */
   let confirmedSig = "";
+  /** 第二次创作起，普通回复先交给模型自己做一次语义动作审计，避免“口头说生成”却没输出动作 */
+  const currentAt = st().messages.findIndex((m) => m.id === asstId);
+  const hasEarlierGeneration = st().messages
+    .slice(0, currentAt < 0 ? st().messages.length : currentAt)
+    .some((m) => !!m.results?.length);
+  let replyAudited = false;
+  /** 本轮一旦见过 image/video 动作，后续 reply 就是工具后的正常收尾，不再审计，防重复生成 */
+  let executableActionSeen = false;
   /** 外部搜索接口本会话已失败过（true 后不再执行 search 动作，防止模型反复重试空烧轮数） */
   let searchFailed = false;
   /** 联网 tools 被服务端拒绝过（端点不支持/中转站剥参数）：本轮任务内不再尝试注入，避免每轮都白失败一次 */
   let netBroken = false;
 
   for (let round = 0; round < MAX_ROUNDS; round++) {
+    checkAgentTurn(signal);
     const card = resolveModelCard("chat", st().modelId);
-    // 联网开关开启且模型自带联网（GLM/MiniMax/混元…）→ 让模型自己查，比 search 动作少绕一圈。
+    const thinkSid = st().addStep(
+      asstId,
+      "think",
+      `${replyAudited ? "复核意图并选择真实动作" : scratch.length ? "结合上下文完善提示词" : "理解需求并规划创作"}（${modelLabel(card)}）`,
+    );
+    // 联网开关开启且模型支持请求内服务端联网（GLM/混元等）→ 让模型自己查，比 search 动作少绕一圈。
     // 必须在系统提示里告知模型「已启用内置联网」，否则模型不知道自己带着 tools，
     // 仍会按协议输出 search 动作去走外部搜索接口（自带联网形同虚设）
     const useBuiltin = !netBroken && st().webSearch && chatCaps(card).builtinSearch;
+    const system =
+      AGENT_SYSTEM + agentToolHint() + (useBuiltin ? NET_HINT : "") + (replyAudited && !executableActionSeen ? ACTION_AUDIT_HINT : "");
     let raw: string;
     try {
       raw = (
-        await chatStream(card, buildContext(scratch), {
-          system: useBuiltin ? AGENT_SYSTEM + NET_HINT : AGENT_SYSTEM,
+        await chatStream(card, buildContext(scratch, chatCaps(card).vision), {
+          signal,
+          system,
           builtinSearch: useBuiltin,
           disableThinking: !st().thinkingOn, // 思考模式开关（仅创作助手生效）
         })
       ).text;
     } catch (e) {
-      if (!useBuiltin) throw e;
+      if (signal.aborted || isAbortError(e)) throw e;
+      if (!useBuiltin) {
+        st().setStep(asstId, thinkSid, { status: "error", text: `理解需求失败：${errMsg(e)}` });
+        throw e;
+      }
       // 端点不认联网 tools（剥参数/400，部分中转站如此）→ 去掉联网按普通请求重发一次，任务不中断；
       // 本轮任务内记住教训，后续轮次直接走无联网
       netBroken = true;
       scratch.push(
         `（系统提示）联网搜索工具被服务端拒绝（${errMsg(e).slice(0, 140)}），已切换为无联网模式。请基于已有知识继续创作，关键事实不确定时向用户说明信息可能不是最新。`,
       );
-      raw = (
-        await chatStream(card, buildContext(scratch), {
-          system: AGENT_SYSTEM,
-          builtinSearch: false,
-          disableThinking: !st().thinkingOn,
-        })
-      ).text;
+      try {
+        raw = (
+          await chatStream(card, buildContext(scratch, chatCaps(card).vision), {
+            signal,
+            system: AGENT_SYSTEM + agentToolHint() + (replyAudited && !executableActionSeen ? ACTION_AUDIT_HINT : ""),
+            builtinSearch: false,
+            disableThinking: !st().thinkingOn,
+          })
+        ).text;
+      } catch (fallbackError) {
+        st().setStep(asstId, thinkSid, { status: "error", text: `理解需求失败：${errMsg(fallbackError)}` });
+        throw fallbackError;
+      }
     }
-    const act = parseAction(raw);
+    checkAgentTurn(signal);
+    st().setStep(asstId, thinkSid, {
+      status: "done",
+      text: `${replyAudited ? "已复核意图与执行动作" : "已理解需求并完善方案"}（${modelLabel(card)}）`,
+    });
+    let act = parseAction(raw);
+    if (!act) {
+      // 宽容：部分模型按 function-calling 风格输出 {"name":"能力id","arguments":{…}}（没有 action 字段）。
+      // name 能对上能力目录就按 tool 动作处理；对不上则按普通文本回复走下面的既有分支。
+      const j = parseJsonLoose<Record<string, unknown>>(raw);
+      const fnName = typeof j?.name === "string" ? j.name : "";
+      if (fnName && getCapability(fnName)) {
+        act = {
+          action: "tool",
+          tool: fnName,
+          args: j?.arguments && typeof j.arguments === "object" ? (j.arguments as Record<string, unknown>) : {},
+        };
+      }
+    }
 
-    // 模型没按协议输出 → 直接当它说的话展示，结束本轮
+    /* 第二轮修改后的关键兜底不猜用户用了什么“口令”：让对话模型根据完整上下文重新做语义路由。
+       reply 可以用于讨论，但不能一边承诺生成一边不输出 image/video；审计只做一次，避免正常聊天循环。 */
+    if (hasEarlierGeneration && !executableActionSeen && !replyAudited && (!act || act.action === "reply")) {
+      replyAudited = true;
+      const candidate = act?.action === "reply" ? act.text : raw;
+      scratch.push(
+        `（动作审计）当前对话已经交付过图片或视频。请重新理解用户最新消息与完整上下文，并检查你刚才准备给用户的回复：\n「${candidate.slice(0, 800)}」\n` +
+          "如果用户只想讨论、询问或继续修改方案，可以继续输出 reply/ask；如果用户是在要求制作、按修改方案重新制作、继续生成或立即执行，就必须输出真正的 image/video 动作。不要用 reply 承诺稍后或下一轮生成，因为 reply 不会调用工具。仍然只输出一个 JSON 动作。",
+      );
+      continue;
+    }
+
+    // 普通的协议外文本照常展示；上面的待生成态已经保证不会在这里静默结束。
     if (!act) {
       st().updateMsg(asstId, { text: raw });
       return;
@@ -336,6 +397,10 @@ async function agentLoop(asstId: string) {
     }
 
     if (act.action === "search") {
+      if (!st().webSearch) {
+        scratch.push("用户已关闭联网，本次搜索未执行。请直接回答或说明需要开启联网。");
+        continue;
+      }
       // 已启用模型自带联网：search 动作（外部搜索接口）没有意义，程序直接拒绝执行。
       // 提示词劝不住所有模型（输出协议里 search 排在最前，诱导太强），必须硬拦，
       // 否则会去调未配置的外部接口反复失败，任务卡死
@@ -354,8 +419,12 @@ async function agentLoop(asstId: string) {
       }
       const sid = st().addStep(asstId, "search", `搜索：${act.query}`);
       try {
-        const hits: SearchHit[] = await webSearch(useSettings.getState().settings.search, act.query);
-        st().setStep(asstId, sid, { status: "done", text: `搜索：${act.query}（${hits.length} 条结果）` });
+        const searched = await waitAgentTurn(webSearchForModel(card, useSettings.getState().settings.search, act.query), signal);
+        const hits: SearchHit[] = searched.hits;
+        st().setStep(asstId, sid, {
+          status: "done",
+          text: `${searched.source} 搜索：${act.query}（${hits.length} 条结果）`,
+        });
         scratch.push(
           `搜索「${act.query}」的结果：\n` +
             (hits.length
@@ -363,6 +432,7 @@ async function agentLoop(asstId: string) {
               : "（没有搜到结果）"),
         );
       } catch (e) {
+        checkAgentTurn(signal);
         searchFailed = true;
         st().setStep(asstId, sid, { status: "error", text: `搜索失败：${errMsg(e)}` });
         scratch.push(
@@ -373,12 +443,59 @@ async function agentLoop(asstId: string) {
     }
 
     if (act.action === "ask") {
-      const answer = await st().askQuestion(asstId, act.question, act.options ?? []);
+      const answer = await ask(asstId, act.question, act.options ?? []);
       scratch.push(`你向用户提问「${act.question}」，用户的回答是：${answer}`);
       continue;
     }
 
+    if (act.action === "tool") {
+      // 能力层（capability/）：统一信封——校验/确认策略/预算/幂等/完成验证都在 executeCapability 里过。
+      // 只读直接出结果；提案送审核池等用户确认；扣费类（run_batch / comfy 模板）由信封先回 confirm
+      // 计划，这里用助手自己的确认卡问用户，确认后带 confirmed 重进信封执行。
+      const targetProjectId=useUi.getState().directorProjectId ?? undefined;
+      const sid = st().addStep(asstId, "tool", `工作区能力：${act.tool}`);
+      try {
+        let res = await executeCapability(act.tool, act.args ?? {}, { channel: "assistant", signal, projectId: targetProjectId });
+        if (res.kind === "confirm") {
+          const answer = await ask(asstId, `${res.prompt}\n\n（确认后程序直接执行，结果下一轮告诉你）`, ["确认执行", "再想想"]);
+          if (!isConfirmAnswer(answer)) {
+            st().setStep(asstId, sid, { status: "error", text: "用户取消了本次执行" });
+            scratch.push(`用户暂不执行 ${act.tool}：「${answer}」。请按用户意见调整方案或改为口头说明，未经确认不要重发。`);
+            continue;
+          }
+          if((useUi.getState().directorProjectId ?? undefined)!==targetProjectId) throw new Error("确认期间切换了项目，请在目标项目重新发起任务");
+          res = await executeCapability(act.tool, act.args ?? {}, { channel: "assistant", signal, projectId: targetProjectId }, { confirmed: true });
+          if (res.kind === "confirm") {
+            // 带了 confirmed 还要求确认 = 信封状态异常，不给模型留反复确认的循环口
+            st().setStep(asstId, sid, { status: "error", text: "确认流程异常" });
+            scratch.push(`【工具 ${act.tool} 确认后仍要求确认】这是程序异常，请直接告知用户。`);
+            continue;
+          }
+        }
+        if (res.kind === "done") {
+          st().setStep(asstId, sid, { status: "done", text: `已完成：${act.tool}` });
+          scratch.push(`【工具 ${act.tool} 结果】\n${res.text}`);
+        } else if (res.kind === "blocked") {
+          st().setStep(asstId, sid, { status: "error", text: res.reason });
+          scratch.push(`【工具 ${act.tool} 被拦截】${res.reason}。请把原因告知用户，不要绕过闸门重试。`);
+        } else {
+          st().setStep(asstId, sid, { status: "error", text: res.error });
+          scratch.push(
+            `【工具 ${act.tool} 未执行】${res.error}。请换一种做法（修正参数或改用其他能力），不要原样重试；无法推进时直接告知用户。`,
+          );
+        }
+      } catch (e) {
+        st().setStep(asstId, sid, { status: "error", text: errMsg(e) });
+        scratch.push(`【工具 ${act.tool} 执行异常】${errMsg(e)}。请换一种做法或直接告知用户，不要原样重试。`);
+      }
+      continue;
+    }
+
     if (act.action === "image") {
+      executableActionSeen = true;
+      const imgCard = resolveModelCard("image", st().imageModelId);
+      const actualImagePrompt=brandPrompt(useBoard.getState().activeId,act.prompt);
+      const refs = act.useRefs ? generationRefs(st().messages, lastGenImages) : undefined;
       /* 画幅解析（模型经常漏填/乱填 JSON 字段，必须自己兜底，否则一律回落 1024x1024 出方图）：
          已确认的规格 > 动作里的字段 > 提示词里的措辞 > 用户在对话中说过的原话；每一级都先归一化（"竖屏"/"1920×1080" → "9:16"/"16:9"） */
       const fromChat = sniffSpecFromChat();
@@ -386,7 +503,7 @@ async function agentLoop(asstId: string) {
       const resolution = normResolution(spec.resolution) ?? normResolution(act.resolution) ?? fromChat.resolution;
       // 画幅完全没着落 → 强制问一轮再生成（用户明确要求过"要问分辨率"）
       if (!aspect || !resolution) {
-        const answer = await st().askQuestion(
+        const answer = await ask(
           asstId,
           "先定一下成图的画幅和清晰度，再开始生成：",
           ["竖屏 9:16 · 标清", "横屏 16:9 · 标清", "方图 1:1 · 高清", "竖屏 9:16 · 高清"],
@@ -403,19 +520,35 @@ async function agentLoop(asstId: string) {
 
       /* 生成前最终确认（防自动扣费）：规格齐了也不直接跑，先把完整方案给用户看，确认后才真正发起 */
       const n0 = clamp(Math.round(act.count ?? sniffCountFromChat() ?? 1), 1, 4);
+      /* 统一预算闸（与画布 runner 同一道门）：单次上限/日预算直接阻断，超阈值的花费并入确认卡提示。
+         此前助手生图不过预算、不记用量——同一笔花费从不同入口发起必须走同一道门。 */
+      let estCost = 0;
+      let costNote = "";
+      try {
+        estCost = estimateCost(imgCard.model, { images: n0 });
+      } catch {
+        /* 未配绘画模型时按 0 估，让后面 generateImage 的报错去提示 */
+      }
+      const gate1 = budgetGate(estCost, `生成 ${n0} 张图片`,{billing:imgCard.protocol==="codex"?"subscription":undefined});
+      if (gate1.block) {
+        scratch.push(`（预算闸）${gate1.block}。本次不执行 image 动作；请把原因告知用户，或按用户意见减少张数后再试。`);
+        continue;
+      }
+      if (estCost > 0) costNote = `\n· 预估花费：¥${estCost.toFixed(2)}`;
+      if (imgCard.protocol === "codex") costNote = "\n· 使用 Codex 共享会员额度，每次 1 张，不扣中转站费用";
       const sig = `img|${act.prompt}|${aspect}|${resolution}|${n0}`;
       if (confirmedSig !== sig) {
         let modelLab = "默认";
         try {
-          modelLab = resolveModelCard("image", st().imageModelId).name;
+          modelLab = modelLabel(imgCard);
         } catch {
           /* 没配绘画模型时让后面 generateImage 的报错去提示 */
         }
-        const brief0 = act.prompt.length > 60 ? `${act.prompt.slice(0, 60)}…` : act.prompt;
-        const answer = await st().askQuestion(
+        const brief0 = actualImagePrompt;
+        const answer = await ask(
           asstId,
-          `方案已就绪，确认后开始生成（会调用模型扣费）：\n· 提示词：${brief0}\n· 画幅：${aspect} · ${resolution} · ${n0} 张\n· 模型：${modelLab}`,
-          ["确认生成", "再改改"],
+          `方案已就绪，确认后开始生成（会调用模型扣费）：\n· 提示词：${brief0}\n· 画幅：${aspect} · ${resolution} · ${n0} 张\n· 模型：${modelLab}${costNote}\n· 参考图：${refs?.length??0} 张（按对话中显示顺序）`,
+          ["确认生成", "再想想"],
         );
         if (!isConfirmAnswer(answer)) {
           // 方案要改，旧规格不作数（改完会重新走规格确认 + 生成确认）
@@ -430,6 +563,13 @@ async function agentLoop(asstId: string) {
         // 模型复现 prompt 几乎必然有细微措辞差异，签名永远对不上会造成反复弹确认）
         confirmedSig = sig;
       }
+      checkAgentTurn(signal);
+      // 确认后二次过闸（等待用户作答期间日预算可能已被画布任务吃满）
+      const gate2 = budgetGate(estCost, `生成 ${n0} 张图片`,{billing:imgCard.protocol==="codex"?"subscription":undefined});
+      if (gate2.block) {
+        scratch.push(`（预算闸）${gate2.block}。已取消本次生成，请把原因告知用户。`);
+        continue;
+      }
 
       const brief = act.prompt.length > 42 ? `${act.prompt.slice(0, 42)}…` : act.prompt;
       const sid = st().addStep(asstId, "image", `生成图片：${brief}`);
@@ -438,7 +578,7 @@ async function agentLoop(asstId: string) {
       const board = useBoard.getState();
       const sizingPre = (() => {
         try {
-          return agentImageParams(resolveModelCard("image", st().imageModelId), aspect, resolution);
+          return agentImageParams(imgCard, aspect, resolution);
         } catch {
           return {};
         }
@@ -447,35 +587,43 @@ async function agentLoop(asstId: string) {
         prompt: act.prompt,
         status: "running",
         count: n0,
-        ...(st().imageModelId ? { modelId: st().imageModelId } : {}),
+        modelId: `${imgCard.id}::${imgCard.model}`,
         ...sizingToNodeData(sizingPre, aspect),
       });
       // 注册停止通道：画布节点上的「停止」按钮对 Agent 出图同样有效
-      const signal = beginTask(nodeId, "imageGen");
+      const nodeSignal = beginTask(nodeId, "imageGen");
+      const imageSignal = AbortSignal.any([signal, nodeSignal]);
+      const t0 = Date.now();
       try {
-        const imgCard = resolveModelCard("image", st().imageModelId);
         const n = n0;
-        const refs = act.useRefs ? lastUserImages() : undefined;
         // 比例/清晰度 → 该模型家族的实际参数（用户指定的画幅必须生效，不再静默退回 1:1）
         const sizing = agentImageParams(imgCard, aspect, resolution);
         const sizeLab = sizing.aspect ? `${sizing.aspect}·${sizing.resolution ?? resolution}` : sizing.size ?? "默认";
-        st().setStep(asstId, sid, { text: `生成图片：${brief}（${imgCard.name} · ${sizeLab}）` });
-        let results = await generateImage(imgCard, { prompt: act.prompt, n, refImages: refs, signal, ...sizing });
+        st().setStep(asstId, sid, { text: `生成图片：${brief}（${modelLabel(imgCard)} · ${sizeLab}）` });
+        let results = await generateImage(imgCard, { prompt: actualImagePrompt, n, refImages: refs, signal: imageSignal, onProgress:stage=>{st().setStep(asstId,sid,{text:stage});useBoard.getState().updateData(nodeId,{progress:stage},{result:true});}, ...sizing });
         // 中转站普遍无视 n 参数只回 1 张：不够就并行补齐（用户要 3 张就必须给 3 张）
         if (results.length < n) {
           const extra = await Promise.allSettled(
             Array.from({ length: n - results.length }, () =>
-              generateImage(imgCard, { prompt: act.prompt, n: 1, refImages: refs, signal, ...sizing }),
+              generateImage(imgCard, { prompt: actualImagePrompt, n: 1, refImages: refs, signal: imageSignal, ...sizing }),
             ),
           );
           for (const r of extra) if (r.status === "fulfilled") results = results.concat(r.value);
         }
+        checkAgentTurn(imageSignal);
+        results = results.slice(0, n);
+        if (!results.length) throw new Error("绘画模型未返回图片，请重试或检查模型配置");
         lastGenImages = results;
         useBoard.getState().updateData(nodeId, { status: "done", results, picked: 0 });
         const items: AgentResult[] = results.map((src) => ({ kind: "image" as const, src, prompt: act.prompt }));
         st().appendResults(asstId, items);
-        st().setStep(asstId, sid, { status: "done", text: `已生成 ${results.length} 张图片（${imgCard.name} · ${sizeLab}）` });
+        st().setStep(asstId, sid, {
+          status: "done",
+          text: `已生成 ${results.length} 张图片（${modelLabel(imgCard)} · ${sizeLab}）`,
+        });
         collectResults(items);
+        // 用量记账（与画布 runner 同一张账）：助手生成不再游离在用量看板之外
+        useUsage.getState().record(imgCard, { ok: true, images: results.length, durMs: Date.now() - t0 });
         // 本次方案已交付：确认闸复位，用户之后的新需求要重新确认一轮（防再次自动扣费）
         confirmedSig = "";
         scratch.push(
@@ -485,11 +633,14 @@ async function agentLoop(asstId: string) {
         if (isAbortError(e)) {
           useBoard.getState().updateData(nodeId, { status: "idle", error: undefined });
           st().setStep(asstId, sid, { status: "error", text: "已停止生成" });
-          scratch.push("用户手动停止了这次图片生成。请等用户的下一步指示，不要自行重试。");
+          st().updateMsg(asstId, { text: "已停止本次图片生成。你可以继续修改要求。" });
+          return;
         } else {
           useBoard.getState().updateData(nodeId, { status: "error", error: errMsg(e) });
           st().setStep(asstId, sid, { status: "error", text: `生图失败：${errMsg(e)}` });
           pushError("Agent 生图", errMsg(e));
+          // 失败也记账（与 runner 一致）；卡在 try 内解析不到时跳过
+          try { useUsage.getState().record(imgCard, { ok: false, durMs: Date.now() - t0 }); } catch { /* 无卡不计 */ }
           scratch.push(`生成图片失败：${errMsg(e)}。请调整策略（改提示词/换方案）或直接告知用户。`);
         }
       } finally {
@@ -499,20 +650,37 @@ async function agentLoop(asstId: string) {
     }
 
     if (act.action === "video") {
-      /* 视频更贵：与生图同款确认闸，方案没确认过就先问一轮再发起 */
+      executableActionSeen = true;
+      const vidCard = resolveModelCard("video", st().videoModelId);
+      const firstFrame = act.useRefs ? generationRefs(st().messages, lastGenImages)[0] : undefined;
+      /* 视频更贵：与生图同款确认闸 + 统一预算闸（同一道门，单次上限/日预算直接阻断） */
+      const durSec = Number(act.duration ?? 5) || 5;
+      let vEstCost = 0;
+      let vCostNote = "";
+      try {
+        vEstCost = estimateCost(vidCard.model, { videoSec: durSec });
+      } catch {
+        /* 未配视频模型时按 0 估，让后面 generateVideo 的报错去提示 */
+      }
+      const vGate1 = budgetGate(vEstCost, `生成 ${durSec} 秒视频`);
+      if (vGate1.block) {
+        scratch.push(`（预算闸）${vGate1.block}。本次不执行 video 动作；请把原因告知用户。`);
+        continue;
+      }
+      if (vEstCost > 0) vCostNote = `\n· 预估花费：¥${vEstCost.toFixed(2)}`;
       const vSig = `vid|${act.prompt}|${act.duration ?? ""}`;
       if (confirmedSig !== vSig) {
         let modelLab = "默认";
         try {
-          modelLab = resolveModelCard("video", st().videoModelId).name;
+          modelLab = modelLabel(vidCard);
         } catch {
           /* 没配视频模型时让后面 generateVideo 的报错去提示 */
         }
-        const brief0 = act.prompt.length > 60 ? `${act.prompt.slice(0, 60)}…` : act.prompt;
-        const answer = await st().askQuestion(
+        const brief0 = act.prompt.length > 800 ? `${act.prompt.slice(0, 800)}…` : act.prompt;
+        const answer = await ask(
           asstId,
-          `视频方案已就绪，确认后开始生成（视频生成费用较高）：\n· 提示词：${brief0}\n· 时长：${act.duration ?? "默认"} 秒\n· 模型：${modelLab}`,
-          ["确认生成", "再改改"],
+          `视频方案已就绪，确认后开始生成（视频生成费用较高）：\n· 提示词：${brief0}\n· 时长：${act.duration ?? "默认"} 秒\n· 模型：${modelLab}${vCostNote}`,
+          ["确认生成", "再想想"],
         );
         if (!isConfirmAnswer(answer)) {
           scratch.push(
@@ -523,19 +691,24 @@ async function agentLoop(asstId: string) {
         // 与生图同款：确认通过即当场执行，不回炉让模型重发（防复现偏差导致的反复确认）
         confirmedSig = vSig;
       }
+      checkAgentTurn(signal);
+      const vGate2 = budgetGate(vEstCost, `生成 ${durSec} 秒视频`);
+      if (vGate2.block) {
+        scratch.push(`（预算闸）${vGate2.block}。已取消本次生成，请把原因告知用户。`);
+        continue;
+      }
       const brief = act.prompt.length > 42 ? `${act.prompt.slice(0, 42)}…` : act.prompt;
       const sid = st().addStep(asstId, "video", `生成视频：${brief}`);
       // 与生图同款：先在画布落一个「生成中」的视频节点，进度与结果都写回它
       const nodeId = useBoard.getState().addNode("videoGen", canvasCenterPos(-165, -120), {
         prompt: act.prompt,
         status: "running",
-        ...(st().videoModelId ? { modelId: st().videoModelId } : {}),
+        modelId: `${vidCard.id}::${vidCard.model}`,
         ...(act.duration ? { duration: act.duration } : {}),
       });
-      const vSignal = beginTask(nodeId, "videoGen");
+      const vSignal = AbortSignal.any([signal, beginTask(nodeId, "videoGen")]);
+      const vt0 = Date.now();
       try {
-        const vidCard = resolveModelCard("video", st().videoModelId);
-        const firstFrame = act.useRefs ? (lastGenImages[0] ?? lastUserImages()?.[0]) : undefined;
         const url = await generateVideo(vidCard, {
           prompt: act.prompt,
           image: firstFrame,
@@ -546,13 +719,16 @@ async function agentLoop(asstId: string) {
             useBoard.getState().updateData(nodeId, { progress: msg });
           },
         });
+        checkAgentTurn(vSignal);
         // 视频体积大且 http 地址可能过期：先落资产库，用持久地址展示
         // Tauri 下资产是 AppData 绝对路径，必须经 assetUrl 转 asset: 协议，否则 webview 播不了
         const item = await useAssets.getState().collect({ src: url, kind: "video", prompt: act.prompt, name: act.prompt });
         const src = item ? (isTauri ? assetUrl(item.path) : item.path) : url;
         useBoard.getState().updateData(nodeId, { status: "done", resultUrl: src, resultUrls: [src], picked: 0, progress: "" });
         st().appendResults(asstId, [{ kind: "video", src, prompt: act.prompt }]);
-        st().setStep(asstId, sid, { status: "done", text: "已生成视频" });
+        st().setStep(asstId, sid, { status: "done", text: `已生成视频（${modelLabel(vidCard)}）` });
+        // 用量记账（与画布 runner 同一张账）
+        useUsage.getState().record(vidCard, { ok: true, videoSec: durSec, durMs: Date.now() - vt0 });
         // 与生图同款：交付后确认闸复位，下一个新需求重新确认
         confirmedSig = "";
         scratch.push("本轮已成功生成视频并展示给用户。用户之后再提生成需求时，必须重新执行动作。");
@@ -560,11 +736,13 @@ async function agentLoop(asstId: string) {
         if (isAbortError(e)) {
           useBoard.getState().updateData(nodeId, { status: "idle", error: undefined, progress: "" });
           st().setStep(asstId, sid, { status: "error", text: "已停止生成" });
-          scratch.push("用户手动停止了这次视频生成。请等用户的下一步指示，不要自行重试。");
+          st().updateMsg(asstId, { text: "已停止本次视频生成。你可以继续修改要求。" });
+          return;
         } else {
           useBoard.getState().updateData(nodeId, { status: "error", error: errMsg(e) });
           st().setStep(asstId, sid, { status: "error", text: `生成视频失败：${errMsg(e)}` });
           pushError("Agent 生视频", errMsg(e));
+          try { useUsage.getState().record(vidCard, { ok: false, durMs: Date.now() - vt0 }); } catch { /* 无卡不计 */ }
           scratch.push(`生成视频失败：${errMsg(e)}。请调整策略或直接告知用户。`);
         }
       } finally {
@@ -596,16 +774,24 @@ export async function sendAgentMessage() {
   const text = st.draft.trim();
   const images = st.attachments;
   if (!text && !images.length) return;
+  const turn = new AbortController();
+  activeTurn = turn;
   useAgent.setState({ running: true, draft: "", attachments: [] });
   st.pushUser(text, images);
   const asstId = useAgent.getState().beginAssistant();
   try {
-    await agentLoop(asstId);
+    await agentLoop(asstId, turn.signal);
   } catch (e) {
-    useAgent.getState().updateMsg(asstId, { text: `出错了：${errMsg(e)}` });
-    pushError("Agent", errMsg(e));
+    useAgent.getState().updateMsg(asstId, { text: isAbortError(e) ? "已停止。可以继续输入新的要求。" : `出错了：${errMsg(e)}` });
+    if (!isAbortError(e)) pushError("Agent", errMsg(e));
   } finally {
-    useAgent.setState({ running: false });
+    if (activeTurn === turn) activeTurn = null;
+    const state = useAgent.getState();
+    const pendingQuestion = state.messages.find(m => m.id === asstId)?.question;
+    if (pendingQuestion && pendingQuestion.answer === undefined) state.updateMsg(asstId, { question: { ...pendingQuestion, answer: "已停止" } });
+    const message = state.messages.find(m => m.id === asstId);
+    for (const step of message?.steps ?? []) if (step.status === "running") state.setStep(asstId, step.id, { status: "error", text: "已停止" });
+    useAgent.setState({ running: false, resolver: null });
     // Agent 的多轮任务同样推进前情摘要（与聊天模式共用；失败静默，结果留给下一轮）
     try {
       void maybeCompressHistory(resolveModelCard("chat", useAgent.getState().modelId)).catch(() => {});
@@ -651,7 +837,7 @@ async function maybeCompressHistory(card: ReturnType<typeof resolveModelCard>) {
     },
   ]);
   // 压缩期间用户点了「清空对话」→ 代次已变，这份摘要连同它的下标都已失效，直接丢弃
-  if (useAgent.getState().epoch !== epoch) return;
+  if (useAgent.getState().epoch !== epoch || useAgent.getState().summaryUpto > upto) return;
   useAgent.getState().setSummary(text.trim(), upto);
 }
 
@@ -662,6 +848,8 @@ export async function sendSideChat() {
   const text = st.draft.trim();
   const images = st.attachments;
   if (!text && !images.length) return;
+  const turn = new AbortController();
+  activeTurn = turn;
   useAgent.setState({ running: true, draft: "", attachments: [] });
   st.pushUser(text, images);
   const asstId = useAgent.getState().beginAssistant();
@@ -670,7 +858,7 @@ export async function sendSideChat() {
     const caps = chatCaps(card);
     // 带了参考图但模型可能没有视觉：提前提醒（不拦截，部分中转会静默忽略图片）
     if (images.length && !caps.vision) {
-      toast(`当前模型「${card.name}」可能不支持视觉输入，图片可能被忽略——可在面板上方换成多模态模型`, "err");
+      toast(`当前模型「${modelLabel(card)}」可能不支持视觉输入，图片可能被忽略——可在面板上方换成多模态模型`, "err");
     }
     const parts: string[] = [CHAT_SYSTEM];
     let builtin = false;
@@ -681,8 +869,9 @@ export async function sendSideChat() {
       } else {
         useAgent.getState().updateMsg(asstId, { reasoning: "正在联网搜索…" });
         try {
-          const hits = await webSearch(useSettings.getState().settings.search, text);
-          const ctx = searchContext(hits ?? []);
+          const searched = await webSearchForModel(card, useSettings.getState().settings.search, text);
+          useAgent.getState().updateMsg(asstId, { reasoning: `正在使用「${searched.source}」联网搜索…` });
+          const ctx = searchContext(searched.hits ?? []);
           if (ctx) parts.push(ctx);
         } catch (e) {
           toast(`联网搜索失败，将直接回答：${errMsg(e)}`, "info");
@@ -708,6 +897,7 @@ export async function sendSideChat() {
     void maybeCompressHistory(card).catch(() => {});
     const stream = (useBuiltin: boolean) =>
       chatStream(card, history, {
+        signal: turn.signal,
         system: parts.join("\n\n"),
         builtinSearch: useBuiltin,
         disableThinking: !useAgent.getState().thinkingOn, // 思考模式开关（仅创作助手生效）
@@ -717,13 +907,13 @@ export async function sendSideChat() {
     try {
       await stream(builtin);
     } catch (e) {
-      if (!builtin) throw e;
+      if (turn.signal.aborted || !builtin) throw e;
       // 中转站不认自带联网的 tools 参数 → 降级为内置搜索重试一次
       toast(`「${card.name}」自带联网调用失败，改用内置搜索重试`, "info");
       useAgent.getState().updateMsg(asstId, { text: "", reasoning: "正在联网搜索…" });
       try {
-        const hits = await webSearch(useSettings.getState().settings.search, text);
-        const ctx = searchContext(hits ?? []);
+        const searched = await webSearchForModel(card, useSettings.getState().settings.search, text);
+        const ctx = searchContext(searched.hits ?? []);
         if (ctx) parts.push(ctx);
       } catch {
         /* 搜索也失败就直接回答 */
@@ -737,9 +927,16 @@ export async function sendSideChat() {
     }
   } catch (e) {
     useAgent.getState().updateMsg(asstId, { text: `出错了：${errMsg(e)}` });
-    pushError("聊天", errMsg(e));
+    if (isAbortError(e)) useAgent.getState().updateMsg(asstId, { text: "已停止。可以继续输入新的要求。", reasoning: "" });
+    else pushError("聊天", errMsg(e));
   } finally {
-    useAgent.setState({ running: false });
+    if (activeTurn === turn) activeTurn = null;
+    const state = useAgent.getState();
+    const pendingQuestion = state.messages.find(m => m.id === asstId)?.question;
+    if (pendingQuestion && pendingQuestion.answer === undefined) state.updateMsg(asstId, { question: { ...pendingQuestion, answer: "已停止" } });
+    const message = state.messages.find(m => m.id === asstId);
+    for (const step of message?.steps ?? []) if (step.status === "running") state.setStep(asstId, step.id, { status: "error", text: "已停止" });
+    useAgent.setState({ running: false, resolver: null });
   }
 }
 

@@ -1,6 +1,7 @@
 import { memo, useRef } from "react";
 import type { NodeProps } from "@xyflow/react";
-import { mediaNodeWidth, NodeShell, PortOut } from "../NodeShell";
+import { NodeShell, PortIn, PortOut } from "../NodeShell";
+import { mediaNodeWidth } from "../../../core/imageInfo";
 import { EditSurface } from "../EditSurface";
 import { IcDownload, IcImage, IcScan, IcUpload } from "../../../ui/icons";
 import { useBoard } from "../../../core/stores/boardStore";
@@ -19,6 +20,20 @@ export const ImageNode = memo(function ImageNode({ id, data, selected }: NodePro
   const fileRef = useRef<HTMLInputElement>(null);
   // 宽度随图片比例自适应（竖图窄、横图宽）
   const dims = useImageDims(d.src);
+  // 分镜组切片：从所属组读「序号开关 + 本片在点击序中的位次」（原始值订阅，避免新引用）
+  const storyIdx = useBoard((s) => {
+    if (!d.storyTile) return -1;
+    const me = s.nodes.find((n) => n.id === id);
+    const g = me?.parentId ? s.nodes.find((n) => n.id === me.parentId) : undefined;
+    const order = (g?.data as { storyOrder?: string[] } | undefined)?.storyOrder;
+    return order ? order.indexOf(id) : -1;
+  });
+  const showOrder = useBoard((s) => {
+    if (!d.storyTile) return false;
+    const me = s.nodes.find((n) => n.id === id);
+    const g = me?.parentId ? s.nodes.find((n) => n.id === me.parentId) : undefined;
+    return !!(g?.data as { showOrder?: boolean } | undefined)?.showOrder;
+  });
 
   const onFile = async (f?: File | null) => {
     if (!f) return;
@@ -44,8 +59,9 @@ export const ImageNode = memo(function ImageNode({ id, data, selected }: NodePro
       status={d.status}
       error={d.error}
       selected={selected}
-      width={mediaNodeWidth(dims, 320)}
+      width={d.storyTile && d.tileSize ? d.tileSize.w : mediaNodeWidth(dims, 320)}
       media
+      hideHead={!!d.storyTile}
       headExtra={
         d.src ? (
           <>
@@ -65,7 +81,7 @@ export const ImageNode = memo(function ImageNode({ id, data, selected }: NodePro
       <div className="mnode-body">
         {d.src ? (
           <EditSurface id={id} src={d.src}>
-            <Thumb className="img-main" src={d.src} alt={d.name} res onClick={() => setLightbox(d.src!)} />
+            <Thumb className="img-main" src={d.src} alt={d.name} res={!d.storyTile} style={d.storyTile && d.tileSize ? { height: d.tileSize.h, objectFit: "fill" } : undefined} onClick={() => setLightbox(d.src!)} />
           </EditSurface>
         ) : (
           <div
@@ -89,6 +105,7 @@ export const ImageNode = memo(function ImageNode({ id, data, selected }: NodePro
             </span>
           </div>
         )}
+        {d.storyTile && showOrder && storyIdx >= 0 ? <i className="tile-order">{storyIdx + 1}</i> : null}
         <input
           ref={fileRef}
           type="file"
@@ -101,6 +118,8 @@ export const ImageNode = memo(function ImageNode({ id, data, selected }: NodePro
         />
       </div>
       <PortOut kind="image" />
+      {/* 分镜组切片：输入口只作原图溯源连线展示（点击「传入」不显示——NODE_INPUTS.image 为空） */}
+      {d.storyTile ? <PortIn /> : null}
     </NodeShell>
   );
 });

@@ -26,7 +26,7 @@
       }
     ],
     "security": {
-      "csp": null,
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' asset: blob: data: https: http:; media-src 'self' asset: blob:; connect-src 'self' ipc: http://ipc.localhost; font-src 'self' data:",
       "assetProtocol": {
         "enable": true,
         "scope": ["$APPDATA/**", "$APPDATA\\**"]
@@ -42,7 +42,9 @@
       "../models/sr/4xNomosWebPhoto_RealPLKSR_fp32_opset17.onnx": "models/4xNomosWebPhoto_RealPLKSR_fp32_opset17.onnx",
       "../models/sr/4xNomosUni_span_multijpg_fp32_opset17.onnx": "models/4xNomosUni_span_multijpg_fp32_opset17.onnx",
       "../models/sr/1xDeJPG_realplksr_otf_60_fp32_opset17.onnx": "models/1xDeJPG_realplksr_otf_60_fp32_opset17.onnx",
-      "../models/THIRD_PARTY_MODELS.txt": "models/THIRD_PARTY_MODELS.txt"
+      "../models/THIRD_PARTY_MODELS.txt": "models/THIRD_PARTY_MODELS.txt",
+      "../integrations/eagle/momo-link-service": "eagle-plugins/momo-link-service",
+      "../integrations/eagle/momo-link-inspector": "eagle-plugins/momo-link-inspector"
     },
     "icon": [
       "icons/32x32.png",

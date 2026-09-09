@@ -161,7 +161,7 @@ src-tauri/         Rust 壳（dialog / fs / http / store / opener + asset 协议
 - [x] ComfyUI 子工作流分支：一个模板拆成可命名、着色和独立运行的分支，节点内以“主模板 → 子菜单”选择；支持 SeedVR2 图片/视频放大等同文件多流程（连通分量自动检测 + extractVariantWorkflow + 二级菜单）
 - [x] Ollama 本地服务商：本地模型发现、聊天/提示词调用、隐私路由、显存释放和与 ComfyUI 大任务的资源冲突提示（原生 /api/chat 协议 + /api/tags 发现 + keep_alive 释放）
 - [x] 本地 GGUF 直跑 llama-server：选文件自动配 mmproj 一键「添加并测试」，Rust 受控子进程（无 shell 拼接、仅 127.0.0.1、健康检查、退出清理），模型直进对话选择器可发图；运行中模型可看日志/停止释放显存（local_llm.rs + localGgufStore + 虚拟服务商注入）
-- [x] 便携版首次启动自动创建桌面快捷方式（COM IShellLink 直写 .lnk，已存在即跳过）
+- [x] 便携版启动自动同步桌面快捷方式（COM IShellLink 直写 .lnk，缺失则创建，同名旧链接更新为当前程序，正确则跳过）
 - [x] MOMO Skill 基础设施：安全导入 `SKILL.md`/`.momoskill`、管理器、变量、适用范围、执行预览、结果快照与冲突检查，不执行上传脚本
 
 #### 阶段 1：提示词与范例系统

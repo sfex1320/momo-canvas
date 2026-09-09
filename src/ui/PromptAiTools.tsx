@@ -252,7 +252,7 @@ export function PromptAiTools({
               <textarea
                 className="textarea nodrag nowheel"
                 rows={3}
-                placeholder="例：改成赛博朋克风格的画面描述 / 提取其中的配色方案"
+                placeholder="例：把风格改成赛博朋克 / 把配色换成黄昏暖色调——只改指令涉及的部分，其余原样保留"
                 value={custom}
                 onChange={(e) => setCustom(e.target.value)}
               />

@@ -1,23 +1,25 @@
 /**
  * 自绘标题栏 — 品牌 / 画板切换 / 主题 / 设置 / 窗口控制
  */
-import { useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { useBoard } from "../../core/stores/boardStore";
 import { resolveModelCard, useSettings } from "../../core/stores/settingsStore";
 import { toast, useUi, type ErrLogItem } from "../../core/stores/uiStore";
 import { useAssets } from "../../core/stores/assetStore";
+import { useComfySync } from "../../core/stores/comfySyncStore";
+import { syncHealthOf } from "../../core/comfySync/health";
 import { useRunLog, type RunLogEntry } from "../../core/stores/logStore";
 import { chatStream } from "../../core/services/llm";
 import { freeComfyMemory, freeResultText } from "../../core/services/comfy";
-import { ERR_ANALYZE_SYSTEM, buildErrContext, extractProtocolFix } from "../../core/errorHelp";
+import { ERR_ANALYZE_SYSTEM, buildErrContext } from "../../core/errorHelp";
 import { errMsg, isTauri } from "../../core/utils";
 import {
   IcActivity,
   IcBell,
-  IcCheck,
   IcClose,
   IcBlack,
   IcBroom,
+  IcFlow,
   IcGallery,
   IcGear,
   IcHistory,
@@ -255,7 +257,7 @@ function BoardTabs() {
   );
 }
 
-/** 报错中心：铃铛按钮 + 历史报错弹层（每条可让 AI 分析并给方案，协议配置类问题可一键应用修复） */
+/** 报错中心：铃铛按钮 + 历史报错弹层（每条可让 AI 分析并给解决方案） */
 function ErrCenter() {
   const errlog = useUi((s) => s.errlog);
   const open = useUi((s) => s.errlogOpen);
@@ -279,18 +281,6 @@ function ErrCenter() {
     } catch (err) {
       setAna((s) => ({ ...s, [e.id]: { busy: false, text: `分析失败：${errMsg(err)}` } }));
     }
-  };
-
-  const applyFix = (text: string) => {
-    const fix = extractProtocolFix(text);
-    if (!fix) return;
-    const st = useSettings.getState();
-    // 原地替换，保持协议列表顺序（filter+push 会把协议甩到末尾，UI 里会突然跳位）
-    const list = st.settings.customProtocols;
-    const i = list.findIndex((x) => x.id === fix.id);
-    if (i < 0) return;
-    st.update("customProtocols", list.map((x, k) => (k === i ? fix : x)));
-    toast(`已应用协议修复：「${fix.name}」，重新运行节点即可（建议到「设置 → 协议」跑一次校准）`, "ok");
   };
 
   useEffect(() => {
@@ -329,7 +319,6 @@ function ErrCenter() {
             <div className="ep-list">
               {errlog.map((e) => {
                 const a = ana[e.id];
-                const fix = a && !a.busy ? extractProtocolFix(a.text) : null;
                 return (
                   <div key={e.id} className="ep-item">
                     <div className="ep-meta">
@@ -340,7 +329,7 @@ function ErrCenter() {
                       <button
                         className="btn sm"
                         style={{ minHeight: 24, padding: "1px 8px" }}
-                        title="让你配置的默认对话模型分析报错原因并给出解决方案；协议配置类问题可一键修复"
+                        title="让你配置的默认对话模型分析报错原因并给出解决方案"
                         disabled={a?.busy}
                         onClick={() => void analyze(e)}
                       >
@@ -349,11 +338,6 @@ function ErrCenter() {
                     </div>
                     <div className="ep-msg">{e.message}</div>
                     {a?.text ? <div className="ep-ana">{a.text}</div> : null}
-                    {fix ? (
-                      <button className="btn sm primary" style={{ marginTop: 6 }} onClick={() => applyFix(a!.text)}>
-                        <IcCheck size={14} /> 一键应用协议修复（{fix.name}）
-                      </button>
-                    ) : null}
                   </div>
                 );
               })}
@@ -521,7 +505,11 @@ function RunLogCenter() {
   );
 }
 
+const DesignTools = lazy(() => import("../canvas/DesignTools").then(m=>({default:m.DesignTools})));
+
 export function Titlebar() {
+  const [designOpen,setDesignOpen]=useState(false);
+  const boardId=useBoard(s=>s.activeId);
   const theme = useSettings((s) => s.settings.theme);
   const hotkeys = useSettings((s) => s.settings.hotkeys);
   const update = useSettings((s) => s.update);
@@ -537,6 +525,12 @@ export function Titlebar() {
   const setCharLibOpen = useUi((s) => s.setCharLibOpen);
   const agentOpen = useUi((s) => s.agentOpen);
   const setAgentOpen = useUi((s) => s.setAgentOpen);
+  const comfySyncOpen = useUi((s) => s.comfySyncOpen);
+  const setComfySyncOpen = useUi((s) => s.setComfySyncOpen);
+  const syncSources = useComfySync((s) => s.sources);
+  const syncWorkflows = useComfySync((s) => s.workflows);
+  const syncRunning = useComfySync((s) => s.running);
+  const syncHealth = syncHealthOf(syncSources, syncWorkflows, syncRunning);
   const { maximized, call } = useWindowControls();
 
   return (
@@ -548,6 +542,8 @@ export function Titlebar() {
         </span>
       </div>
       <BoardTabs />
+      <button className="icon-btn" title="设计工具：品牌包与尺寸画板" aria-label="设计工具" onClick={()=>setDesignOpen(true)}><IcSparkles size={18}/></button>
+      {designOpen && <Suspense fallback={<span>载入设计工具…</span>}><DesignTools key={boardId} onClose={()=>setDesignOpen(false)}/></Suspense>}
       <div className="spacer" data-tauri-drag-region />
       <button
         className={`icon-btn ${agentOpen ? "on" : ""}`}
@@ -562,6 +558,27 @@ export function Titlebar() {
       <RunLogCenter />
       <ErrCenter />
       <MemFreeBtn />
+      {(() => {
+        // Comfy 同步入口（规格 §6.1：状态点 灰=未配置 绿=正常 蓝=有新 黄=警告 红=失败）
+        const dotTitle: Record<string, string> = {
+          off: "Comfy 同步未启用",
+          empty: "Comfy 同步：未配置来源",
+          ok: "Comfy 同步：全部正常",
+          new: "Comfy 同步：有新发现或待同步内容",
+          warn: "Comfy 同步：来源离线或有警告",
+          error: "Comfy 同步：存在失败",
+        };
+        return (
+          <button
+            className={`icon-btn ${comfySyncOpen ? "on" : ""}`}
+            title={`Comfy 工作流同步：配置一次 ComfyUI 工作流目录，之后自动同步，无需再导出 API JSON\n${dotTitle[syncHealth] ?? ""}`}
+            onClick={() => setComfySyncOpen(!comfySyncOpen)}
+          >
+            <IcFlow size={19} />
+            <i className={`tb-sync-dot d-${syncHealth}`} />
+          </button>
+        );
+      })()}
       <button
         className={`icon-btn ${charLibOpen ? "on" : ""}`}
         title={`角色库：内置人物预设，一键生成整套角色素材${hk("charLib")}`}

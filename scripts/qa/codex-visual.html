@@ -1,0 +1,5 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="UTF-8"><title>Codex 与拆件导出界面验收</title></head><body><div id="root"></div><script>
+// 隔离 UI 验收：只使用固定协议响应，不读取用户账号、不调用真实生成。
+if(location.hostname!=="[::1]")throw Error("仅独立回环来源可运行");
+window.__TAURI_INTERNALS__={invoke:async(cmd)=>{if(cmd==='codex_bridge_status')return {executable:'codex.exe',account:{type:'chatgpt',planType:'pro'},limits:{rateLimits:{primary:{usedPercent:25,windowDurationMins:10080,resetsAt:1789282398}}}};if(cmd==='plugin:store|load')return 1;if(cmd==='plugin:store|get')return [null,false];if(cmd==='vector_export_apps')return {illustrator:false,coreldraw:false};if(cmd.startsWith('plugin:store|'))return;throw Error('UI 验收禁止真实操作：'+cmd);}};
+</script><script type="module" src="./codex-visual.tsx"></script></body></html>

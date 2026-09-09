@@ -7,14 +7,16 @@
  */
 import { useEffect, useRef, useState } from "react";
 import { useAgent } from "../../core/stores/agentStore";
+import { generationRefs } from "../../core/agentTurn";
 import { useUi } from "../../core/stores/uiStore";
 import { useBoard } from "../../core/stores/boardStore";
 import { useAssets } from "../../core/stores/assetStore";
-import { answerAgentQuestion, canvasCenterPos, genImageOnCanvas, sendAgentMessage, sendResultToCanvas, sendSideChat } from "../../core/agentEngine";
+import { stopAssistant, answerAgentQuestion, canvasCenterPos, genImageOnCanvas, sendAgentMessage, sendResultToCanvas, sendSideChat } from "../../core/agentEngine";
 import { assetToDataUrl, assetUrl } from "../../core/services/assetFiles";
 import { videoDuration } from "../../core/videoEdit";
 import { errMsg, fileToDataUrl } from "../../core/utils";
 import { chatCaps } from "../../core/modelMeta";
+import { canUseMiniMaxSearch } from "../../core/services/webSearch";
 import { resolveModelCard } from "../../core/stores/settingsStore";
 import { startVoiceCall, stopVoiceCall, subscribeVoice, voiceInputOnce, voiceState, type VoiceState } from "../../core/voiceChat";
 import { getNativeDragAsset } from "../assets/dragState";
@@ -39,6 +41,7 @@ import {
   IcText,
   IcTrash,
   IcVideo,
+  IcActivity,
 } from "../../ui/icons";
 import { toast } from "../../core/stores/uiStore";
 import type { AgentMsg, AgentResult, AgentStep } from "../../core/types";
@@ -86,12 +89,15 @@ function StepIcon({ s }: { s: AgentStep }) {
   if (s.status === "running") return <IcLoading size={14} />;
   if (s.status === "error") return <IcClose size={14} />;
   if (s.kind === "search") return <IcGlobe size={14} />;
+  if (s.kind === "think") return <IcBrain size={14} />;
   if (s.kind === "ask") return <IcChat size={14} />;
   if (s.kind === "image") return <IcImage size={14} />;
+  if (s.kind === "tool") return <IcActivity size={14} />;
   return <IcVideo size={14} />;
 }
 
 function ResultCard({ r }: { r: AgentResult }) {
+  const running = useAgent(s => s.running);
   const setLightbox = useUi((s) => s.setLightbox);
   return (
     <div className="ag-result">
@@ -104,6 +110,7 @@ function ResultCard({ r }: { r: AgentResult }) {
       )}
       {r.prompt ? <div className="ag-res-prompt" title={r.prompt}>{r.prompt}</div> : null}
       <div className="ag-res-acts">
+        {r.kind === "image" ? <button className="btn sm" disabled={running} onClick={() => { const state = useAgent.getState(); state.setMode("agent"); useAgent.setState({ attachments: [r.src], referenceMode: "auto" }); if (!state.draft.trim()) state.setDraft("基于这张图，"); }}><IcImage size={13} /> 以此图继续</button> : null}
         <button className="btn sm" onClick={() => sendResultToCanvas(r)}>
           <IcPlus size={13} /> 发到画布
         </button>
@@ -286,6 +293,8 @@ export function AgentPanel() {
   const messages = useAgent((s) => s.messages);
   const draft = useAgent((s) => s.draft);
   const attachments = useAgent((s) => s.attachments);
+  const referenceMode = useAgent(s => s.referenceMode);
+  const inheritedRefs = generationRefs([...messages, { role: "user", images: [] }]);
   const running = useAgent((s) => s.running);
   const modelId = useAgent((s) => s.modelId);
   const imageModelId = useAgent((s) => s.imageModelId);
@@ -380,9 +389,9 @@ export function AgentPanel() {
     }
   };
 
-  const send = () => void (mode === "chat" ? sendSideChat() : sendAgentMessage());
+  const send = () => void (awaiting ? sendAgentMessage() : mode === "chat" ? sendSideChat() : sendAgentMessage());
   const suggestions = mode === "chat" ? CHAT_SUGGESTIONS : AGENT_SUGGESTIONS;
-  // 联网按钮的提示随模型能力变化（Kimi/MiniMax/GLM 等自带联网时优先用模型自己的）
+  // 联网按钮的提示随实际路由变化：MiniMax 官方搜索接口 / 模型请求内联网 / 通用搜索商。
   let searchTitle =
     mode === "chat" ? "联网搜索：发送前先搜资料再回答" : "联网：让模型带着联网能力规划（关闭时仍可用内置搜索动作查资料）";
   let capsNote: string | undefined;
@@ -390,7 +399,8 @@ export function AgentPanel() {
     const card = resolveModelCard("chat", modelId);
     const caps = chatCaps(card);
     capsNote = caps.note;
-    if (caps.builtinSearch) searchTitle = `联网搜索：优先用「${card.name}」自带的联网搜索，失败自动降级为内置搜索`;
+    if (canUseMiniMaxSearch(card)) searchTitle = `联网搜索：使用「${card.name} · ${card.model}」的 MiniMax Coding Plan 搜索`;
+    else if (caps.builtinSearch) searchTitle = `联网搜索：优先用「${card.name} · ${card.model}」自带的联网搜索，失败自动降级为内置搜索`;
     else if (mode === "agent") searchTitle = "联网：当前模型没有自带联网，Agent 仍会用内置搜索接口查资料";
   } catch {
     /* 未配置对话模型时按默认提示 */
@@ -445,6 +455,7 @@ export function AgentPanel() {
         >
           <IcMic size={17} />
         </button>
+        {running ? <button className="btn sm" title="停止本轮思考或生成" onClick={stopAssistant}><IcClose size={14} /> 停止</button> : null}
         <button className="icon-btn" title="清空对话" onClick={clear} disabled={running}>
           <IcTrash size={17} />
         </button>
@@ -452,14 +463,17 @@ export function AgentPanel() {
       <div className="ag-models">
         <span className="ag-mslot" title={`对话模型（聊天/Agent 都走它）${capsNote ? ` · 能力：${capsNote}` : ""}`}>
           <IcBrain size={13} />
+          <small>对话</small>
           <ModelPicker role="chat" value={modelId} onChange={setModelId} />
         </span>
         <span className="ag-mslot" title="绘画模型：Agent 出图、聊天「在画布生图」都用它">
           <IcImage size={13} />
+          <small>绘画</small>
           <ModelPicker role="image" value={imageModelId} onChange={setImageModelId} />
         </span>
         <span className="ag-mslot" title="视频模型：Agent 出片用">
           <IcVideo size={13} />
+          <small>视频</small>
           <ModelPicker role="video" value={videoModelId} onChange={setVideoModelId} />
         </span>
       </div>
@@ -508,6 +522,10 @@ export function AgentPanel() {
       {inCall ? <VoiceCallOverlay v={voice} onHangup={stopVoiceCall} /> : null}
 
       <div className="ag-input-wrap">
+        {mode === "agent" && !running && !attachments.length && inheritedRefs.length > 0 ? <div className="ag-reference-plan">
+          <div><b>{referenceMode === "none" ? "本轮不参考图片" : "可沿用的参考图"}</b><button className="btn sm" onClick={() => useAgent.setState({ referenceMode: referenceMode === "none" ? "auto" : "none" })}>{referenceMode === "none" ? "恢复参考" : "不用旧图"}</button></div>
+          {referenceMode !== "none" ? <><div className="ag-reference-images">{inheritedRefs.map((src, i) => <button key={i} title={`只使用参考图 ${i + 1}`} onClick={() => useAgent.setState({ attachments: [src], referenceMode: "auto" })}><Thumb src={src} alt={`参考图 ${i + 1}`} /></button>)}</div><small>需要改图时使用；点击缩略图可只选这一张。新任务可点“不用旧图”。</small></> : <small>仍保留文字对话，本轮生成不传入历史图片。</small>}
+        </div> : null}
         {attachments.length ? (
           <div className="ag-attach">
             {attachments.map((s, i) => (
@@ -572,8 +590,8 @@ export function AgentPanel() {
               }
             }}
           />
-          <button className="send-btn" disabled={running || (!draft.trim() && !attachments.length)} onClick={send}>
-            {running ? <IcLoading size={18} /> : <IcSend size={18} />}
+          <button className="send-btn" disabled={(running && !awaiting) || (awaiting ? !draft.trim() : !draft.trim() && !attachments.length)} onClick={send}>
+            {running && !awaiting ? <IcLoading size={18} /> : <IcSend size={18} />}
           </button>
         </div>
       </div>

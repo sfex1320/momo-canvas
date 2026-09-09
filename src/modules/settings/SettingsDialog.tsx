@@ -6,14 +6,15 @@ import type React from "react";
 import { Modal } from "../../ui/kit";
 import { useUi } from "../../core/stores/uiStore";
 import {
-  IcActivity, IcFlow, IcFolder, IcGlobe, IcKeyboard, IcLayers, IcLogo, IcMusic, IcPalette, IcSparkles, IcUpscale,
+  IcActivity, IcEagle, IcFolder, IcGlobe, IcKeyboard, IcLayers, IcLink, IcLogo, IcMusic, IcPalette, IcSparkles, IcUpscale,
 } from "../../ui/icons";
 import { EnhanceModelsTab } from "./EnhanceModelsTab";
+import { EagleTab } from "./tabs/EagleTab";
 import { ModelsTab } from "./tabs/ModelsTab";
-import { ProtocolTab } from "./tabs/ProtocolTab";
 import { SearchTab } from "./tabs/SearchTab";
 import { SaveTab } from "./tabs/SaveTab";
 import { ComfyTab } from "./tabs/ComfyTab";
+import { McpTab } from "./tabs/McpTab";
 import { SoundTab } from "./tabs/SoundTab";
 import { HotkeysTab } from "./tabs/HotkeysTab";
 import { AppearanceTab } from "./tabs/AppearanceTab";
@@ -26,10 +27,11 @@ const TAB_GROUPS: { label: string; tabs: { key: string; label: string; icon: Rea
     label: "模型",
     tabs: [
       { key: "models", label: "模型配置", icon: <IcSparkles size={17} /> },
-      { key: "protocols", label: "协议", icon: <IcFlow size={17} /> },
       { key: "search", label: "联网搜索", icon: <IcGlobe size={17} /> },
       { key: "enhanceModels", label: "超清模型", icon: <IcUpscale size={17} /> },
       { key: "comfy", label: "ComfyUI", icon: <IcLayers size={17} /> },
+      { key: "mcp", label: "MCP 工具", icon: <IcLink size={17} /> },
+      { key: "eagle", label: "Eagle 资产桥", icon: <IcEagle size={17} /> },
     ],
   },
   {
@@ -75,11 +77,12 @@ export function SettingsDialog() {
         </div>
         <div className="settings-content">
           {tab === "models" && <ModelsTab />}
-          {tab === "protocols" && <ProtocolTab />}
           {tab === "search" && <SearchTab />}
           {tab === "save" && <SaveTab />}
           {tab === "enhanceModels" && <EnhanceModelsTab />}
           {tab === "comfy" && <ComfyTab />}
+          {tab === "mcp" && <McpTab />}
+          {tab === "eagle" && <EagleTab />}
           {tab === "sound" && <SoundTab />}
           {tab === "hotkeys" && <HotkeysTab />}
           {tab === "appearance" && <AppearanceTab />}

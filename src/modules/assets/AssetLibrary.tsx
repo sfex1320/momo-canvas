@@ -7,10 +7,11 @@
  */
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useReactFlow } from "@xyflow/react";
-import { useAssets } from "../../core/stores/assetStore";
+import { useAssets, assetVisibleInProject } from "../../core/stores/assetStore";
 import { useBoard } from "../../core/stores/boardStore";
 import { useSettings } from "../../core/stores/settingsStore";
-import { toast } from "../../core/stores/uiStore";
+import { toast, useUi } from "../../core/stores/uiStore";
+import { useEagle } from "../../core/stores/eagleStore";
 import { PopSelect } from "../../ui/PopSelect";
 import { ScrubVideoThumb } from "../../ui/VideoThumb";
 import { assetToDataUrl, assetToBlob, assetToBlobUrl, assetUrl } from "../../core/services/assetFiles";
@@ -28,6 +29,29 @@ async function nativeDragOut(list: AssetItem[]) {
   } catch (e) {
     toast(`拖出失败：${errMsg(e)}`, "err");
   }
+}
+
+/**
+ * 资产卡 / 组展开面板成员卡共用的拖拽启动逻辑：
+ * Tauri 走 OS 原生拖出（画布/快捷栏/资源管理器/第三方软件通吃）；
+ * 浏览器预览退回 HTML5 dataTransfer（画布/快捷栏）。
+ */
+function startAssetDrag(e: React.DragEvent, ids: string[], items: AssetItem[], hooks: { trackDragOut: () => void; endDragTrack: () => void }) {
+  const payload = ids.join(",");
+  if (isTauri) {
+    e.preventDefault();
+    setNativeDragAsset(payload);
+    hooks.trackDragOut();
+    const dragList = items.filter((x) => ids.includes(x.id));
+    void nativeDragOut(dragList).finally(() => {
+      setNativeDragAsset(null);
+      hooks.endDragTrack();
+    });
+    return;
+  }
+  e.dataTransfer.setData("momo/asset-id", payload);
+  e.dataTransfer.effectAllowed = "copy";
+  hooks.trackDragOut();
 }
 
 /** 另存为（预览层与右键菜单共用） */
@@ -70,6 +94,7 @@ import {
   IcClapper,
   IcClose,
   IcDownload,
+  IcEagle,
   IcEdit,
   IcFile,
   IcFolder,
@@ -89,6 +114,8 @@ import {
   IcVector,
   IcVideo,
 } from "../../ui/icons";
+import { EagleBrowser } from "./EagleBrowser";
+import { queueEaglePush, unlinkAssets } from "../../core/eagleSyncEngine";
 import "./assets.css";
 
 const KIND_TABS: { key: AssetKind | "all" | "directorRef" | "fav" | "trash"; label: string; icon: React.ReactNode }[] = [
@@ -192,6 +219,30 @@ function groupMemberOrder(item: AssetItem) {
   return Number.isFinite(n) ? n : 9_000;
 }
 
+/** Eagle 同步状态角标（绑定过才显示；文案短、hover 给完整说明） */
+function EagleBadge({ item }: { item: AssetItem }) {
+  const link = item.eagle;
+  if (!link) return null;
+  const map: Record<string, { text: string; title: string; cls: string }> = {
+    synced: { text: "Eagle ✓", title: "已同步到 Eagle 素材库", cls: "ok" },
+    queued: { text: "待同步", title: "已在同步队列等待处理", cls: "" },
+    pushing: { text: "同步中", title: "正在写入 Eagle…", cls: "" },
+    pulling: { text: "拉取中", title: "正在从 Eagle 拉回文件…", cls: "" },
+    "local-dirty": { text: "待同步", title: "本地有改动尚未同步到 Eagle", cls: "warn" },
+    "remote-dirty": { text: "Eagle 更新", title: "Eagle 端素材已被外部修改——右键「从 Eagle 导入新版」生成新版本（原版本保留）", cls: "warn" },
+    conflict: { text: "冲突", title: "两端都有修改，请手动选择以哪边为准", cls: "err" },
+    offline: { text: "离线", title: "Eagle 当前不可用，任务保留在队列中", cls: "" },
+    error: { text: "同步失败", title: link.error ?? "同步失败，可在右键重试或到设置页查看", cls: "err" },
+  };
+  const info = map[link.state];
+  if (!info) return null;
+  return (
+    <span className={`a-badge eagle ${info.cls}`} title={`Eagle 资产桥 · ${info.title}`}>
+      <IcEagle size={11} /> {info.text}
+    </span>
+  );
+}
+
 function fmtBytes(n: number) {
   if (n < 1024) return `${n} B`;
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
@@ -228,6 +279,11 @@ export function AssetLibrary() {
   const addTagMany = useAssets((s) => s.addTagMany);
 
   const [kind, setKind] = useState<AssetKind | "all" | "directorRef" | "fav" | "trash">("all");
+  /** 主区页签：本地资产 / Eagle 远程浏览 */
+  const [tab, setTab] = useState<"local" | "eagle">("local");
+  const connState = useEagle((s) => s.connState);
+  const eagleStats = useEagle((s) => s.stats);
+  const eagleEnabled = useSettings((s) => s.settings.eagle.enabled);
   const [folderId, setFolderId] = useState<string | "all">("all");
   const [tagFilter, setTagFilter] = useState<string | null>(null);
   const [keyword, setKeyword] = useState("");
@@ -291,9 +347,20 @@ export function AssetLibrary() {
   const endDragTrack = () => dragTrackStop.current?.();
   useEffect(() => () => dragTrackStop.current?.(), []);
 
+  // 3.5 §9.5：项目资产视图——从导演台打开资产库时默认「本项目」；用户可手动切到「全部资产」，
+  // 切换剧本后回到默认（跟随新 projectId，不闪旧项目资产）。projectOnly = null 表示未手动设置（跟默认）。
+  const directorProjectId = useUi((s) => s.directorProjectId);
+  const [projectOnlyManual, setProjectOnlyManual] = useState<boolean | null>(null);
+  const prevProjectRef = useRef(directorProjectId);
+  if (prevProjectRef.current !== directorProjectId) {
+    prevProjectRef.current = directorProjectId;
+    setProjectOnlyManual(null); // 剧本切换：过滤目标跟随新 projectId，手动偏好复位到默认
+  }
+  const projectOnly = projectOnlyManual ?? !!directorProjectId;
   const filtered = useMemo(() => {
     const kw = keyword.trim().toLowerCase();
     return items.filter((i) => {
+      if (!assetVisibleInProject(i, directorProjectId, projectOnly)) return false;
       // 来源维度：导演台参考素材（上游同步/参考格上传/声音提取落库）默认不混进普通视图，
       // 收进「导演台参考」分类统一管理；收藏与关键词搜索不受隐藏影响（要找的时候找得到）
       const isDirRef = i.director?.role === "reference";
@@ -309,7 +376,7 @@ export function AssetLibrary() {
         return false;
       return true;
     });
-  }, [items, kind, folderId, tagFilter, keyword]);
+  }, [items, kind, folderId, tagFilter, keyword, projectOnly, directorProjectId]);
 
   /** 同一次生成的多份资产在网格中只占一张组卡；展开后仍操作真实资产项。 */
   const entries = useMemo(() => {
@@ -362,6 +429,23 @@ export function AssetLibrary() {
   useEffect(() => {
     if (tagFilter && !allTags.some(([t]) => t === tagFilter)) setTagFilter(null);
   }, [tagFilter, allTags]);
+
+  /* Eagle 插件「在 MOMO 中定位」：打开资产库并直接预览目标资产 */
+  useEffect(() => {
+    const onFocus = (e: Event) => {
+      const id = (e as CustomEvent<{ assetId?: string }>).detail?.assetId;
+      if (!id) return;
+      const it = useAssets.getState().items.find((i) => i.id === id);
+      if (!it) return;
+      setOpen(true);
+      setTab("local");
+      setFocusedGroupId(null);
+      const idx = filtered.findIndex((x) => x.id === id);
+      setPreviewIdx(idx >= 0 ? idx : null);
+    };
+    window.addEventListener("momo:focus-asset", onFocus);
+    return () => window.removeEventListener("momo:focus-asset", onFocus);
+  }, [filtered, setOpen]);
 
   /* Esc 关闭；多选模式优先退出多选 */
   useEffect(() => {
@@ -723,27 +807,61 @@ export function AssetLibrary() {
               ))}
             </>
           ) : null}
+          {eagleEnabled ? (
+            <>
+              <div className="side-sec">连接</div>
+              <button
+                className={`side-item ${tab === "eagle" ? "on eagle" : ""}`}
+                title={
+                  connState === "ready"
+                    ? "浏览 Eagle 当前素材库（搜索 / 按需导入到 MOMO）"
+                    : "Eagle 资产桥未连接——点击去设置页开启"
+                }
+                onClick={() => (connState === "ready" ? setTab(tab === "eagle" ? "local" : "eagle") : useUi.getState().openSettings("eagle"))}
+              >
+                <IcEagle size={16} />
+                Eagle 素材库
+                {connState !== "ready" ? (
+                  <span className="cnt">{connState === "offline" ? "离线" : "未连"}</span>
+                ) : (
+                  <span className="cnt">
+                    {eagleStats.queued + eagleStats.failed > 0
+                      ? `${eagleStats.synced}/${eagleStats.synced + eagleStats.queued + eagleStats.failed}`
+                      : eagleStats.synced || ""}
+                  </span>
+                )}
+              </button>
+            </>
+          ) : null}
         </div>
 
         {/* 主区 */}
         <div className="al-main">
-          <div className="al-toolbar">
-            <div className="search-box">
-              <IcSearch size={16} />
-              <input
-                placeholder="按名称 / 提示词 / 模型筛选…"
-                value={keyword}
-                onChange={(e) => setKeyword(e.target.value)}
-              />
-              {keyword ? (
-                <button className="icon-btn" style={{ width: 24, height: 24 }} onClick={() => setKeyword("")}>
-                  <IcClose size={13} />
-                </button>
-              ) : null}
-            </div>
-            <span style={{ fontSize: "var(--fs-sm)", color: "var(--text-3)" }}>
-              {entries.length === filtered.length ? `${filtered.length} 项` : `${entries.length} 张卡片 · ${filtered.length} 项`}
-            </span>
+        <div className="al-toolbar">
+          {tab === "local" && <div className="al-scope" role="group" aria-label="资产范围">
+            <button aria-pressed={!projectOnly} onClick={()=>setProjectOnlyManual(false)}><IcLayers size={14}/>全部资产</button>
+            <button aria-pressed={projectOnly} disabled={!directorProjectId} title={directorProjectId?"仅显示当前导演项目的参考与生成资产":"打开导演项目后可筛选"} onClick={()=>setProjectOnlyManual(true)}><IcFolder size={14}/>本项目</button>
+          </div>}
+            {tab === "local" ? (
+              <div className="search-box">
+                <IcSearch size={16} />
+                <input
+                  placeholder="按名称 / 提示词 / 模型筛选…"
+                  value={keyword}
+                  onChange={(e) => setKeyword(e.target.value)}
+                />
+                {keyword ? (
+                  <button className="icon-btn" style={{ width: 24, height: 24 }} onClick={() => setKeyword("")}>
+                    <IcClose size={13} />
+                  </button>
+                ) : null}
+              </div>
+            ) : <span style={{ fontWeight: 700, fontSize: "var(--fs-sm)" }}><IcEagle size={15} /> Eagle 远程浏览</span>}
+            {tab === "local" ? (
+              <span style={{ fontSize: "var(--fs-sm)", color: "var(--text-3)" }}>
+                {entries.length === filtered.length ? `${filtered.length} 项` : `${entries.length} 张卡片 · ${filtered.length} 项`}
+              </span>
+            ) : null}
             <span style={{ flex: 1 }} />
             <button
               className={`btn sm ${pickMode ? "primary" : ""}`}
@@ -783,7 +901,9 @@ export function AssetLibrary() {
             />
           </div>
 
-          {kind === "trash" ? (
+          {tab === "eagle" ? (
+            <EagleBrowser />
+          ) : kind === "trash" ? (
             <div className="al-trash">
               <div className="al-trash-head">
                 <b>回收站（{trash.length}）</b>
@@ -946,23 +1066,7 @@ export function AssetLibrary() {
                   onDragStart={(e) => {
                     // 多选时拖选中卡 = 拖全部选中（负载为逗号拼接的 id 列表，消费端 split）
                     const ids = selected.size && selected.has(it.id) ? [...selected] : [it.id];
-                    const payload = ids.join(",");
-                    if (isTauri) {
-                      // 原生拖拽：一次拖拽通吃画布 / 快捷栏 / 资源管理器 / 第三方软件
-                      e.preventDefault();
-                      setNativeDragAsset(payload);
-                      trackDragOut();
-                      const dragList = items.filter((x) => ids.includes(x.id));
-                      void nativeDragOut(dragList).finally(() => {
-                        setNativeDragAsset(null);
-                        endDragTrack();
-                      });
-                      return;
-                    }
-                    // 浏览器预览：HTML5 拖拽（画布/快捷栏）
-                    e.dataTransfer.setData("momo/asset-id", payload);
-                    e.dataTransfer.effectAllowed = "copy";
-                    trackDragOut();
+                    startAssetDrag(e, ids, items, { trackDragOut, endDragTrack });
                   }}
                   onDragEnd={(e) => {
                     endDragTrack();
@@ -998,6 +1102,7 @@ export function AssetLibrary() {
                     ) : null}
                   </div>
                   {KIND_BADGE[it.kind] ? <span className="a-badge">{KIND_BADGE[it.kind]}</span> : null}
+                  <EagleBadge item={it} />
                   <button
                     className={`a-fav ${it.fav ? "on" : ""}`}
                     title={it.fav ? "取消收藏" : "收藏（「收藏」页签集中查看）"}
@@ -1095,6 +1200,19 @@ export function AssetLibrary() {
               <button className="btn sm" title="把所选资产复制到指定文件夹（附带元信息 momo-meta.json）" onClick={() => void exportMany([...selected])}>
                 <IcDownload size={15} /> 批量导出
               </button>
+              {eagleEnabled ? (
+                <button
+                  className="btn sm"
+                  title={`把所选 ${selected.size} 项批量收进 Eagle 素材库（已在队列/已绑定的自动跳过）`}
+                  onClick={() => {
+                    queueEaglePush([...selected]);
+                    toast(`已把 ${selected.size} 项加入 Eagle 同步队列`, "ok");
+                    clearSel();
+                  }}
+                >
+                  <IcEagle size={15} /> 同步到 Eagle
+                </button>
+              ) : null}
               <button
                 className="btn sm"
                 title="全选当前筛选结果的全部资产"
@@ -1140,9 +1258,18 @@ export function AssetLibrary() {
               </header>
               <div className="a-group-grid">
                 {[...focusedGroup.items].sort((a, b) => groupMemberOrder(a) - groupMemberOrder(b)).map((member) => (
-                  <button
+                  <div
                     key={member.id}
                     className="a-group-member"
+                    /* 组内单张可整卡拖拽：与主网格单卡同一逻辑（原生 OS 拖出 →
+                       画布 / 快捷栏 / 资源管理器 / 第三方软件；浏览器预览退 HTML5） */
+                    draggable
+                    title={`${member.prompt || member.name}\n拖拽：落到画布 = 节点 · 资源管理器/第三方软件 = 拖出文件\n点击查看大图`}
+                    onDragStart={(e) => startAssetDrag(e, [member.id], items, { trackDragOut, endDragTrack })}
+                    onDragEnd={(e) => {
+                      endDragTrack();
+                      if (e.dataTransfer.dropEffect !== "none") setOpen(false);
+                    }}
                     onClick={() => {
                       const memberIndex = filtered.findIndex((x) => x.id === member.id);
                       if (memberIndex >= 0) setPreviewIdx(memberIndex);
@@ -1154,9 +1281,10 @@ export function AssetLibrary() {
                     }}
                   >
                     <span className="a-thumb"><AssetThumb item={member} /></span>
+                    <EagleBadge item={member} />
                     <span className="a-group-member-name">{member.groupSlot === "final" ? "最终长图" : member.name}</span>
                     {member.groupSlot === "final" ? <span className="a-group-final">最终</span> : null}
-                  </button>
+                  </div>
                 ))}
               </div>
             </section>
@@ -1233,7 +1361,10 @@ function CardMenu({ item, x, y, onClose }: { item: AssetItem; x: number; y: numb
   const setOpen = useAssets((s) => s.setOpen);
   const removeMany = useAssets((s) => s.removeMany);
   const shortcuts = useSettings((s) => s.settings.shortcuts);
+  const eagleEnabled = useSettings((s) => s.settings.eagle.enabled);
   const [confirmDel, setConfirmDel] = useState(false);
+  /** 解除绑定是破坏性较弱但需防误触的操作 */
+  const [confirmUnlink, setConfirmUnlink] = useState(false);
 
   const left = Math.min(x, window.innerWidth - 250);
   const top = Math.min(y, window.innerHeight - 320);
@@ -1315,6 +1446,63 @@ function CardMenu({ item, x, y, onClose }: { item: AssetItem; x: number; y: numb
           >
             Remix：还原生成节点与参数
           </button>
+        ) : null}
+        {isTauri && eagleEnabled ? (
+          <>
+            <div className="am-sep" />
+            {!item.eagle?.itemId ? (
+              <button
+                className="am-row"
+                title="把这份作品收进 Eagle 素材库（后台执行，不阻塞画布）"
+                onClick={() => {
+                  onClose();
+                  queueEaglePush([item.id]);
+                  toast("已加入 Eagle 同步队列", "ok");
+                }}
+              >
+                同步到 Eagle
+              </button>
+            ) : item.eagle.state === "remote-dirty" ? (
+              <button
+                className="am-row"
+                title="Eagle 端的文件已被修改——以新版本资产导入，原版本保留（非破坏）"
+                onClick={async () => {
+                  onClose();
+                  const { importEagleItems } = await import("../../core/eagleSyncEngine");
+                  const res = await importEagleItems([item.eagle!.itemId], { silent: true });
+                  toast(res.length ? `已导入 Eagle 新版本 → ${res[0].name}` : "拉取失败：Eagle 可能已离线", res.length ? "ok" : "err");
+                }}
+              >
+                从 Eagle 导入新版
+              </button>
+            ) : null}
+            <button
+              className="am-row"
+              title="在 Eagle 里定位到这份素材"
+              onClick={async () => {
+                onClose();
+                const { openExternal } = await import("../../core/external");
+                await openExternal(`eagle://item/${item.eagle!.itemId}`);
+              }}
+            >
+              在 Eagle 中打开
+            </button>
+            <button
+              className="am-row danger"
+              title={confirmUnlink ? "再次点击确认：只解除绑定关系，两端文件都保留" : "解除与 Eagle 的绑定（不动任何文件）"}
+              onClick={() => {
+                if (!confirmUnlink) {
+                  setConfirmUnlink(true);
+                  return;
+                }
+                onClose();
+                unlinkAssets([item.id]);
+                toast("已解除 Eagle 绑定（文件均保留）", "ok");
+              }}
+            >
+              {confirmUnlink ? "再点一次确认解绑" : "解除 Eagle 绑定"}
+            </button>
+          </>
         ) : null}
         {isTauri && shortcuts.length ? (
           <>
@@ -1493,7 +1681,7 @@ function AssetPreview({
         ) : null}
         <div className="meta-row">
           <span>来源</span>
-          <span>{item.source === "canvas" ? "画布生成" : "手动导入"}</span>
+          <span>{item.source === "canvas" ? "画布生成" : item.source === "eagle" ? "来自 Eagle" : "手动导入"}</span>
         </div>
         <div className="tag-editor">
           {(item.tags ?? []).map((t) => (

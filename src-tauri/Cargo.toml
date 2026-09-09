@@ -18,6 +18,8 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+base64 = "0.22"
+svg2pdf = "0.13"
 tauri = { version = "2", features = ["protocol-asset"] }
 tauri-plugin-opener = "2"
 tauri-plugin-dialog = "2"
@@ -35,9 +37,13 @@ tauri-plugin-process = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 anyhow = "1"
+# Eagle 资产桥：大文件流式 SHA-256 指纹（版本与 Cargo.lock 既有条目一致，无需新下载）
+sha2 = "0.10.9"
+# Comfy 工作流无感同步：跨平台目录监听（Windows 后端 = ReadDirectoryChangesW，UNC 断链时会报错，前端退化为复扫）
+notify = "8"
 # DPAPI（API Key 落盘加密）：版本与 Cargo.lock 既有传递依赖一致，无需新下载
 # Win32_UI_Shell / Win32_UI_WindowsAndMessaging / Win32_System_Com：便携版桌面快捷方式（IShellLink COM）
-windows = { version = "0.61", features = ["Win32_Security_Cryptography", "Win32_Foundation", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging", "Win32_System_Com"] }
+windows = { version = "0.61", features = ["Win32_Security_Cryptography", "Win32_Foundation", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging", "Win32_System_Com", "Win32_Storage_FileSystem", "Win32_System_WindowsProgramming"] }
 
 # —— 本地超分（阶段一）——
 # ort 2.x，DirectML 执行提供者（download-binaries/copy-dylibs 默认开，

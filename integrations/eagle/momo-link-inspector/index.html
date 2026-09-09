@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <title>MOMO Link · 素材面板</title>
+  <style>
+    html { font-size: 11px; overflow: hidden; }
+    body {
+      margin: 0; padding: 10px 12px;
+      font: 12px/1.7 "Segoe UI", "Microsoft YaHei", sans-serif;
+      color: transparent; /* 主题色由 eagle.onThemeChanged 注入 */
+    }
+    body[theme="LIGHT"], body[theme="LIGHTGRAY"] { background: #f5f6fa; --bd: #d8dae2; }
+    body[theme="GRAY"], body[theme="BLUE"], body[theme="PURPLE"], body[theme="DARK"] { background: #26272c; --bd: #3d404a; }
+
+    h4 { margin: 0 0 6px; display: flex; align-items: center; gap: 6px; font-size: 12.5px; }
+    .tag {
+      display: inline-block; padding: 1px 8px; border-radius: 999px;
+      border: 1px solid var(--bd); font-size: 11px; opacity: .85;
+    }
+    .row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 8px; }
+    button {
+      font: inherit; padding: 4px 12px; border-radius: 7px; cursor: pointer;
+      border: 1px solid var(--bd); background: transparent; color: inherit;
+    }
+    button.primary { background: #4b62ff; border-color: #4b62ff; color: #fff; font-weight: 650; }
+    button:disabled { opacity: .45; cursor: not-allowed; }
+    .meta { opacity: .68; font-size: 11.5px; word-break: break-all; }
+    .note { margin-top: 8px; opacity: .55; font-size: 11px; line-height: 1.6; }
+  </style>
+</head>
+<body>
+  <h4>🦅 MOMO 资产桥 <span class="tag" id="bind">检查中…</span></h4>
+  <div class="meta" id="meta">选中素材后自动显示 MOMO 绑定信息。</div>
+  <div class="row">
+    <button id="btnSend" class="primary">发送到 MOMO 当前画布</button>
+    <button id="btnLocate">在 MOMO 中定位绑定资产</button>
+  </div>
+  <div class="note">
+    「发送」会把选中素材复制进 MOMO 资产库（大文件由 MOMO 本地流式复制，不经网络盘）。
+    MOMO 未运行时按钮不可用——启动 MOMO 后约几秒内自动恢复。
+  </div>
+
+  <script src="js/inspector.js"></script>
+</body>
+</html>

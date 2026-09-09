@@ -688,7 +688,228 @@ export async function uploadAudioToComfy(host: string, src: string): Promise<str
 }
 
 /** images 已回传为 dataURL（显示/下游/资产收录全链路统一）；texts 为 ShowText 等文本输出；videos 为 VHS 合成等视频输出（blob URL） */
-export type ComfyRunResult = { images: string[]; texts: string[]; videos: string[] };
+export type ComfyRunResult = { images: string[]; texts: string[]; videos: string[]; videoSpecApplyReport?: VideoSpecApplyReport };
+
+/**
+ * 视频规格写入报告（3.5 §6.8）：runComfyTemplate 把 分辨率/帧率/时长 写进工作流后，
+ * 如实报告每一项命中了哪些节点与输入。Take.appliedVideoSpec 只认这里——模板没有对应入口时
+ * 该项不标记已应用，并给出 warning（预检/版本卡可见），绝不假装三项全部生效。
+ */
+export type VideoSpecApplyReport = {
+  resolutionApplied: boolean;
+  fpsApplied: boolean;
+  durationApplied: boolean;
+  /** 真实写入的节点与输入（nodeId.input → 值），可在进度与诊断里追溯 */
+  writtenNodes: Array<{ nodeId: string; input: string; value: number | string; label: string }>;
+  /** 没有匹配入口/匹配失败等异常——调用方转成 adjustment 或预检提示 */
+  warnings: string[];
+  /** 最终生效值（帧数按最终 fps × duration 计算） */
+  actualValues: { width?: number; height?: number; mp?: number; aspect?: string; fps?: number; frames?: number; durationSec?: number };
+};
+
+/**
+ * 把统一视频规格写进 ComfyUI 工作流（纯函数，测试直测）：
+ *  ① 时长（秒）：暴露参数（时长/duration/秒）优先，回退标题含时长的节点字面量数字输入；
+ *  ② 帧率：暴露参数（帧率/fps/frame_rate）优先；模板只收总帧数（length/frames）时按最终 fps × duration 换算；
+ *  ③ 分辨率：百万像素/宽/高/比例 暴露参数优先，回退按输入名直写；aspect_ratio 下拉按选项表前缀匹配。
+ * aspectOptions 注入下拉选项表（运行时来自 object_info；测试给固定表），返回 undefined 视为查不到保持模板原值。
+ */
+export function applyVideoSpecToWorkflow(
+  wf: Record<string, ComfyWfNode>,
+  params: ComfyExposedParam[],
+  spec: { durationSec?: number; fps?: number; resolution?: { aspect?: string; mp?: number; width?: number; height?: number } },
+  opts: {
+    onProgress?: (msg: string) => void;
+    aspectOptions?: (classType: string) => string[] | undefined;
+  } = {},
+): VideoSpecApplyReport {
+  const report: VideoSpecApplyReport = {
+    resolutionApplied: false,
+    fpsApplied: false,
+    durationApplied: false,
+    writtenNodes: [],
+    warnings: [],
+    actualValues: {},
+  };
+  const nodeTitle = (nid: string) => {
+    const n = wf[nid];
+    return n ? n._meta?.title ?? n.class_type : nid;
+  };
+  const write = (nodeId: string, input: string, value: number | string) => {
+    if (!wf[nodeId]) return;
+    wf[nodeId].inputs[input] = value;
+    report.writtenNodes.push({ nodeId, input, value, label: nodeTitle(nodeId) });
+  };
+
+  // ① 时长（秒语义槽位；帧数类输入交给 ② 的换算）
+  if (spec.durationSec && spec.durationSec > 0) {
+    const dur = spec.durationSec;
+    const durParam = params.find((x) => x.kind === "number" && /时长|duration|秒/i.test(x.label ?? ""));
+    if (durParam && wf[durParam.nodeId]) {
+      write(durParam.nodeId, durParam.input, dur);
+      report.durationApplied = true;
+      report.actualValues.durationSec = dur;
+      opts.onProgress?.(`片段时长 ${dur} 秒 → #${durParam.nodeId} ${nodeTitle(durParam.nodeId)}`);
+    } else {
+      let hit = false;
+      for (const [nid, node] of Object.entries(wf)) {
+        const title = node._meta?.title ?? "";
+        if (!/时长|duration/i.test(title)) continue;
+        for (const [k, v] of Object.entries(node.inputs ?? {})) {
+          if (typeof v === "number") {
+            write(nid, k, dur);
+            hit = true;
+            report.durationApplied = true;
+            report.actualValues.durationSec = dur;
+            opts.onProgress?.(`片段时长 ${dur} 秒 → #${nid} ${title}`);
+            break;
+          }
+        }
+        if (hit) break;
+      }
+    }
+  }
+
+  // ② 帧率：fps 参数直写；未暴露时回退「标题含帧率/fps 的节点字面量数字输入」（与时长兜底对称）；
+  //     再否则总帧数输入按 最终 fps × duration 换算（时长入口缺失时帧数写入同时承载时长语义）
+  if (spec.fps && spec.fps > 0) {
+    const fpsParam = params.find((x) => x.kind === "number" && /帧率|fps|frame_?rate/i.test(x.label ?? ""));
+    if (fpsParam && wf[fpsParam.nodeId]) {
+      write(fpsParam.nodeId, fpsParam.input, spec.fps);
+      report.fpsApplied = true;
+      report.actualValues.fps = spec.fps;
+      opts.onProgress?.(`帧率 ${spec.fps} fps → #${fpsParam.nodeId} ${nodeTitle(fpsParam.nodeId)}`);
+    } else {
+      let hit = false;
+      for (const [nid, node] of Object.entries(wf)) {
+        const title = node._meta?.title ?? "";
+        if (!/帧率|fps|frame_?rate/i.test(title)) continue;
+        for (const [k, v] of Object.entries(node.inputs ?? {})) {
+          if (typeof v === "number") {
+            write(nid, k, spec.fps);
+            hit = true;
+            report.fpsApplied = true;
+            report.actualValues.fps = spec.fps;
+            opts.onProgress?.(`帧率 ${spec.fps} fps → #${nid} ${title}`);
+            break;
+          }
+        }
+        if (hit) break;
+      }
+      if (!hit && spec.durationSec) {
+        const frames = Math.round(spec.fps * spec.durationSec);
+        for (const [nid, node] of Object.entries(wf)) {
+          let frameHit = false;
+          for (const [k, v] of Object.entries(node.inputs ?? {})) {
+            if (typeof v === "number" && /^(?:length|frames|num_frames|total_frames)$/i.test(k)) {
+              write(nid, k, frames);
+              frameHit = true;
+              report.actualValues.frames = frames;
+              // 帧数入口承载了时长语义（fps × duration）；fps 本体没有独立入口，换算用的值记录在案
+              report.durationApplied = true;
+              opts.onProgress?.(`帧数 ${frames}（${spec.fps}fps × ${spec.durationSec}s）→ #${nid} ${nodeTitle(nid)}`);
+              break;
+            }
+          }
+          if (frameHit) break;
+        }
+        if (!report.actualValues.frames) {
+          report.warnings.push(`模板没有帧率/帧数入口（帧率 ${spec.fps}fps 不会生效）`);
+        }
+      } else if (!hit) {
+        report.warnings.push(`有时长无帧率入口且未提供时长——帧率 ${spec.fps}fps 未写入`);
+      }
+    }
+  }
+  if (spec.durationSec && !report.durationApplied) {
+    report.warnings.push(`模板没有时长/帧数入口（时长 ${spec.durationSec}s 不会生效）`);
+  }
+
+  // ③ 分辨率：百万像素 / 宽+高 / 比例
+  if (spec.resolution) {
+    const res = spec.resolution;
+    let mpDone = false;
+    let aspectDone = false;
+    let wDone = false;
+    let hDone = false;
+    for (const p of params) {
+      if (!wf[p.nodeId]) continue;
+      const label = `${p.label ?? ""} ${p.key}`;
+      if (res.mp !== undefined && p.kind === "number" && /百万像素|megapixels?/i.test(label)) {
+        write(p.nodeId, p.input, res.mp);
+        mpDone = true;
+        report.actualValues.mp = res.mp;
+        opts.onProgress?.(`像素 ${res.mp} MP → ${p.label}`);
+      } else if (res.aspect && p.kind === "text" && /比例|aspect/i.test(label)) {
+        write(p.nodeId, p.input, res.aspect);
+        aspectDone = true;
+        report.actualValues.aspect = res.aspect;
+        opts.onProgress?.(`画幅 ${res.aspect} → ${p.label}`);
+      } else if (res.width !== undefined && p.kind === "number" && /宽|width/i.test(label) && !/高|height/i.test(label)) {
+        write(p.nodeId, p.input, res.width);
+        wDone = true;
+      } else if (res.height !== undefined && p.kind === "number" && /高|height/i.test(label) && !/宽|width/i.test(label)) {
+        write(p.nodeId, p.input, res.height);
+        hDone = true;
+      }
+    }
+    // 兜底：按节点输入名直写（ResolutionSelector 的 megapixels、EmptyLatentImage/Video 的 width/height）
+    if (!mpDone && res.mp !== undefined) {
+      for (const [nid, node] of Object.entries(wf)) {
+        if (typeof node.inputs?.megapixels === "number") {
+          write(nid, "megapixels", res.mp);
+          mpDone = true;
+          report.actualValues.mp = res.mp;
+          opts.onProgress?.(`像素 ${res.mp} MP → #${nid} ${nodeTitle(nid)}`);
+        }
+      }
+    }
+    if (!wDone && res.width !== undefined) {
+      for (const [nid, node] of Object.entries(wf)) {
+        if (typeof node.inputs?.width === "number") {
+          write(nid, "width", res.width);
+          wDone = true;
+        }
+      }
+    }
+    if (!hDone && res.height !== undefined) {
+      for (const [nid, node] of Object.entries(wf)) {
+        if (typeof node.inputs?.height === "number") {
+          write(nid, "height", res.height);
+          hDone = true;
+        }
+      }
+    }
+    if (wDone) report.actualValues.width = res.width;
+    if (hDone) report.actualValues.height = res.height;
+    // aspect_ratio 是下拉控件：按选项表前缀匹配（"16:9" → "16:9 (Widescreen)"）；
+    // 匹配不到保持模板原值（给下拉写非法值会被 ComfyUI 校验整单拒绝），但必须报告
+    if (!aspectDone && res.aspect && opts.aspectOptions) {
+      for (const [nid, node] of Object.entries(wf)) {
+        if (typeof node.inputs?.aspect_ratio !== "string") continue;
+        const list = opts.aspectOptions(node.class_type);
+        const hit = Array.isArray(list) ? list.find((o) => String(o).startsWith(res.aspect!)) : undefined;
+        if (hit !== undefined) {
+          write(nid, "aspect_ratio", hit);
+          aspectDone = true;
+          report.actualValues.aspect = hit;
+          opts.onProgress?.(`画幅 ${hit} → #${nid} ${nodeTitle(nid)}`);
+          break;
+        }
+      }
+      if (!aspectDone) {
+        report.warnings.push(`比例 ${res.aspect} 不在模板下拉选项表中——保持模板原值`);
+      }
+    }
+    report.resolutionApplied = mpDone || wDone || hDone || aspectDone;
+    if (!report.resolutionApplied) {
+      report.warnings.push(`模板没有分辨率入口（百万像素/宽高/比例都没有）——分辨率 ${res.width ?? ""}${res.width && res.height ? "×" : ""}${res.height ?? ""}${res.mp ? `${res.mp}MP` : ""} 不会生效`);
+    }
+    if (res.width && res.height && (wDone || hDone)) opts.onProgress?.(`分辨率 ${res.width}×${res.height}`);
+  }
+
+  return report;
+}
 
 /** WebSocket 实时进度：按已完成节点数 + 当前节点采样步数换算百分比，报给 onProgress */
 function openProgressSocket(
@@ -797,6 +1018,12 @@ export async function runComfyTemplate(
      * 只写「秒」语义槽位；帧数类输入（length/frames）交给工作流自己的秒→帧换算节点（如 H3 的自动对齐帧数）。
      */
     durationSec?: number;
+  /**
+   * 帧率（3.5 统一视频规格）：优先写标签含 帧率/fps/frame_rate 的数字型暴露参数；
+   * 工作流只收总帧数（length/frames）时按 fps × durationSec 换算——必须用本段最终 FPS，
+   * 不能沿用模板内部另一个 FPS 值（否则成片时长漂移）。
+   */
+  fps?: number;
     /**
      * 画幅与像素（导演台顶栏设置）：按模板暴露的参数形式写入——
      * 有「百万像素/megapixels」数字参数就写 mp；有「宽/高」数字参数对就写换算后的宽高；有「比例/aspect」文本参数就写比例串。
@@ -908,103 +1135,23 @@ export async function runComfyTemplate(
     }
   }
 
-  // 1b. 片段时长 → 时长槽位（在参数回填之后写，覆盖模板默认值与配方里的静态值——每段时长本来就各不相同）。
-  //     优先暴露参数（标签含 时长/duration/秒 且为数字型），回退扫描节点标题含时长的字面量数字输入。
-  if (opts.durationSec && opts.durationSec > 0) {
-    const dur = opts.durationSec;
-    const durParam = params.find((x) => x.kind === "number" && /时长|duration|秒/i.test(x.label ?? ""));
-    if (durParam && wf[durParam.nodeId]) {
-      wf[durParam.nodeId].inputs[durParam.input] = dur;
-      opts.onProgress?.(`片段时长 ${dur} 秒 → #${durParam.nodeId} ${nodeTitle(durParam.nodeId)}`);
-    } else {
-      let hit = false;
-      for (const [nid, node] of Object.entries(wf)) {
-        const title = node._meta?.title ?? "";
-        if (!/时长|duration/i.test(title)) continue;
-        for (const [k, v] of Object.entries(node.inputs ?? {})) {
-          if (typeof v === "number") {
-            node.inputs[k] = dur;
-            hit = true;
-            opts.onProgress?.(`片段时长 ${dur} 秒 → #${nid} ${title}`);
-            break;
+  // 1b~1c. 统一视频规格（时长/帧率/分辨率）→ 工作流入口（纯函数 applyVideoSpecToWorkflow，
+  //       在参数回填之后写，覆盖模板默认值与配方里的静态值——每段规格本来就各不相同）。
+  //       报告每一项真实命中了哪些节点；没有入口的项进 warnings（调用方转 adjustment，绝不假装已应用）。
+  let specReport: VideoSpecApplyReport | undefined;
+  if (opts.durationSec || opts.fps || opts.resolution) {
+    const info = opts.resolution?.aspect ? await fetchObjectInfo(host).catch(() => null) : null;
+    specReport = applyVideoSpecToWorkflow(wf, params, { durationSec: opts.durationSec, fps: opts.fps, resolution: opts.resolution }, {
+      onProgress: (m) => opts.onProgress?.(m),
+      ...(info
+        ? {
+            aspectOptions: (classType: string) => {
+              const spec = info[classType]?.input;
+              return spec?.required?.aspect_ratio?.[0] ?? spec?.optional?.aspect_ratio?.[0];
+            },
           }
-        }
-        if (hit) break;
-      }
-    }
-  }
-
-  // 1c. 画幅与像素 → 模板的分辨率参数（百万像素数字参数 / 宽+高数字参数对 / 比例文本参数，各有则各写）
-  if (opts.resolution) {
-    const res = opts.resolution;
-    let mpDone = false;
-    let aspectDone = false;
-    let wDone = false;
-    let hDone = false;
-    for (const p of params) {
-      if (!wf[p.nodeId]) continue;
-      const label = `${p.label ?? ""} ${p.key}`;
-      if (res.mp !== undefined && p.kind === "number" && /百万像素|megapixels?/i.test(label)) {
-        wf[p.nodeId].inputs[p.input] = res.mp;
-        mpDone = true;
-        opts.onProgress?.(`像素 ${res.mp} MP → ${p.label}`);
-      } else if (res.aspect && p.kind === "text" && /比例|aspect/i.test(label)) {
-        wf[p.nodeId].inputs[p.input] = res.aspect;
-        aspectDone = true;
-        opts.onProgress?.(`画幅 ${res.aspect} → ${p.label}`);
-      } else if (res.width !== undefined && p.kind === "number" && /宽|width/i.test(label) && !/高|height/i.test(label)) {
-        wf[p.nodeId].inputs[p.input] = res.width;
-        wDone = true;
-      } else if (res.height !== undefined && p.kind === "number" && /高|height/i.test(label) && !/宽|width/i.test(label)) {
-        wf[p.nodeId].inputs[p.input] = res.height;
-        hDone = true;
-      }
-    }
-    // 1c-2. 分辨率参数没暴露时的兜底：按节点输入名直写（ResolutionSelector 的 megapixels、
-    //       EmptyLatentImage/Video 的 width/height 都是这些通用名）。aspect_ratio 是下拉控件，
-    //       按 object_info 选项表前缀匹配（"16:9" → "16:9 (Widescreen)"）；匹配不到就保持模板原值，
-    //       给下拉写非法值会被 ComfyUI 校验整单拒绝
-    if (!mpDone && res.mp !== undefined) {
-      for (const [nid, node] of Object.entries(wf)) {
-        if (typeof node.inputs?.megapixels === "number") {
-          node.inputs.megapixels = res.mp;
-          mpDone = true;
-          opts.onProgress?.(`像素 ${res.mp} MP → #${nid} ${nodeTitle(nid)}`);
-        }
-      }
-    }
-    if (!wDone && res.width !== undefined) {
-      for (const node of Object.values(wf)) {
-        if (typeof node.inputs?.width === "number") {
-          node.inputs.width = res.width;
-          wDone = true;
-        }
-      }
-    }
-    if (!hDone && res.height !== undefined) {
-      for (const node of Object.values(wf)) {
-        if (typeof node.inputs?.height === "number") {
-          node.inputs.height = res.height;
-          hDone = true;
-        }
-      }
-    }
-    if (!aspectDone && res.aspect) {
-      const info = await fetchObjectInfo(host);
-      for (const [nid, node] of Object.entries(wf)) {
-        if (typeof node.inputs?.aspect_ratio !== "string") continue;
-        const spec = info?.[node.class_type]?.input;
-        const list = spec?.required?.aspect_ratio?.[0] ?? spec?.optional?.aspect_ratio?.[0];
-        const hit = Array.isArray(list) ? list.find((o: unknown) => String(o).startsWith(res.aspect!)) : undefined;
-        if (hit !== undefined) {
-          node.inputs.aspect_ratio = hit;
-          aspectDone = true;
-          opts.onProgress?.(`画幅 ${hit} → #${nid} ${nodeTitle(nid)}`);
-          break;
-        }
-      }
-    }
-    if (res.width && res.height && (wDone || hDone)) opts.onProgress?.(`分辨率 ${res.width}×${res.height}`);
+        : {}),
+    });
   }
 
   // 2a. 剩余上游图片 → 未被参数占用的 LoadImage 节点（精确映射优先，其余按编号顺序）
@@ -1269,7 +1416,7 @@ export async function runComfyTemplate(
           videos.push(u);
         }
       }
-      return { images, texts, videos };
+      return { images, texts, videos, videoSpecApplyReport: specReport };
     }
     throw new Error("ComfyUI 执行超时");
   } finally {

@@ -36,7 +36,7 @@ import { AudioConfigPanel, CharConfigPanel, EcomConfigPanel, GenConfigPanel, Vid
 import { ComfyConfigPanel } from "./ComfyConfigPanel";
 import { EnhanceConfigPanel, VectorizeConfigPanel } from "./EditPanels";
 import { isVoiceCallActive, startVoiceCall, stopVoiceCall } from "../../core/voiceChat";
-import type { AppNode, BoardTemplate, NodeKind } from "../../core/types";
+import type { AppNode, BoardTemplate, GroupData, NodeKind } from "../../core/types";
 import { errMsg, fileToDataUrl, matchHotkey } from "../../core/utils";
 import { NODE_CATALOG } from "./nodeCatalog";
 import { FlowEdge } from "./FlowEdge";
@@ -44,10 +44,14 @@ import { AddNodeMenu } from "./AddNodeMenu";
 import { CanvasSearch, Spotlight } from "./CanvasPalette";
 import { AiWirePanel } from "./AiWirePanel";
 import { SysMonitor } from "./SysMonitor";
-import { RUNNABLE_KINDS, runAllFlows, runFlow } from "../../core/runner";
+import { RUNNABLE_KINDS, runAllFlows, runFlow, runTailSequence } from "../../core/runner";
+import { nodeMainImage } from "../../core/nodeEdit";
+import { layerGroupForExport } from "../../core/elementSplit";
+import { exportLayeredPsd, exportLayeredTiff } from "../../core/layering";
+import { elementComposePrompt } from "../../core/editPrompts";
 import { abortAll, abortNode, useRunTasks } from "../../core/runControl";
 import { ContextMenu, type CmItem } from "./ContextMenu";
-import { IcBulb, IcClapper, IcCopy, IcCursor, IcEcom, IcEyeOff, IcFit, IcGroup, IcLock, IcLogo, IcOrbit, IcPlay, IcPlus, IcMin, IcTrash, IcUndo, IcRedo, IcUpscale, IcVector, IcWand } from "../../ui/icons";
+import { IcBulb, IcClapper, IcCopy, IcCursor, IcEcom, IcEyeOff, IcFit, IcGrid, IcGroup, IcLayers, IcLock, IcLogo, IcOrbit, IcPlay, IcPlus, IcMin, IcTrash, IcUndo, IcRedo, IcUpscale, IcVector, IcWand } from "../../ui/icons";
 import { ErrorBoundary } from "../../ui/ErrorBoundary";
 
 import { ImageNode } from "./nodes/ImageNode";
@@ -226,6 +230,38 @@ function snapConnection(
 /** 可运行节点类型集合（模块级常量，来自 runner 的 RUNNABLE_KINDS 单一来源） */
 const RUNNABLE_KINDS_SET = new Set(RUNNABLE_KINDS);
 
+/** 图层组导出：成员按 y 序（=层序）读取 → 本地合成预览 → 分层 PSD / 多页 TIFF */
+async function exportLayerGroupAs(groupId: string, format: "psd" | "tiff") {
+  try {
+    const data = await layerGroupForExport(groupId);
+    if (!data || data.layers.length < 2) {
+      toast("图层组里至少需要 2 张图才能导出分层文件", "err");
+      return;
+    }
+    const path =
+      format === "psd"
+        ? await exportLayeredPsd({ width: data.width, height: data.height, composite: data.composite, layers: data.layers })
+        : await exportLayeredTiff(data.layers);
+    toast(`分层文件已导出 → ${path}`, "ok");
+  } catch (e) {
+    if (errMsg(e) !== "已取消导出") toast(`导出失败：${errMsg(e)}`, "err");
+  }
+}
+
+/** 图层组 AI 合成：建一个连好组的 imageGen 节点（模板提示词已填好）；不自动运行，费用确认交给生成按钮的预算闸 */
+function spawnComposeNode(groupId: string) {
+  const s = useBoard.getState();
+  const group = s.nodes.find((n) => n.id === groupId);
+  if (!group) return;
+  const nid = s.addNode(
+    "imageGen",
+    { x: group.position.x + (group.measured?.width ?? 640) + 160, y: group.position.y },
+    { status: "idle", prompt: elementComposePrompt(), results: [], picked: 0, count: 1 },
+  );
+  s.connectNodes(groupId, nid, "in", "out");
+  toast("已建好 AI 合成节点并接上图层组（参考图按层序聚合）：检查参数后点「生成」", "ok");
+}
+
 export function SmartCanvas() {
   const nodes = useBoard((s) => s.nodes);
   const edges = useBoard((s) => s.edges);
@@ -274,6 +310,7 @@ export function SmartCanvas() {
   const { screenToFlowPosition, getIntersectingNodes, zoomIn, zoomOut, fitView, setViewport: applyViewport } = useReactFlow();
   const activeId = useBoard((s) => s.activeId);
   const [zoomPct, setZoomPct] = useState(100);
+  const [largeMinimap,setLargeMinimap]=useState(false);
 
   /* ---- 视图位置记忆：进入画布时恢复上次的位置/缩放，没有记录才自适应 ---- */
   useEffect(() => {
@@ -282,7 +319,8 @@ export function SmartCanvas() {
       void applyViewport(vp);
       setZoomPct(Math.round(vp.zoom * 100));
     } else {
-      setTimeout(() => void fitView({ padding: 0.15, maxZoom: 1 }), 60);
+      const timer=setTimeout(() => void fitView({ padding: 0.15, maxZoom: 1 }), 60);
+      return ()=>clearTimeout(timer);
     }
   }, [activeId, applyViewport, fitView]);
   const [drawRect, setDrawRect] = useState<{ x1: number; y1: number; x2: number; y2: number } | null>(null);
@@ -485,6 +523,27 @@ export function SmartCanvas() {
             label: `组内全部运行（${members.length} 个）`,
             onClick: () => members.forEach((m) => void runFlow(m.id)),
           });
+        // 图层组（元素工坊拆解产物）：按成员序导出分层文件 / 一键建 AI 合成节点
+        if ((node.data as GroupData).layerGroup && members.length >= 2) {
+          items.push({
+            group: "图层组",
+            label: "导出分层 PSD",
+            icon: <IcLayers size={15} />,
+            onClick: () => void exportLayerGroupAs(node.id, "psd"),
+          });
+          items.push({
+            group: "图层组",
+            label: "导出分层 TIFF",
+            icon: <IcLayers size={15} />,
+            onClick: () => void exportLayerGroupAs(node.id, "tiff"),
+          });
+          items.push({
+            group: "图层组",
+            label: "AI 合成海报",
+            icon: <IcWand size={15} />,
+            onClick: () => spawnComposeNode(node.id),
+          });
+        }
       }
       if (!multi && kind === "director" && d.projectId) {
         items.push({
@@ -492,7 +551,7 @@ export function SmartCanvas() {
           label: "打开导演台",
           icon: <IcClapper size={15} />,
           onClick: () => {
-            useUi.setState({ directorNodeId: node.id });
+            useUi.setState({ directorNodeId: node.id, directorProjectId: (node.data as { projectId?: string }).projectId ?? null });
             useUi.getState().setDirectorOpen(true);
           },
         });
@@ -525,6 +584,15 @@ export function SmartCanvas() {
       }
       if (!multi && kind === "image") {
         items.push({ group: "编辑处理", label: "电商长图", icon: <IcEcom size={15} />, onClick: () => b.spawnEdit(node.id, "ecomImage") });
+      }
+      // 首尾帧连拍：多选的全部节点都带主图（宫格切片/生成结果/任意图片节点）即可用；画布位置即时间序
+      if (multi && targets.every((n) => !!nodeMainImage(n))) {
+        items.push({
+          group: "运行",
+          label: `首尾帧连拍（${targets.length - 1} 段）`,
+          icon: <IcGrid size={15} />,
+          onClick: () => void runTailSequence(ids),
+        });
       }
       items.push({ sep: true });
       items.push({ group: "节点", label: multi ? `复制 ${targets.length} 个` : "复制节点", onClick: () => b.cloneNodes(ids) });
@@ -682,6 +750,8 @@ export function SmartCanvas() {
   /* ---- 粘贴 ---- */
   useEffect(() => {
     const onPaste = async (e: ClipboardEvent) => {
+      // 导演台工位打开时粘贴归工位管（剧本/素材入库），画布不劫持
+      if (useUi.getState().directorOpen) return;
       const el = document.activeElement as HTMLElement | null;
       if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable)) return;
       // 资产库/角色库等弹层打开时不劫持粘贴
@@ -831,6 +901,15 @@ export function SmartCanvas() {
         return;
       const hk = useSettings.getState().settings.hotkeys;
       const hit = (a: keyof typeof hk) => matchHotkey(e, hk[a]);
+      // 导演台全屏打开时画布快捷键全部让位（监看器有自己的 J/K/L、←→、Space 等，方案 §7.3），
+      // 只保留「打开/关闭导演台」这一个出口
+      if (useUi.getState().directorOpen) {
+        if (hit("director")) {
+          e.preventDefault();
+          useUi.getState().setDirectorOpen(false);
+        }
+        return;
+      }
       if (e.key === "Escape" && useUi.getState().groupDraw) {
         useUi.getState().setGroupDraw(false);
         setDrawRect(null);
@@ -1089,6 +1168,7 @@ export function SmartCanvas() {
     >
       <ReactFlow
         nodes={nodes}
+        onlyRenderVisibleElements={nodes.length > 250}
         edges={displayEdges}
         nodeTypes={nodeTypes}
         edgeTypes={edgeTypes}
@@ -1135,11 +1215,12 @@ export function SmartCanvas() {
         <Background variant={BackgroundVariant.Dots} gap={30} size={1.2} color="var(--dot)" />
         <EdgeBoxSelect />
         <AlignGuides />
-      {!zen && nodes.length > 3 ? (
+      {!zen && nodes.length > 3 && (nodes.length <= 2000 || largeMinimap) ? (
           // 小地图收在右下，给右侧资产库展开留出平移量
           <MiniMap pannable zoomable position="bottom-right" style={{ marginBottom: 16, marginRight: 16 + dockShift }} />
         ) : null}
       </ReactFlow>
+      {!zen && nodes.length>2000&&<button className="btn sm" style={{position:"absolute",right:16+dockShift,bottom:largeMinimap?175:16,zIndex:8}} onClick={()=>setLargeMinimap(v=>!v)}>{largeMinimap?"收起小地图":"展开小地图"} · {nodes.length} 节点</button>}
 
       {ctxMenu ? <ContextMenu x={ctxMenu.x} y={ctxMenu.y} items={ctxMenu.items} onClose={() => setCtxMenu(null)} /> : null}
 

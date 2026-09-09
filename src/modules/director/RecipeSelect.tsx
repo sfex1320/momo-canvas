@@ -10,6 +10,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useDirector } from "../../core/stores/directorStore";
 import { useComfyTemplates } from "../../core/stores/comfyStore";
 import { resolveRecipeSelection, type ComfyTplLike } from "../../core/directorEngine";
+import { MODE_LABEL, profileForRecipe } from "../../core/studio/capabilityProfile";
 import { PopSelect } from "../../ui/PopSelect";
 import { IcGlobe, IcFlow, IcGear } from "../../ui/icons";
 import { RecipeManagerDialog, pruneDeadRecipes } from "./RecipeManager";
@@ -17,19 +18,24 @@ import type { DirectorProject } from "../../core/types";
 
 const MANAGE = "__manage__";
 
-/** 配方下拉选项：图标 + 文字 */
+/** 配方下拉选项：图标 + 文字（3.3 §9.1：标注模式/时长/音画；官方适配未贯通的远程配方明确「通用协议」） */
 export function recipeOptions(
   project: DirectorProject,
   templates: ComfyTplLike[],
 ): Array<{ value: string; label: string; icon: React.ReactNode; disabled?: boolean }> {
   const withRecipe = new Set(project.recipes.map((r) => r.templateId).filter((v): v is string => !!v));
+  const tplName = (id?: string) => templates.find((t) => t.id === id)?.name;
   return [
-    { value: "", label: "远程默认（设置里的视频模型）", icon: <IcGlobe size={14} /> },
-    ...project.recipes.map((r) => ({
-      value: r.id,
-      label: `${r.name}${r.engine === "comfy" ? " · ComfyUI" : " · 远程"}`,
-      icon: r.engine === "comfy" ? <IcFlow size={14} /> : <IcGlobe size={14} />,
-    })),
+    { value: "", label: "远程默认（设置里的视频模型 · 通用协议）", icon: <IcGlobe size={14} /> },
+    ...project.recipes.map((r) => {
+      const p = profileForRecipe(r, tplName(r.templateId));
+      const official = p.channel === "local" || p.officialAdapter;
+      return {
+        value: r.id,
+        label: `${r.name} · ${MODE_LABEL[r.mode] ?? r.mode} · ≤${p.duration.max}s${p.output.nativeAudio ? " · 音画" : ""}${official ? "" : p.adapterReady ? " · 官方适配器待联调" : " · 通用协议"}`,
+        icon: r.engine === "comfy" ? <IcFlow size={14} /> : <IcGlobe size={14} />,
+      };
+    }),
     ...templates
       .filter((t) => !withRecipe.has(t.id))
       .map((t) => ({ value: `tpl:${t.id}`, label: `${t.name} · ComfyUI 模板`, icon: <IcFlow size={14} /> })),

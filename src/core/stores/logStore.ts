@@ -5,8 +5,8 @@
  *  - 保留最近 200 条，最近 120 条落盘（重启后仍可查上次的失败请求）
  */
 import { create } from "zustand";
-import { loadJSON, saveJSON } from "../persist";
-import { uid } from "../utils";
+import { loadJSON, saveJSON } from "../persist.ts";
+import { uid } from "../utils.ts";
 
 export type RunLogEntry = {
   id: string;

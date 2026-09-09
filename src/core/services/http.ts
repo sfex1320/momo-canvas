@@ -8,8 +8,8 @@
  * 挂一个"永不命中"的显式代理并把目标主机放进 noProxy：reqwest 见到显式代理就
  * 禁用系统代理，noProxy 又命中目标主机，实际效果 = 直连。
  */
-import { isTauri } from "../utils";
-import { redactSecrets, sanitizeBody, shouldSkipLog, useRunLog } from "../stores/logStore";
+import { isTauri } from "../utils.ts";
+import { redactSecrets, sanitizeBody, shouldSkipLog, useRunLog } from "../stores/logStore.ts";
 
 let tauriFetch: typeof fetch | null = null;
 
@@ -87,10 +87,42 @@ function privateHost(input: string | URL): string | null {
   }
 }
 
-export async function xfetch(input: string | URL, init?: RequestInit): Promise<Response> {
+/** 默认单请求超时（毫秒）：没有这层兜底时，一条挂起的连接（跨境代理/服务端不回包）
+ *  会让 await 永久悬挂——生成节点于是永远停在「生成中」，轮询循环里的截止时间也只在请求间隙才检查得到 */
+const DEFAULT_TIMEOUT_MS = 90_000;
+
+/**
+ * 统一 fetch（带默认超时）。
+ * @param opts.timeoutMs 单请求超时；null = 不限时（大文件下载等调用方自行控制），默认 90 秒。
+ *   超时抛出中文 Error（不含「取消/abort」字样，不会被当成用户主动停止；会被判定为瞬时错误可重试）。
+ */
+export async function xfetch(
+  input: string | URL,
+  init?: RequestInit,
+  opts?: { timeoutMs?: number | null },
+): Promise<Response> {
   const started = performance.now();
+  const timeoutMs = opts?.timeoutMs === null ? null : (opts?.timeoutMs ?? DEFAULT_TIMEOUT_MS);
+  let timedOut = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let signal = init?.signal;
+  if (timeoutMs != null) {
+    const ctrl = new AbortController();
+    const userSignal = init?.signal;
+    const forward = () => ctrl.abort(userSignal?.reason);
+    if (userSignal) {
+      if (userSignal.aborted) ctrl.abort(userSignal.reason);
+      else userSignal.addEventListener("abort", forward, { once: true });
+    }
+    timer = setTimeout(() => {
+      timedOut = true;
+      ctrl.abort();
+    }, timeoutMs);
+    signal = ctrl.signal;
+  }
   try {
     let resp: Response;
+    const merged = { ...init, signal } as RequestInit;
     if (isTauri) {
       if (!tauriFetch) {
         const mod = await import("@tauri-apps/plugin-http");
@@ -105,18 +137,26 @@ export async function xfetch(input: string | URL, init?: RequestInit): Promise<R
         const headers = new Headers(init?.headers);
         headers.set("Origin", "");
         const bypass = { proxy: { all: { url: "http://127.0.0.1:1", noProxy: host } } };
-        resp = await tauriFetch(input as string, { ...init, headers, ...bypass } as RequestInit);
+        resp = await tauriFetch(input as string, { ...merged, headers, ...bypass } as RequestInit);
       } else {
-        resp = await tauriFetch(input as string, init);
+        resp = await tauriFetch(input as string, merged);
       }
     } else {
-      resp = await fetch(input, init);
+      resp = await fetch(input, merged);
     }
     report(input, init, started, resp);
     return resp;
   } catch (e) {
+    // 超时要抛中文错误：裸的 AbortError 会被上层当成「用户主动停止」静默恢复待机，节点永远查不到病因
+    if (timedOut) {
+      const err = new Error(`请求超时（${Math.round(timeoutMs! / 1000)} 秒无响应）：${String(input).slice(0, 120)}`);
+      report(input, init, started, null, err);
+      throw err;
+    }
     report(input, init, started, null, e);
     throw e;
+  } finally {
+    if (timer) clearTimeout(timer);
   }
 }
 

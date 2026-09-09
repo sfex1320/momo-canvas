@@ -15,10 +15,22 @@ type AgentPrefs = {
 };
 const PREF_FILE = "agent-prefs.json";
 
+/**
+ * 选择器可能在很短时间内连续改三个角色。saveJSON 在 Tauri 下包含异步外置化与落盘，
+ * 若并发写同一个文件，较早的旧快照反而可能最后完成并覆盖新选择；串行队列保证提交顺序就是落盘顺序。
+ */
+let prefsSaveChain: Promise<void> = Promise.resolve();
+
 /** 写回选择（模型/模式/联网开关/思考开关），对话内容不落盘 */
 function savePrefs(get: () => AgentState) {
   const { modelId, imageModelId, videoModelId, mode, webSearch, thinkingOn } = get();
-  void saveJSON(PREF_FILE, "v1", { modelId, imageModelId, videoModelId, mode, webSearch, thinkingOn } satisfies AgentPrefs);
+  const snapshot = { modelId, imageModelId, videoModelId, mode, webSearch, thinkingOn } satisfies AgentPrefs;
+  prefsSaveChain = prefsSaveChain.then(
+    () => saveJSON(PREF_FILE, "v1", snapshot),
+    () => saveJSON(PREF_FILE, "v1", snapshot),
+  ).catch(() => {
+    /* 偏好保存失败不打断当前对话；下次选择会继续从新快照写入 */
+  });
 }
 
 type AgentState = {
@@ -26,6 +38,7 @@ type AgentState = {
   draft: string;
   /** 待发送的参考图（dataURL） */
   attachments: string[];
+  referenceMode: "auto" | "none";
   running: boolean;
   /** 对话模型复合键「providerId::model」，空 = 角色默认 */
   modelId?: string;
@@ -78,6 +91,7 @@ export const useAgent = create<AgentState>((set, get) => ({
   messages: [],
   draft: "",
   attachments: [],
+  referenceMode: "auto",
   running: false,
   modelId: undefined,
   imageModelId: undefined,
@@ -93,7 +107,7 @@ export const useAgent = create<AgentState>((set, get) => ({
   resolver: null,
 
   setDraft: (v) => set({ draft: v }),
-  addAttachments: (imgs) => set((s) => ({ attachments: [...s.attachments, ...imgs].slice(0, 6) })),
+  addAttachments: (imgs) => set((s) => ({ attachments: [...s.attachments, ...imgs].slice(0, 6), referenceMode: "auto" })),
   removeAttachment: (i) => set((s) => ({ attachments: s.attachments.filter((_, x) => x !== i) })),
   setModelId: (v) => {
     set({ modelId: v });
@@ -139,6 +153,7 @@ export const useAgent = create<AgentState>((set, get) => ({
       messages: [],
       draft: "",
       attachments: [],
+      referenceMode: "auto",
       resolver: null,
       summary: "",
       summaryUpto: 0,
@@ -147,9 +162,10 @@ export const useAgent = create<AgentState>((set, get) => ({
 
   pushUser: (text, images) =>
     set((s) => ({
+      referenceMode: "auto",
       messages: [
         ...s.messages,
-        { id: uid(), role: "user", text, images: images.length ? images : undefined, time: Date.now() },
+        { id: uid(), role: "user", text, images: images.length ? images : undefined, referenceMode: s.referenceMode, time: Date.now() },
       ],
     })),
 
@@ -202,7 +218,10 @@ export const useAgent = create<AgentState>((set, get) => ({
     }),
 
   answer: (msgId, answer) => {
-    const r = get().resolver;
+    const state = get();
+    const pending = [...state.messages].reverse().find(m => m.question && m.question.answer === undefined);
+    if (!pending || pending.id !== msgId || !state.resolver) return;
+    const r = state.resolver;
     set((s) => ({
       resolver: null,
       messages: s.messages.map((m) =>

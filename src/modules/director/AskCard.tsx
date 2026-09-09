@@ -7,6 +7,7 @@ export function AskCard({
   danger,
   onConfirm,
   onCancel,
+  children,
 }: {
   /** 确认内容（可含 JSX 插值） */
   text: ReactNode;
@@ -16,6 +17,8 @@ export function AskCard({
   danger?: boolean;
   onConfirm: () => void;
   onCancel: () => void;
+  /** 确认行之外的次级选项（如「存为草稿」） */
+  children?: ReactNode;
 }) {
   return (
     <div
@@ -26,6 +29,7 @@ export function AskCard({
     >
       <div className="ds-ask-card">
         <div className="ds-ask-text">{text}</div>
+        {children}
         <div className="ds-ask-row">
           <button className="btn sm" onClick={onCancel}>
             取消

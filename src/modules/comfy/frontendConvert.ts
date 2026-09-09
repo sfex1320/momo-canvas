@@ -11,6 +11,9 @@
 import type { ComfyWfNode } from "../../core/types";
 import { pruneDisabled } from "../../core/services/comfy";
 import { layoutForComfy, layoutWorkflow } from "./wfGraph";
+// widgets_values 位序唯一来源已提取为无依赖纯模块（Comfy 同步写回共用 + node 直跑测试可用）；此处 re-export 保持老调用方兼容
+export { widgetLayoutOf, type WidgetSlot } from "../../core/comfySync/widgetLayout";
+import { widgetLayoutOf, isAutoGrowType as isAutoGrow, isWidgetType } from "../../core/comfySync/widgetLayout";
 
 /** 前端格式判定：nodes + links 数组（API 格式没有这两个顶层数组） */
 export function isFrontendWorkflow(json: unknown): boolean {
@@ -48,46 +51,11 @@ function normalizeLinks(raw: any[]): FLink[] {
   );
 }
 
-/** 连接类型判定：全大写类型名（IMAGE/MODEL/CLIP…）且不属于 widget 基础类型 */
-const WIDGET_TYPES = new Set(["INT", "FLOAT", "STRING", "BOOLEAN", "COMBO"]);
-/** V3 动态类型：DYNAMICCOMBO 是控件（值在 widgets_values）；AUTOGROW 是组合槽（值在其带点子槽 values.a）；MATCHTYPE 当连接处理 */
-const isDynamicCombo = (t: unknown) => typeof t === "string" && /^COMFY_DYNAMICCOMBO/.test(t);
-const isAutoGrow = (t: unknown) => t === "COMFY_AUTOGROW_V3";
-const isWidgetType = (t: unknown) => Array.isArray(t) || WIDGET_TYPES.has(t as string) || isDynamicCombo(t);
+/** 连接类型判定：全大写类型名（IMAGE/MODEL/CLIP…）且不属于 widget 基础类型
+ *  （注意：DYNAMICCOMBO 历史上按连接处理——保持原判定，避免子图接口槽序变化） */
+const WIDGET_BASE = new Set(["INT", "FLOAT", "STRING", "BOOLEAN", "COMBO"]);
 const isConnType = (t: unknown): boolean =>
-  typeof t === "string" && /^[A-Z][A-Z0-9_]*$/.test(t) && !WIDGET_TYPES.has(t);
-
-export type WidgetSlot = { name: string; cag: boolean };
-
-/**
- * 某节点类型的 widgets_values 布局（前端格式 ⇄ API 格式转换共用的唯一规则来源）：
- *  - widget 名序 = object_info 定义序（required + optional，combo/动态下拉也是 widget）
- *  - forceInput 的 widget 在 ComfyUI 序列化里**不占** widgets_values 位（跳过）
- *  - 带 control_after_generate 标记的 widget（KSampler.seed 等）后面紧跟一个注入位（"fixed"/"increment"…），取值/回填都要 +1
- * 返回：slots = 占位的 widget 序（cag = 后面有注入位）；index = widget 名 → 在 widgets_values 里的正确下标
- */
-export function widgetLayoutOf(
-  classType: string,
-  objectInfo: Record<string, any>,
-): { slots: WidgetSlot[]; index: Map<string, number> } {
-  const oi = objectInfo[classType];
-  const slots: WidgetSlot[] = [];
-  const index = new Map<string, number>();
-  let wvIdx = 0;
-  for (const group of [oi?.input?.required, oi?.input?.optional]) {
-    for (const [name, def] of Object.entries<any>(group ?? {})) {
-      const t = Array.isArray(def) ? def[0] : def?.type;
-      if (!isWidgetType(t)) continue;
-      const opts = Array.isArray(def) ? def[1] : def?.options;
-      if (opts?.forceInput) continue; // 强制连线：序列化里不占位
-      const cag = !!opts?.control_after_generate;
-      slots.push({ name, cag });
-      index.set(name, wvIdx);
-      wvIdx += cag ? 2 : 1;
-    }
-  }
-  return { slots, index };
-}
+  typeof t === "string" && /^[A-Z][A-Z0-9_]*$/.test(t) && !WIDGET_BASE.has(t);
 
 /** 纯展示节点（无执行意义，剔除） */
 const isNoteNode = (type: string) => /markdownnote|^note$|sticky/i.test(type);

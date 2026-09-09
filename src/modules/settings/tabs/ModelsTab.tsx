@@ -1,7 +1,8 @@
 /**
  * 设置面板 · 模型配置页 — 服务商卡片 / 预设卡片 / 服务商编辑器
  */
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { CodexBridgeCard } from "../CodexBridgeCard";
 import { createPortal } from "react-dom";
 import { Field, Row } from "../../../ui/kit";
 import { PopSelect } from "../../../ui/PopSelect";
@@ -11,6 +12,7 @@ import { toast, useUi } from "../../../core/stores/uiStore";
 import { chatOnce } from "../../../core/services/llm";
 import { fetchModelList } from "../../../core/services/modelList";
 import { errMsg } from "../../../core/utils";
+import { modelAssignmentIssue } from "../../../core/modelAssignment";
 import { openExternal } from "../../../core/external";
 import { OLLAMA_PRESET, PROVIDER_PRESETS, buildPresetProvider, type ProviderPreset } from "../../../core/providerPresets";
 import { useLocalGguf } from "../../../core/stores/localGgufStore";
@@ -104,6 +106,8 @@ export function ModelsTab() {
   const localModels = useLocalGguf((s) => s.models);
   // 已配置的 Ollama 卡（chat 槽走原生协议）：固定卡点击直接编辑它，没有则建一张新草稿
   const ollamaCard = models.providers.find((p) => p.models.chat?.protocol === "ollama");
+  // 编辑器内部「待确认输入」的收口入口：保存按钮在标题栏（ProviderEditor 外），经它触发 finalize
+  const editorApi = useRef<{ save: () => void } | null>(null);
 
   // 浮出面板打开时，让主设置窗口左移让位（两者整体居中）
   useEffect(() => {
@@ -180,6 +184,7 @@ export function ModelsTab() {
       </div>
 
       {/* 默认模型：五类用途各选一个，节点/面板不单独指定时全用这里的 */}
+      <CodexBridgeCard />
       <div className="set-card">
         <div className="set-card-h">
           默认模型
@@ -369,11 +374,25 @@ export function ModelsTab() {
       {editing
         ? createPortal(
             <div className="prov-float" role="dialog" aria-label="服务商配置">
+              {/* 操作按钮固定在标题栏：内容再长，保存/取消/测试也不会被滚出视野 */}
               <div className="pf-head">
                 <b>{isExisting ? savedEditing?.name || "编辑服务商" : "添加服务商"}</b>
-                <button className="icon-btn" onClick={() => setEditing(null)} aria-label="关闭">
-                  <IcClose size={16} />
-                </button>
+                <span className="pf-head-acts">
+                  {isExisting && savedEditing?.models.chat ? (
+                    <button className="btn sm" disabled={testing === savedEditing.id} onClick={() => void testChat(savedEditing)}>
+                      {testing === savedEditing.id ? <IcLoading size={14} /> : null} 测试
+                    </button>
+                  ) : null}
+                  <button className="btn sm" onClick={() => setEditing(null)}>
+                    取消
+                  </button>
+                  <button className="btn sm primary" onClick={() => editorApi.current?.save()}>
+                    保存服务商
+                  </button>
+                  <button className="icon-btn" onClick={() => setEditing(null)} aria-label="关闭">
+                    <IcClose size={16} />
+                  </button>
+                </span>
               </div>
               <div className="pf-body">
                 {isExisting && savedEditing ? (
@@ -404,11 +423,6 @@ export function ModelsTab() {
                       );
                     })}
                     <span style={{ flex: 1 }} />
-                    {savedEditing.models.chat ? (
-                      <button className="btn sm" disabled={testing === savedEditing.id} onClick={() => void testChat(savedEditing)}>
-                        {testing === savedEditing.id ? <IcLoading size={14} /> : null} 测试
-                      </button>
-                    ) : null}
                     <button
                       className="icon-btn danger"
                       title={confirmDel === savedEditing.id ? "再点一次确认删除" : "删除该服务商"}
@@ -425,7 +439,12 @@ export function ModelsTab() {
                     </button>
                   </div>
                 ) : null}
-                <ProviderEditor draft={editing} setDraft={setEditing} onSave={saveEditing} onCancel={() => setEditing(null)} />
+                <ProviderEditor
+                  draft={editing}
+                  setDraft={setEditing}
+                  onSave={saveEditing}
+                  apiRef={editorApi}
+                />
               </div>
             </div>,
             document.body,
@@ -441,12 +460,13 @@ function ProviderEditor({
   draft,
   setDraft,
   onSave,
-  onCancel,
+  apiRef,
 }: {
   draft: ProviderDraft;
   setDraft: (d: ProviderDraft) => void;
   onSave: (d: ProviderDraft) => void;
-  onCancel: () => void;
+  /** 标题栏的「保存服务商」经它触发（要先收口各槽位里没回车的输入，再走 onSave） */
+  apiRef: React.RefObject<{ save: () => void } | null>;
 }) {
   // 拉取到的模型列表按协议缓存（同一中转站三个槽位通常协议相同，可复用）
   const [lists, setLists] = useState<Record<string, string[]>>({});
@@ -461,6 +481,7 @@ function ProviderEditor({
   const addModel = (role: ModelRole, name: string) => {
     const m = name.trim();
     if (!m) return;
+    const issue=modelAssignmentIssue(role,m);if(issue){toast(issue,"err");return;}
     const cur = draft.slots[role].models;
     if (!cur.includes(m)) patchSlot(role, { models: [...cur, m] });
     setInputs((s) => ({ ...s, [role]: "" }));
@@ -475,7 +496,7 @@ function ProviderEditor({
     const proto = draft.slots[role].protocol;
     setPulling(role);
     try {
-      // 自定义协议也按 OpenAI 兼容方式尝试（多数中转站同时开放 /models）
+      // 预设协议也按 OpenAI 兼容方式尝试（多数中转站同时开放 /models）
       const ids = await fetchModelList(proto, draft.baseUrl, draft.apiKey);
       setLists((s) => ({ ...s, [proto]: ids }));
       toast(`拉取到 ${ids.length} 个模型，可搜索筛选后点选添加`, "ok");
@@ -496,6 +517,11 @@ function ProviderEditor({
     }
     return d;
   };
+
+  // 每次渲染都刷新闭包：标题栏的保存按钮始终拿到最新的 draft/inputs
+  useEffect(() => {
+    apiRef.current = { save: () => onSave(finalize()) };
+  });
 
   return (
     <div className="mrow-editor">
@@ -544,7 +570,7 @@ function ProviderEditor({
             </div>
             <Row gap={10}>
               <PopSelect
-                // 协议名可能很长（自定义协议）：触发按钮限宽截断，全名在弹层里看
+                // 协议名可能很长：触发按钮限宽截断，全名在弹层里看
                 style={{ flex: "1 1 0", minWidth: 0, maxWidth: 190 }}
                 title="协议"
                 value={slot.protocol}
@@ -555,8 +581,8 @@ function ProviderEditor({
                         .filter((p) => (p.role === "video" ? "video" : p.role === "audio" ? "audio" : "image") === role)
                         .map((p) => ({
                           value: `custom:${p.id}`,
-                          label: `★ ${p.name}`,
-                          desc: p.verifiedAt ? "✓ 已校准" : "未校准（自定义协议）",
+                          label: p.name,
+                          icon: ROLE_ICON[role],
                         }))
                     : []),
                 ]}
@@ -585,15 +611,6 @@ function ProviderEditor({
                 {pulling === role ? <IcLoading size={14} /> : <IcDownload size={14} />} 拉取模型
               </button>
             </Row>
-            {(() => {
-              // 选了从未真实测试过的自定义协议 → 提醒先去协议页测通（协议不通，模型配了也连不上）
-              const cp = customProtocols.find((x) => `custom:${x.id}` === slot.protocol);
-              return cp && !cp.verifiedAt ? (
-                <div className="pe-slot-hint" style={{ marginTop: 4 }}>
-                  ⚠ 协议「{cp.name}」还没跑过真实测试——建议先到「设置 → 协议」用「真实测试并校准」把协议测通，再来配模型，避免生成时才发现连不上。
-                </div>
-              ) : null;
-            })()}
             {slot.models.length ? (
               <div className="pe-chips">
                 {slot.models.map((m) => (
@@ -639,15 +656,6 @@ function ProviderEditor({
           </div>
         );
       })}
-
-      <Row style={{ justifyContent: "flex-end", margin: "12px 0 10px" }}>
-        <button className="btn sm" onClick={onCancel}>
-          取消
-        </button>
-        <button className="btn sm primary" onClick={() => onSave(finalize())}>
-          保存服务商
-        </button>
-      </Row>
     </div>
   );
 }

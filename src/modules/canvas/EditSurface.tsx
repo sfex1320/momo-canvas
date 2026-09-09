@@ -4,7 +4,7 @@
  *  工具按钮都在悬浮工具条（NodeEditMenu 的会话条），本层只管指针交互与可视化。
  *  蒙版约定（与 maskCanvas.ts 一致）：与原图同尺寸的 PNG，标注处不透明白色，其余全透明。
  */
-import { useEffect, useRef, useState, type PointerEvent as RPointerEvent, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type PointerEvent as RPointerEvent, type ReactNode } from "react";
 import { useUi } from "../../core/stores/uiStore";
 import { imageDims } from "../../core/imageInfo";
 
@@ -36,7 +36,7 @@ export function EditSurface({ id, src, children }: { id: string; src: string; ch
   return (
     <div className="es-wrap">
       {children}
-      {mode === "crop" ? <CropOverlay key={src} /> : mode === "mark" ? <MarkOverlay key={src} src={src} /> : <MaskOverlay key={src} src={src} />}
+      {mode === "crop" ? <CropOverlay key={src} /> : mode === "gridsplit" ? <GridSplitOverlay key={src} /> : mode === "mark" ? <MarkOverlay key={src} src={src} /> : <MaskOverlay key={src} src={src} />}
     </div>
   );
 }
@@ -313,6 +313,122 @@ function MarkOverlay({ src }: { src: string }) {
           }}
         >{tool === "point" ? <span aria-hidden="true">{pointNext}</span> : null}</div>
       ) : null}
+    </div>
+  );
+}
+
+/* ================= 宫格切分：可拖切割线 + 点格勾选（勾选顺序 = 分镜顺序） ================= */
+
+const GS_MIN_CELL = 0.05; // 最小格宽（归一化），拖线时钳制在相邻线之间
+
+function GridSplitOverlay() {
+  const xs = useUi((s) => s.mediaEdit?.gridXs ?? []);
+  const ys = useUi((s) => s.mediaEdit?.gridYs ?? []);
+  const picked = useUi((s) => s.mediaEdit?.gridPicked ?? []);
+  const patch = useUi((s) => s.patchMediaEdit);
+  const boxRef = useRef<HTMLDivElement>(null);
+  const dragging = useRef<{ axis: "x" | "y"; idx: number } | null>(null);
+  // 拖动中的线先走本地状态（每帧 patch 全局会话会让整条工具条跟着重渲染），松手才写回
+  const [live, setLive] = useState<{ axis: "x" | "y"; idx: number; v: number } | null>(null);
+
+  const linesX = useMemo(() => {
+    const arr = [...xs];
+    if (live?.axis === "x") arr[live.idx] = live.v;
+    return arr;
+  }, [xs, live]);
+  const linesY = useMemo(() => {
+    const arr = [...ys];
+    if (live?.axis === "y") arr[live.idx] = live.v;
+    return arr;
+  }, [ys, live]);
+
+  const toNorm = (e: RPointerEvent) => {
+    const r = boxRef.current!.getBoundingClientRect();
+    return { x: clamp01((e.clientX - r.left) / r.width), y: clamp01((e.clientY - r.top) / r.height) };
+  };
+
+  const lineDown = (axis: "x" | "y", idx: number) => (e: RPointerEvent) => {
+    if (e.button !== 0) return;
+    e.stopPropagation();
+    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+    dragging.current = { axis, idx };
+    const p = toNorm(e);
+    setLive({ axis, idx, v: axis === "x" ? p.x : p.y });
+  };
+  const lineMove = (e: RPointerEvent) => {
+    const d = dragging.current;
+    if (!d) return;
+    const p = toNorm(e);
+    setLive({ axis: d.axis, idx: d.idx, v: d.axis === "x" ? p.x : p.y });
+  };
+  const lineUp = (e: RPointerEvent) => {
+    const d = dragging.current;
+    dragging.current = null;
+    setLive(null);
+    if (!d) return;
+    const p = toNorm(e);
+    const v = clamp01(d.axis === "x" ? p.x : p.y);
+    const arr = [...(d.axis === "x" ? xs : ys)];
+    // 钳制在相邻线之间，保证格子不小于最小宽度
+    const lo = d.idx > 0 ? arr[d.idx - 1] + GS_MIN_CELL : GS_MIN_CELL;
+    const hi = d.idx < arr.length - 1 ? arr[d.idx + 1] - GS_MIN_CELL : 1 - GS_MIN_CELL;
+    arr[d.idx] = Math.max(lo, Math.min(hi, v));
+    patch(d.axis === "x" ? { gridXs: arr } : { gridYs: arr });
+  };
+
+  const toggleCell = (r: number, c: number) => {
+    const key = `${r}-${c}`;
+    const next = picked.includes(key) ? picked.filter((k) => k !== key) : [...picked, key];
+    patch({ gridPicked: next });
+  };
+
+  const rows = linesY.length + 1;
+  const cols = linesX.length + 1;
+  const vx = [0, ...linesX, 1];
+  const vy = [0, ...linesY, 1];
+  const cells: { r: number; c: number; left: number; top: number; w: number; h: number; order: number }[] = [];
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      const order = picked.indexOf(`${r}-${c}`);
+      cells.push({ r, c, left: vx[c], top: vy[r], w: vx[c + 1] - vx[c], h: vy[r + 1] - vy[r], order });
+    }
+  }
+
+  return (
+    <div ref={boxRef} className="es-ov nodrag nowheel" style={{ cursor: "default" }} role="group" aria-label="宫格切分：拖动线条调整，点击格子按顺序勾选">
+      {cells.map((cell) => (
+        <button
+          key={`${cell.r}-${cell.c}`}
+          className={`gs-cell ${cell.order >= 0 ? "on" : ""}`}
+          style={{ left: `${cell.left * 100}%`, top: `${cell.top * 100}%`, width: `${cell.w * 100}%`, height: `${cell.h * 100}%` }}
+          title={cell.order >= 0 ? `分镜 ${cell.order + 1}（点击取消）` : "点击勾选进分镜组"}
+          onClick={() => toggleCell(cell.r, cell.c)}
+        >
+          {cell.order >= 0 ? <i>{cell.order + 1}</i> : null}
+        </button>
+      ))}
+      {linesX.map((x, i) => (
+        <div
+          key={`x${i}`}
+          className="gs-line gs-line-v"
+          style={{ left: `${x * 100}%` }}
+          onPointerDown={lineDown("x", i)}
+          onPointerMove={lineMove}
+          onPointerUp={lineUp}
+          onPointerCancel={lineUp}
+        />
+      ))}
+      {linesY.map((y, i) => (
+        <div
+          key={`y${i}`}
+          className="gs-line gs-line-h"
+          style={{ top: `${y * 100}%` }}
+          onPointerDown={lineDown("y", i)}
+          onPointerMove={lineMove}
+          onPointerUp={lineUp}
+          onPointerCancel={lineUp}
+        />
+      ))}
     </div>
   );
 }

@@ -1,19 +1,23 @@
-import { useEffect, useRef, useState } from "react";
+import { useShallow } from "zustand/react/shallow";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { ReactFlowProvider } from "@xyflow/react";
-import { LayerEditor } from "./modules/canvas/LayerEditor";
+const PlanarSheetPanel = lazy(()=>import("./modules/canvas/PlanarSheetPanel").then(m=>({default:m.PlanarSheetPanel})));
+const LayerEditor = lazy(()=>import("./modules/canvas/LayerEditor").then(m=>({default:m.LayerEditor})));
 import { Titlebar } from "./modules/shell/Titlebar";
 import { SmartCanvas } from "./modules/canvas/SmartCanvas";
 import { AgentPanel } from "./modules/agent/AgentPanel";
 import { GalleryDock } from "./modules/shell/GalleryDock";
-import { SettingsDialog } from "./modules/settings/SettingsDialog";
-import { TemplateManager } from "./modules/comfy/TemplateManager";
+const SettingsDialog = lazy(()=>import("./modules/settings/SettingsDialog").then(m=>({default:m.SettingsDialog})));
+const TemplateManager = lazy(()=>import("./modules/comfy/TemplateManager").then(m=>({default:m.TemplateManager})));
+const SyncCenter = lazy(()=>import("./modules/comfySync/SyncCenter").then(m=>({default:m.SyncCenter})));
 import { AssetLibrary } from "./modules/assets/AssetLibrary";
-import { CharLibrary } from "./modules/charlib/CharLibrary";
-import { SkillManager } from "./modules/skills/SkillManager";
-import { DirectorStudio } from "./modules/director/DirectorStudio";
+const CharLibrary = lazy(()=>import("./modules/charlib/CharLibrary").then(m=>({default:m.CharLibrary})));
+const SkillManager = lazy(()=>import("./modules/skills/SkillManager").then(m=>({default:m.SkillManager})));
+const DirectorStudio = lazy(()=>import("./modules/director/DirectorStudio").then(m=>({default:m.DirectorStudio})));
 import { GgufImportDialog } from "./modules/settings/GgufImportDialog";
-import { LocalLlmSetup } from "./modules/settings/LocalLlmSetup";
+const LocalLlmSetup = lazy(()=>import("./modules/settings/LocalLlmSetup").then(m=>({default:m.LocalLlmSetup})));
 import { useSettings } from "./core/stores/settingsStore";
+import { useDesign } from "./core/stores/designStore";
 import { useBoard } from "./core/stores/boardStore";
 import { useComfy } from "./core/stores/comfyStore";
 import { useAssets } from "./core/stores/assetStore";
@@ -295,35 +299,67 @@ function Lightbox() {
 
 /** 顺序预览播放器：时间线粗剪「预览成片」——按片段顺序自动连播，拼接前先看效果 */
 function SeqPlayer() {
-  const urls = useUi((s) => s.seqPreview);
+  const items = useUi((s) => s.seqPreview);
   const set = useUi((s) => s.setSeqPreview);
   const [i, setI] = useState(0);
-  useEffect(() => setI(0), [urls]);
-  if (!urls?.length) return null;
-  const idx = Math.min(i, urls.length - 1);
+  const vref = useRef<HTMLVideoElement>(null);
+  const next = () => setI((v) => (items && v < items.length - 1 ? v + 1 : v));
+  useEffect(() => setI(0), [items]);
+  // 入出点生效（3.4）：载入后跳到入点；播放越过出点自动接下一段（与导出入出点同源）
+  useEffect(() => {
+    const v = vref.current;
+    const it = items?.[Math.min(i, (items?.length ?? 1) - 1)];
+    if (!v || !it) return;
+    const seek = () => {
+      if (it.inSec && it.inSec > 0.05) v.currentTime = it.inSec;
+      void v.play().catch(() => {});
+    };
+    v.addEventListener("loadedmetadata", seek, { once: true });
+    if (v.readyState >= 1) seek();
+    return () => v.removeEventListener("loadedmetadata", seek);
+  }, [i, items]);
+  useEffect(() => {
+    const onTime = () => {
+      const v = vref.current;
+      const it = items?.[Math.min(i, (items?.length ?? 1) - 1)];
+      if (!v || !it?.outSec || v.seeking) return;
+      if (v.currentTime >= it.outSec - 0.05) {
+        if (i < (items?.length ?? 1) - 1) next();
+        else {
+          v.pause();
+          v.currentTime = it.outSec - 0.05;
+        }
+      }
+    };
+    const v = vref.current;
+    v?.addEventListener("timeupdate", onTime);
+    return () => v?.removeEventListener("timeupdate", onTime);
+  });
+  if (!items?.length) return null;
+  const idx = Math.min(i, items.length - 1);
+  const it = items[idx];
   return (
     <div className="lightbox" onClick={() => set(null)}>
       <div className="seq-wrap" onClick={(e) => e.stopPropagation()}>
         <video
+          ref={vref}
           key={idx}
-          src={urls[idx]}
+          src={it.url}
           controls
           autoPlay
-          onEnded={() => {
-            if (idx < urls.length - 1) setI(idx + 1);
-          }}
+          onEnded={next}
         />
         <div className="seq-bar glass">
           <button className="btn sm" disabled={idx === 0} style={{ opacity: idx === 0 ? 0.4 : 1 }} onClick={() => setI(idx - 1)}>
             上一段
           </button>
           <span>
-            第 {idx + 1} / {urls.length} 段 · 播完自动接下一段
+            第 {idx + 1} / {items.length} 段 · {it.inSec || it.outSec ? `入出点 ${it.inSec ?? 0}–${it.outSec ?? "末"}s · ` : ""}播完自动接下一段
           </span>
           <button
             className="btn sm"
-            disabled={idx === urls.length - 1}
-            style={{ opacity: idx === urls.length - 1 ? 0.4 : 1 }}
+            disabled={idx === items.length - 1}
+            style={{ opacity: idx === items.length - 1 ? 0.4 : 1 }}
             onClick={() => setI(idx + 1)}
           >
             下一段
@@ -340,6 +376,7 @@ function SeqPlayer() {
 export default function App() {
   const [ready, setReady] = useState(false);
   const agentOpen = useUi((s) => s.agentOpen);
+  const panels = useUi(useShallow(s=>({settingsOpen:s.settingsOpen,templateMgrOpen:s.templateMgrOpen,comfySyncOpen:s.comfySyncOpen,charLibOpen:s.charLibOpen,skillMgrOpen:s.skillMgrOpen,directorOpen:s.directorOpen,localLlmSetupOpen:s.localLlmSetupOpen,layerEditorNodeId:s.layerEditorNodeId,planarSheetNodeId:s.planarSheetNodeId})));
 
   useEffect(() => {
     void Promise.all([
@@ -349,6 +386,7 @@ export default function App() {
       // 这里显式再调一次保证 loaded（initOnce 幂等，不会重复加载）
       useLocalGguf.getState().init(),
       useBoard.getState().init(),
+      useDesign.getState().init(),
       useComfy.getState().init(),
       useAssets.getState().init(),
       useTemplates.getState().init(),
@@ -362,19 +400,39 @@ export default function App() {
       const n = recoverInterruptedTasks();
       if (n) toast(`导演台：上次有 ${n} 个任务被中断，请到导演台查看`, "info");
       setReady(true);
+      // Comfy 工作流同步：设置就绪后恢复来源与监听（开关关闭/浏览器预览时内部直接返回）
+      void import("./core/comfySync/engine").then((m) => m.startEngine());
+      // MCP 服务器：设置就绪后连接并把工具注册进能力层（无服务器时同步为空操作）
+      void import("./core/capability/mcp").then((m) => m.initMcpSync());
+      // Eagle 资产桥：设置与资产库都就绪后才连接（未启用时不发任何请求）
+      void (async () => {
+        try {
+          const { isTauri } = await import("./core/utils");
+          if (!isTauri) return;
+          const [{ listen }, engine] = await Promise.all([import("@tauri-apps/api/event"), import("./core/eagleSyncEngine")]);
+          await engine.detect();
+          engine.scheduleScan();
+          // Eagle 插件经本地桥转发的动作（导入选中项 / 发送到画布 / 定位资产）
+          await listen<{ kind: string; itemIds: string[]; target?: string }>("eagle-bridge-action", (e) => {
+            void engine.handleBridgeAction(e.payload);
+          });
+        } catch {
+          /* 未启用/桌面外环境静默 */
+        }
+      })();
     });
-    // 便携版首次启动：在桌面创建快捷方式（安装版由安装器负责，跳过）
-    // localStorage 标记 + Rust 端「.lnk 存在即跳过」双保险；失败不写标记，下次启动再试
+    // 便携版每次启动都核对桌面快捷方式；新解压路径覆盖同名旧链接，已正确指向当前程序时不重复写。
+    // 不能用跨版本共享的 localStorage 一次性标记，否则换新版目录后桌面仍会启动旧程序。
     void (async () => {
       try {
-        if (!isTauri || localStorage.getItem("momo:desktop-shortcut")) return;
+        if (!isTauri) return;
         if (!(await isPortable())) return;
         const { invoke } = await import("@tauri-apps/api/core");
-        const r = await invoke<{ created: boolean }>("create_desktop_shortcut", {
+        const r = await invoke<{ created: boolean; updated: boolean }>("create_desktop_shortcut", {
           name: "MOMO 智能画布",
         });
-        localStorage.setItem("momo:desktop-shortcut", "1");
         if (r.created) toast("已为便携版创建桌面快捷方式", "ok");
+        else if (r.updated) toast("桌面快捷方式已更新为当前便携版", "ok");
       } catch {
         /* 创建失败不打扰用户（可能被安全软件拦截），下次启动重试 */
       }
@@ -420,17 +478,19 @@ export default function App() {
       <SmartCanvas />
       {agentOpen ? <AgentPanel /> : null}
       <GalleryDock />
-      <SettingsDialog />
-      <TemplateManager />
+      {panels.settingsOpen && <Suspense fallback={<div role="status">加载中…</div>}><SettingsDialog /></Suspense>}
+      {panels.templateMgrOpen && <Suspense fallback={<div role="status">加载中…</div>}><TemplateManager /></Suspense>}
+      {panels.comfySyncOpen && <Suspense fallback={<div role="status">加载中…</div>}><SyncCenter /></Suspense>}
       <AssetLibrary />
-      <CharLibrary />
-      <SkillManager />
-      <DirectorStudio />
+      {panels.charLibOpen && <Suspense fallback={<div role="status">加载中…</div>}><CharLibrary /></Suspense>}
+      {panels.skillMgrOpen && <Suspense fallback={<div role="status">加载中…</div>}><SkillManager /></Suspense>}
+      {panels.directorOpen && <Suspense fallback={<div role="status">加载中…</div>}><DirectorStudio /></Suspense>}
       <GgufImportDialog />
-      <LocalLlmSetup />
+      {panels.localLlmSetupOpen && <Suspense fallback={<div role="status">加载中…</div>}><LocalLlmSetup /></Suspense>}
       <Lightbox />
       <SeqPlayer />
-      <LayerEditor />
+      {panels.planarSheetNodeId && <Suspense fallback={<div role="status">加载中…</div>}><PlanarSheetPanel key={panels.planarSheetNodeId}/></Suspense>}
+      {panels.layerEditorNodeId && <Suspense fallback={<div role="status">加载中…</div>}><LayerEditor /></Suspense>}
       <Toasts />
     </ReactFlowProvider>
   );

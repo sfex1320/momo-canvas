@@ -1,5 +1,5 @@
 import type { Node } from "@xyflow/react";
-import type { SkillRunSnapshot } from "./skillTypes";
+import type { SkillBinding, SkillRunSnapshot } from "./skillTypes";
 
 /* ---------------- 节点 ---------------- */
 export type NodeKind =
@@ -40,7 +40,7 @@ export type ChatMsg = {
 };
 
 /* ---------------- Agent 模式（侧边创作助手：聊天 / 搜索 → 抉择 → 生图/生视频） ---------------- */
-export type AgentStepKind = "search" | "ask" | "image" | "video";
+export type AgentStepKind = "search" | "think" | "ask" | "image" | "video" | "tool";
 
 /** 一次工具调用的过程轨迹（展示在助手消息里） */
 export type AgentStep = {
@@ -62,9 +62,11 @@ export type AgentMsg = {
   text: string;
   /** 用户附带的参考图（dataURL） */
   images?: string[];
+  /** 本轮生成是否允许使用图片参考；缺省沿用自动策略。 */
+  referenceMode?: "auto" | "none";
   /** 助手消息的思考过程（聊天模式，可折叠展示） */
   reasoning?: string;
-  /** 过程轨迹：搜索 / 提问 / 生成 */
+  /** 过程轨迹：搜索 / 思考 / 提问 / 生成 */
   steps?: AgentStep[];
   question?: AgentQuestion;
   /** 生成结果（内联展示，同时已收录资产库） */
@@ -74,11 +76,30 @@ export type AgentMsg = {
   time: number;
 };
 
+/** 元素工坊识别出的元素角色（elemMeta 挂在拆解产物图片节点上，驱动「元素重绘 / 改字」入口） */
+export type ElementRole = "text" | "subject" | "logo" | "decoration";
+
+/** 元素拆解的输出规格；毫米是用户指定画板尺寸，不从效果图推测工程尺寸。 */
+export type ElementFlatOptions = {
+  view: "front" | "back" | "bottom";
+  backColor: string; bottomColor: string; background: string; transparent: boolean;
+  width: number; height: number; unit: "px" | "mm"; dpi: number; modelId?: string;
+};
+
 export type ImageData = {
+  /** 立体转平面矢量的溯源；与抠图图层元数据分开。 */
+  planarSheet?: { sourceNodeId: string; prompt: string; modelId?: string; width: number; height: number };
   status: RunStatus;
   error?: string;
   src?: string;
   name?: string;
+  /** 元素工坊拆解产物的元数据：有它 = 这是一个图层元素节点（透明 PNG），role=text 时 text 存识别出的原文；box 存原图归一化位置（按原位拼回/PSD 原位导出用） */
+  elemMeta?: { role: ElementRole; text?: string; box?: [number, number, number, number] };
+  /** 分镜组切片：渲染输入口，原图 → 切片的连线可见（纯溯源展示，不参与取值） */
+  flatMeta?: ElementFlatOptions & { sourceNodeId: string; elementName: string; pixelWidth: number; pixelHeight: number };
+  storyTile?: boolean;
+  /** 切片显示尺寸：整组共用缩放，避免各节点按比例独立缩放而错缝。 */
+  tileSize?: { w: number; h: number };
 };
 
 /** 视频源节点：承载本地/生成的视频（对标图片节点）。src 在 Tauri 下为资产文件的 asset: URL（跨重启有效），浏览器预览为 blob URL（会话内有效） */
@@ -143,7 +164,13 @@ export type ChatData = {
   modelId?: string;
 };
 
+/** 九宫格抽卡整图画幅：N×N 等分网格的每格比例恒等于整图比例，选横屏/竖屏跟随目标视频画幅 */
+export type GridAspect = "16:9" | "9:16" | "1:1";
+
 export type ImageGenData = {
+  progress?: string;
+  /** Codex：不沿用参考图片的历史会话。 */
+  newConversation?: boolean;
   status: RunStatus;
   error?: string;
   prompt: string;
@@ -176,6 +203,10 @@ export type ImageGenData = {
   negative?: string;
   /** 由备用模型生成时记录其名（徽标展示）；undefined = 主模型生成 */
   fallbackModel?: string;
+  /** 九宫格抽卡：记录所用模板 id（gridPresets），供「更多 → 九宫格抽卡」重开时恢复切分入口 */
+  gridPresetId?: string;
+  /** 九宫格抽卡：整图画幅（N×N 等分网格每格比例 = 整图比例，故画幅应跟随下游视频画幅）；默认 16:9 */
+  gridAspect?: GridAspect;
   /** 历次出图记录（最近 10 次） */
   history?: GenHistoryEntry[];
 };
@@ -254,7 +285,11 @@ export type VectorizeData = {
   status: RunStatus;
   error?: string;
   /** VTracer 预设：自动 / 海报色块 / 插画漫画(锐角) / 黑白 / 照片 / 线稿 */
-  preset: "auto" | "poster" | "comic" | "bw" | "photo" | "line-art";
+  preset: "auto" | "poster" | "comic" | "bw" | "photo" | "line-art" | "flat";
+  /** 平面拆件聚类色数与导出设置；旧节点缺省不启用色盘清理。 */
+  flatColors?: number;
+  exportWidthMm?: number;
+  exportScale?: number;
   colorMode: "auto" | "color" | "binary";
   hierarchical: "stacked" | "cutout";
   /** 颜色精度 0=默认(随预设) / 1..10 */
@@ -435,9 +470,20 @@ export type NoteData = {
 
 /** 组（主节点）：把区域内节点打包，按位置顺序聚合成员的文本/图片输出 */
 export type GroupData = {
+  artboard?: ArtboardSpec;
   status: RunStatus;
   error?: string;
   title?: string;
+  /** 图层组（元素工坊拆解产物）：组内 y 序 = 图层 z 序，禁用瀑布流重排、组头多「合成图层」按钮 */
+  layerGroup?: boolean;
+  /** 无框组（分镜组）：默认隐藏虚线框与组头，悬停显示，成员统一尺寸严格网格贴片 */
+  frameless?: boolean;
+  /** 分镜组：切片 id 的分镜顺序（点击序；重排/序号/拼接都按它） */
+  storyOrder?: string[];
+  /** 分镜组：当前每行格数（严格网格重排用） */
+  storyCols?: number;
+  /** 分镜组：是否在切片上显示顺序角标 */
+  showOrder?: boolean;
 };
 
 /** 生成类编辑节点的输出模式：image = 生成并输出图片；prompt = 不出图，向下游输出构造好的提示词 */
@@ -647,7 +693,7 @@ export type EnhanceParams = {
   /** 放大倍率（2 / 4） */
   factor: number;
   /** 增强侧重：detail = 细节纹理；face = 人物面部；none = 纯放大不加戏 */
-  focus: "detail" | "face" | "none";
+  focus: "detail" | "face" | "none" | "flat";
 };
 
 export type AppNode = Node<Record<string, unknown>, NodeKind>;
@@ -661,7 +707,7 @@ export type ModelRole = "chat" | "image" | "video" | "audio" | "asr";
 
 export type ChatProtocol = "openai" | "anthropic" | "gemini" | "ollama" | "llamacpp";
 export type ImageProtocol = "openai" | "gemini";
-export type VideoProtocol = "zhipu" | "siliconflow" | "openai";
+export type VideoProtocol = "zhipu" | "siliconflow" | "openai" | "ark" | "dashscope" | "google";
 export type AudioProtocol = "openai";
 export type AsrProtocol = "openai";
 export type AnyProtocol = ChatProtocol | ImageProtocol | VideoProtocol | AudioProtocol | AsrProtocol;
@@ -810,6 +856,10 @@ export const PROTOCOLS: Record<ModelRole, { value: string; label: string }[]> = 
     { value: "zhipu", label: "智谱 CogVideoX" },
     { value: "siliconflow", label: "硅基流动" },
     { value: "openai", label: "OpenAI 兼容 (任务轮询)" },
+    // 3.3 §8 官方协议适配器（适配器已实现，填入对应 Key 后即可联调）
+    { value: "ark", label: "火山方舟 Seedance（官方）" },
+    { value: "dashscope", label: "阿里云 DashScope Wan（官方）" },
+    { value: "google", label: "Google Gemini/Veo 视频（官方）" },
   ],
   audio: [{ value: "openai", label: "OpenAI 兼容 (audio/speech 朗读)" }],
   asr: [{ value: "openai", label: "OpenAI 兼容 (audio/transcriptions 转写)" }],
@@ -831,6 +881,8 @@ export type ComfyCfg = {
   host: string;
   /** ComfyUI 的用户工作流目录（如 …/ComfyUI/user/default/workflows）：模板往返编辑的落点 */
   workflowDir?: string;
+  /** Comfy 工作流无感同步总开关（规格 §16.3 的功能开关；关掉回退旧读取路径，数据不动） */
+  syncV2Enabled?: boolean;
 };
 export type ThemeName = "light" | "dark" | "black";
 
@@ -901,7 +953,18 @@ export type HotkeyAction =
   | "addEnhanceLocal"
   | "addVectorize"
   | "addEcomImage"
-  | "addDirector";
+  | "addDirector"
+  // 导演台 2.0 监看器（导演工作区内生效，方案 §7.3；数字键 1~9 切 Take 为内置行为不入表）
+  | "dirPlayPause"
+  | "dirPrevFrame"
+  | "dirNextFrame"
+  | "dirPrevSeg"
+  | "dirNextSeg"
+  | "dirSetIn"
+  | "dirSetOut"
+  | "dirApprove"
+  | "dirRegen"
+  | "dirPrompt";
 
 export const HOTKEY_LABEL: Record<HotkeyAction, string> = {
   moveTool: "移动工具（激活/取消）",
@@ -954,6 +1017,16 @@ export const HOTKEY_LABEL: Record<HotkeyAction, string> = {
   addDirector: "添加节点：导演台",
   addEnhanceLocal: "添加节点：超清放大",
   addVectorize: "添加节点：智能矢量",
+  dirPlayPause: "导演台监看器：播放/暂停",
+  dirPrevFrame: "导演台监看器：上一帧",
+  dirNextFrame: "导演台监看器：下一帧",
+  dirPrevSeg: "导演台监看器：上一片段",
+  dirNextSeg: "导演台监看器：下一片段",
+  dirSetIn: "导演台监看器：设置入点",
+  dirSetOut: "导演台监看器：设置出点",
+  dirApprove: "导演台监看器：采用当前版本",
+  dirRegen: "导演台监看器：重新生成本段",
+  dirPrompt: "导演台监看器：打开最终提示词",
 };
 
 /** 组合键格式：修饰键小写用 + 连接，如 "ctrl+z" / "ctrl+shift+s"；单键直接写键名 */
@@ -1010,6 +1083,17 @@ export const DEFAULT_HOTKEYS: Record<HotkeyAction, string> = {
   addDirector: "alt+5",
   addEnhanceLocal: "alt+8",
   addVectorize: "alt+9",
+  // 导演台监看器（只在导演工作区生效；Space/箭头/IO/ARP 与 NLE 惯例一致，数字键 1~9 切 Take 为内置）
+  dirPlayPause: "space",
+  dirPrevFrame: "arrowleft",
+  dirNextFrame: "arrowright",
+  dirPrevSeg: "shift+arrowleft",
+  dirNextSeg: "shift+arrowright",
+  dirSetIn: "i",
+  dirSetOut: "o",
+  dirApprove: "a",
+  dirRegen: "r",
+  dirPrompt: "p",
 };
 
 /* ---------------- 快捷方式（资产库侧边栏） ---------------- */
@@ -1098,12 +1182,10 @@ export type Settings = {
   gpuBoost: boolean;
   /** 任务完成/报错音效与语音播报 */
   sound: SoundCfg;
-  /** 协议自愈：自定义协议运行失败时，AI 依据执行现场自动修协议并重试一次（默认开） */
-  protoSelfHeal: boolean;
   hotkeys: Record<HotkeyAction, string>;
   /** 资产库侧边栏快捷方式 */
   shortcuts: ShortcutItem[];
-  /** 自定义协议（协议助手生成或手写） */
+  /** 生成协议（内置预设自动绑定；.momoflow 分享包也可能携带） */
   customProtocols: CustomProtocol[];
   /** 重试与备用模型（稳定性：中转站 429/5xx/网络抖动不再让工作流白跑） */
   retry: RetryCfg;
@@ -1115,17 +1197,20 @@ export type Settings = {
   enhance: EnhanceCfg;
   /** 本地 GGUF 引擎配置（llama-server 路径，一次性配置） */
   localLlm: LocalLlmCfg;
+  /** MOMO × Eagle 资产桥 */
+  eagle: EagleCfg;
+  /** MCP 服务器（Streamable HTTP；工具进能力层） */
+  mcp: { servers: McpServerCfg[] };
 };
 
 export const DEFAULT_SETTINGS: Settings = {
   models: { providers: [], defaults: {} },
   search: { provider: "tavily", apiKey: "", baseUrl: "", maxResults: 5 },
   save: { dir: "", format: "png", pattern: "{date}_{time}_{model}", autoSave: false, embedMeta: true },
-  comfy: { host: "http://127.0.0.1:8188" },
+  comfy: { host: "http://127.0.0.1:8188", syncV2Enabled: true },
   theme: "dark",
   gpuBoost: true,
   sound: { enabled: true, speak: false, volume: 0.6 },
-  protoSelfHeal: true,
   hotkeys: DEFAULT_HOTKEYS,
   shortcuts: [],
   customProtocols: [],
@@ -1135,6 +1220,44 @@ export const DEFAULT_SETTINGS: Settings = {
   pricing: { overrides: {} },
   enhance: { defaultTarget: "4k", tileSize: 0, tileOverlap: 32 },
   localLlm: {},
+  // 默认全关：首次启用必须明确目标根文件夹，自动写第三方软件由用户主动开启
+  eagle: {
+    enabled: false,
+    host: "http://127.0.0.1:41595",
+    apiToken: "",
+    syncMode: "manual",
+    autoPushGenerated: false,
+    autoPullLinked: false,
+    rootFolderName: "MOMO",
+    pollIntervalMs: 5000,
+    metadata: { name: "newer", annotation: "newer", tags: "union", rating: "newer" },
+  },
+  mcp: { servers: [] },
+};
+
+/* ---------------- Eagle 远端 DTO（Web API V2 宽容解析） ---------------- */
+
+/** Eagle 单条素材的最小 DTO（raw 里没有的字段一律 optional，normalizeRemoteItem 兜底） */
+export type EagleRemoteItem = {
+  id: string;
+  name: string;
+  ext: string;
+  size: number;
+  width?: number;
+  height?: number;
+  /** Eagle 库内文件路径（V2 raw 不带，按 {库}/images/{id}.{ext} 推导） */
+  filePath?: string;
+  tags: string[];
+  folders: string[];
+  annotation?: string;
+  url?: string;
+  star: number;
+  btime?: number;
+  mtime?: number;
+  modificationTime?: number;
+  /** Eagle 端"任何修改"都会前移的时间戳（实测改名/评分只动它，不动 modificationTime）——增量扫描主游标 */
+  lastModified?: number;
+  isDeleted?: boolean;
 };
 
 /** v1（单套配置）旧结构，用于迁移 */
@@ -1266,6 +1389,122 @@ export type ComfyTemplate = {
   createdAt: number;
   /** v2：子工作流分支。无此字段或空数组时，comfyStore 加载会生成一个 default 分支 */
   variants?: ComfyVariant[];
+  /** Comfy 工作流同步：关联的同步工作流 id（有值 = 该模板由同步服务派生/维护，源文件改了自动跟） */
+  workflowId?: string;
+};
+
+/* ---------------- Comfy 工作流无感同步（插件规格 v1.0 · M1） ---------------- */
+
+/** 同步模式（规格 §8）：默认 comfy_master（ComfyUI 主控，MOMO 只读，绝不写回） */
+export type ComfySyncPolicy = "comfy_master" | "bidirectional" | "momo_master" | "manual";
+
+/** 工作流同步状态（规格 §6.4） */
+export type ComfySyncStatus =
+  | "untracked" // 扫描发现但用户尚未勾选同步
+  | "pending_import" // 已勾选、排队首次入库
+  | "syncing" // 正在同步
+  | "synced" // 已同步，与源一致
+  | "source_changed" // 源有改动待同步（自动模式会立刻消费掉，通常停留极短）
+  | "invalid" // 源文件当前不是有效 JSON / 不被识别（旧版本继续可用）
+  | "source_offline" // 所属来源离线
+  | "source_deleted" // 源文件被删除（快照与模板保留）
+  | "detached" // 所属来源被删除（数据保留为 MOMO 本地副本，可重新关联）
+  | "paused" // 用户暂停同步
+  | "derive_failed"; // UI Workflow 已入库但 API Prompt 派生失败（多为 ComfyUI 离线/缺节点）
+
+/** 来源路径形态 */
+export type ComfySyncSourceKind = "local" | "removable" | "mapped_drive" | "unc";
+
+/** 同步来源（规格 §9.1）：一个 ComfyUI 工作流目录 */
+export type ComfySyncSource = {
+  id: string;
+  name: string;
+  /** workflows 目录的绝对路径 */
+  rootPath: string;
+  kind: ComfySyncSourceKind;
+  enabled: boolean;
+  includeSubdirectories: boolean;
+  /** 自动跟踪该来源新增的工作流（用户授权后才开，规格 FR-003） */
+  autoTrackNewWorkflows: boolean;
+  defaultPolicy: ComfySyncPolicy;
+  /** 是否允许写回（M1 恒为 false；M2 双向同步的开关位） */
+  allowWriteBack: boolean;
+  ignorePatterns: string[];
+  lastScanAt?: number;
+  lastOnlineAt?: number;
+  status: "online" | "offline" | "permission_denied" | "scanning";
+};
+
+/** 同步工作流的索引记录（正文与版本快照在 AppData/comfy-sync，由 Rust 读写） */
+export type ComfySyncedWorkflow = {
+  workflowId: string;
+  sourceId: string;
+  relativePath: string;
+  absolutePath: string;
+  displayName: string;
+  format: "ui_v04" | "api_only";
+  policy: ComfySyncPolicy;
+  status: ComfySyncStatus;
+  /** 源文件当前内容 SHA-256 */
+  sourceHash: string;
+  /** 上次成功入库的内容哈希（同步基线） */
+  baseHash: string;
+  /** 语义哈希（键排序后；识别“仅格式化/无关字段变化”与改名对账用） */
+  semanticHash?: string;
+  /** 结构指纹（节点类型序列+连线数；改名/移动识别的弱匹配信号） */
+  structureFingerprint?: string;
+  /** UI Workflow 自带的顶层 id（ComfyUI 1.x 保存通常有；身份识别优先级之一） */
+  graphId?: string;
+  revision: number;
+  sourceModifiedAt: number;
+  syncedAt?: number;
+  /** 文件 stat 快照（mtime/size 变了才读正文算哈希，省 IO） */
+  statSize?: number;
+  statMtimeMs?: number;
+  warnings: string[];
+  /** 用户标记永久保留的版本号（版本清理策略，规格 FR-013） */
+  pinnedRevisions?: number[];
+  /** 由该工作流派生的模板 id（comfy-templates 里的关联） */
+  templateId?: string;
+  /** M2：上次派生时的参数基线值（key=`nodeId.input`→值）。写回时与模板当前值 diff 出补丁；
+   *  也是字段级三方合并里「双方共同基线」（规格 FR-015） */
+  baseParamValues?: Record<string, unknown>;
+}
+
+/** M2 写回的一条参数补丁（与 writeBack.ts 的 ParamPatch 同构；types 为唯一类型源） */
+export type ComfyParamPatch = {
+  key: string;
+  nodeId: string;
+  input: string;
+  value: unknown;
+  label?: string;
+};
+
+/** M2 写回冲突（规格 FR-015 / §11.3）。正文不落索引：基线从版本快照取、源文本解决时现读 */
+export type ComfySyncConflict = {
+  id: string;
+  workflowId: string;
+  createdAt: number;
+  /** 基线对应的版本号（快照即双方上次同步内容） */
+  baseRevision: number;
+  /** MOMO 侧待写回的参数补丁 */
+  patches: ComfyParamPatch[];
+  /** 字段级冲突明细（双方同字段不同值） */
+  fields: Array<{ key: string; label?: string; baseValue: unknown; sourceValue: unknown; momoValue: unknown }>;
+  status: "open" | "resolved";
+  resolvedAt?: number;
+  resolution?: "source" | "momo" | "exported" | "later";
+};;
+
+/** 同步中心可见的一次同步事件（最近事件列表，规格 NFR-005） */
+export type ComfySyncEventLog = {
+  id: string;
+  workflowId?: string;
+  sourceId?: string;
+  level: "info" | "warn" | "error";
+  event: string;
+  message: string;
+  createdAt: number;
 };
 
 /* ---------------- 画布模板（组/所选打包保存，可反复实例化） ---------------- */
@@ -1390,6 +1629,8 @@ export type AssetItem = {
   catalogSource?: string;
   /** 资产册声明的用途：普通外观参考或仅用于空间规划的站位图 */
   catalogRole?: "appearance" | "spatialLayout";
+  /** 资产册「使用分段」（1-based 片段序号；-1 = 全部片段）——剧本重拆后按它把资产重新绑回参考槽 */
+  catalogSegments?: number[];
   /** 站位图的中文空间锁；不等同于生图提示词 */
   spatialLockZh?: string;
   /** 站位图的英文空间锁；图片槽不足时转为文字继续约束视频 */
@@ -1398,8 +1639,12 @@ export type AssetItem = {
   folderId?: string | null;
   /** 标签（去重、保序） */
   tags?: string[];
-  /** 来源：canvas 生成 / import 导入 */
-  source: "canvas" | "import";
+  /** 来源：canvas 生成 / import 导入 / eagle 拉回 */
+  source: "canvas" | "import" | "eagle";
+  /** Eagle 端评分（0~5，未同步过无此字段） */
+  rating?: number;
+  /** Eagle 端说明（annotation 的本地镜像，双向按策略合并） */
+  annotation?: string;
   /** 生成参数快照（画布生成物才有）：资产卡「Remix」按此还原生成节点 */
   gen?: AssetGenMeta;
   /** 该资产来自哪个画布生成节点（资产卡「定位到画布节点」用；老资产无此字段） */
@@ -1424,13 +1669,95 @@ export type AssetItem = {
   };
   /** 内容指纹（导演台参考图去重用：同一 dataURL 反复同步只收录一次） */
   contentHash?: string;
+  /** 3.5 P2：项目文件夹镜像路径（绑定目录后产物写入项目目录的绝对路径；未绑定为空） */
+  projectRelPath?: string;
+  /** 3.5：多项目镜像账本（同一去重资产被多个项目引用时，每个项目各自的落盘路径；键 = projectId） */
+  projectMirrors?: Record<string, string>;
   /** 收藏：资产库「收藏」筛选置顶展示 */
   fav?: boolean;
   /** 回收站时间戳：非空 = 在回收站里（删除不再直接删文件，等彻底清理） */
   deletedAt?: number;
   /** 生成耗时（毫秒，画布生成物才有；老资产无此字段，卡片角标判空） */
   durationMs?: number;
+  /** Eagle 绑定信息（同步过才写；重启后据此恢复绑定） */
+  eagle?: EagleAssetLink;
+  /** 版本谱系（Eagle 端编辑拉回/衍生导入时保留原资产并挂到谱系上） */
+  lineage?: AssetLineage;
   createdAt: number;
+};
+
+/* ---------------- MOMO × Eagle 资产桥 ---------------- */
+
+/** 同步模式：manual 手动 / push 只推送 / bidirectional 双向 */
+export type EagleSyncMode = "manual" | "push" | "bidirectional";
+
+/** 元数据冲突策略（字段级：谁赢 / 合并） */
+export type EagleMetaPolicy = {
+  name: "momo" | "eagle" | "newer";
+  annotation: "momo" | "eagle" | "newer";
+  tags: "union" | "momo" | "eagle";
+  rating: "momo" | "eagle" | "newer";
+};
+
+export type EagleCfg = {
+  enabled: boolean;
+  host: string;
+  /** Eagle API Token（Eagle 偏好 → 开发者里可查；非空时 DPAPI 加密落盘） */
+  apiToken: string;
+  syncMode: EagleSyncMode;
+  autoPushGenerated: boolean;
+  autoPullLinked: boolean;
+  rootFolderId?: string;
+  rootFolderName: string;
+  pollIntervalMs: number;
+  metadata: EagleMetaPolicy;
+};
+
+/** MCP 服务器（Streamable HTTP）——连接后工具自动注册进能力层，创作助手 tool 动作可调 */
+export type McpServerCfg = {
+  id: string;
+  name: string;
+  /** Streamable HTTP 端点（如 https://example.com/mcp）；stdio 服务器暂不支持 */
+  url: string;
+  enabled: boolean;
+  /** 附加请求头（远程 MCP 的鉴权，如 { Authorization: "Bearer xxx" }） */
+  headers?: Record<string, string>;
+};
+
+/** 资产 ↔ Eagle 项目 的绑定状态机 */
+export type EagleLinkState =
+  | "synced"
+  | "queued"
+  | "pushing"
+  | "pulling"
+  | "local-dirty"
+  | "remote-dirty"
+  | "conflict"
+  | "offline"
+  | "error";
+
+export type EagleAssetLink = {
+  /** 对素材库路径规范化后的稳定指纹，不假设 Eagle 提供 libraryId */
+  libraryKey: string;
+  libraryName?: string;
+  itemId: string;
+  /** MOMO 生成的配对标识（主账本在本地映射） */
+  pairId: string;
+  linkedAt: number;
+  lastRemoteModifiedAt?: number;
+  lastLocalFingerprint?: string;
+  lastRemoteFingerprint?: string;
+  state: EagleLinkState;
+  /** 最近一次错误摘要（角标 hover 说明用） */
+  error?: string;
+};
+
+/** 非破坏版本谱系：原资产保留，新版本沿 parentAssetId 挂链 */
+export type AssetLineage = {
+  parentAssetId?: string;
+  rootAssetId: string;
+  revision: number;
+  reason?: "eagle-edit" | "momo-regenerate" | "plugin-derived" | "manual-import";
 };
 
 export type AssetFolder = { id: string; name: string };
@@ -1463,6 +1790,24 @@ export type DirectorCharacter = {
   continuity: string;
   /** 角色参考图资产 id（可选，从角色卡/资产库拖入） */
   assetIds?: string[];
+  /* —— 3.0 角色库实体扩展（全部可选，v2 数据无感升级，方案 §6.3）—— */
+  /** 基础身份一句话（年龄/体型/气质锚点） */
+  identity?: string;
+  /** 外貌锚点（五官/发型/肤色等固定特征，独立于服装） */
+  appearanceAnchors?: string;
+  /** 服装组（多套外观，如 日常 / 夜行 / 受伤），每套含说明与参考图 */
+  outfits?: Array<{ id: string; name: string; desc: string; assetIds?: string[] }>;
+  /** 参考图分类槽：正面/侧面/全身/表情/动作 */
+  refViews?: Record<string, string[]>;
+  /** 声音参考说明（音色描述/演员参考） */
+  voiceDesc?: string;
+  /** 默认 TTS 音色（audio 角色模型 voice） */
+  ttsVoice?: string;
+  /** 修订版本号（每次保存 +1；片段快照记当时的 rev，用于「角色来源已更新」判定） */
+  rev?: number;
+  /** 锁定身份：角色同步不覆盖其出场片段的提示词 */
+  locked?: boolean;
+  updatedAt?: number;
 };
 
 /** 镜头（片段内的景别/机位/剪辑变化，方案 §5） */
@@ -1509,8 +1854,18 @@ export type DirectorSegment = {
   promptOverride?: string;
   /** 最终提示词覆盖（编辑「预览最终提示词」所得的整段最终文本）：生成时跳过风格/Skill/负向的自动拼接，只前置参考素材编号说明 */
   promptFinalOverride?: string;
+  /** 分段识别出的视频规格（分辨率/帧率/时长 + 来源原文；3.5） */
+  videoSpec?: SegmentVideoSpec;
+  /** H3 双语提示词（3.5 P3：中文审阅稿 + 英文执行稿；英文是模型请求真相） */
+  h3Prompt?: H3BilingualPrompt;
+  /** 中文写作与英文待审稿；采用前不进入模型执行请求。 */
+  h3Authoring?: { zh: string; rules: string; enDraft?: string; reviewDraft?: string; baseEn?: string; context?: string; problems?: string[] };
+  /** 分离锁（3.5：结构锁 ≠ 执行稿锁；旧 locked 迁移为 structure） */
+  locks?: SegmentLocks;
   /** 该片段的剧本原文（规则切段时留存，供 AI 精读/重拆取全文；直录段不用——原文即 promptOverride） */
   scriptText?: string;
+  /* —— 3.3 §7：model-adapter 阶段产物快照（哪版 Skill、按什么模式合同精炼的）—— */
+  refinedBy?: { at: number; skills: string; mode: string };
 };
 
 /** 场景（同一地点/时间/戏剧事件，方案 §5） */
@@ -1537,20 +1892,19 @@ export type DirectorSlotValue = {
   /** 普通外观参考或空间站位规划图；后者不得把俯视图、箭头、标签画进成片 */
   referenceRole?: "appearance" | "spatialLayout";
   /** 来自资产册的稳定编号，用于重复导入时原位同步而非堆叠 */
-  catalogId?: string;
-  /** 自动空间接力素材：桥接帧或上一段末尾动作片段；关闭接力时保留资产但不参与生成 */
+  catalogId?: string;  /** 自动空间接力素材：桥接帧或上一段末尾动作片段；关闭接力时保留资产但不参与生成 */
   relayKind?: "frame" | "clip";
   /** 接力素材来自哪个已完成 Take；相同来源重跑时复用，避免重复截取与落盘 */
   relaySourceTakeId?: string;
 };
 
-/** 生成配方（方案 §7.5 / §20.1） */
+/** 生成配方（方案 §7.5 / §20.1）；3.3 §4.2：模式补全（l2v 仅尾帧反推等） */
 export type DirectorRecipe = {
   id: string;
   name: string;
   engine: "comfy" | "provider";
   output: "image" | "video";
-  mode: "t2i" | "i2i" | "t2v" | "i2v" | "fl2v" | "r2v" | "v2v";
+  mode: "t2i" | "i2i" | "t2v" | "i2v" | "fl2v" | "l2v" | "r2v" | "audio2v" | "extend" | "v2v" | "edit";
   /** ComfyUI 配方：模板 + 子分支 */
   templateId?: string;
   variantId?: string;
@@ -1585,6 +1939,11 @@ export type DirectorTake = {
   recipeSnapshot?: DirectorRecipe;
   slotSnapshot?: DirectorSlotValue[];
   paramSnapshot?: Record<string, unknown>;
+  /* —— 3.5：统一视频规格快照（请求值/实际值/来源/调整，可追溯）—— */
+  requestedVideoSpec?: ResolvedVideoSpec["requested"];
+  appliedVideoSpec?: ResolvedVideoSpec["applied"];
+  videoSpecSources?: ResolvedVideoSpec["source"];
+  videoSpecAdjustments?: ResolvedVideoSpec["adjustments"];
   workflowFingerprint?: string;
   createdAt: number;
   /** 开始执行时刻（区别于 createdAt 的入队时刻；耗时展示用它算，排队等待不计入） */
@@ -1627,6 +1986,111 @@ export type DirectorRuleSet = {
     resolution?: string;
     fps?: number;
     nativeAudio?: boolean;
+  };
+};
+
+/* —— 3.5 统一视频规格：严格限定分辨率/帧率/时长三项（方案 §6）—— */
+export type VideoResolution = {
+  /** 标准标签（1080p / 1920×1080） */
+  label: string;
+  width?: number;
+  height?: number;
+};
+
+export type VideoSpecValues = {
+  resolution?: VideoResolution;
+  fps?: number;
+  durationSec?: number;
+};
+
+export type VideoSpecSource = "segment-title" | "segment-metadata" | "segment-body" | "project-prefix" | "project-default" | "recipe-default" | "user";
+
+/** 分段识别出的规格与命中来源（原文可核对） */
+export type SegmentVideoSpec = VideoSpecValues & {
+  sources?: Partial<Record<keyof VideoSpecValues, { kind: VideoSpecSource; raw: string; line?: number }>>;
+  /** 用户手动覆盖的项（逐项独立；恢复自动 = 删掉对应字段）。手改后 source 必须是 "user" */
+  user?: VideoSpecValues;
+};
+
+/** 项目统一默认规格（未识别出分段值时的兜底） */
+export type VideoSpecDefaults = {
+  resolution?: VideoResolution;
+  fps?: number;
+  /** 仅作为未识别出分段时长时的默认值 */
+  durationSec?: number;
+};
+
+/** resolveVideoSpec 的最终结果：请求值/实际值/逐项来源/引擎调整。
+ *  applied 只写「真实注入成功」的项——引擎不支持或模板没有对应入口时该项缺省，
+ *  差异必须出现在 adjustments 里（applied 为 null），不允许把 requested 复制成 applied。 */
+export type ResolvedVideoSpec = {
+  requested: { resolution: VideoResolution; fps: number; durationSec: number };
+  applied: { resolution?: VideoResolution; fps?: number; durationSec?: number };
+  source: Partial<Record<keyof VideoSpecValues, VideoSpecSource>>;
+  adjustments: Array<{ field: "resolution" | "fps" | "durationSec"; requested: unknown; applied: unknown; reason: string }>;
+};
+
+/* —— 3.5 P3：H3 双语提示词 —— */
+/** 单语言的 H3 结构化提示词（六段式的确定性提取结果） */
+export type H3PromptLanguageData = {
+  title: string;
+  purpose?: string;
+  continuityMode?: "opening" | "continuity_relay" | "hard_cut";
+  continuityIn?: string;
+  spatialLock?: string;
+  continuityOut?: string;
+  /** 参考提及顺序（RefImgN / <Picture N> 计划） */
+  referenceOrder?: string[];
+  characters?: string;
+  scene?: string;
+  props?: string;
+  /** 原语言对白（<d>[语言]…</d> 或 Dialogue 行；TTS/字幕真源） */
+  dialogue?: string[];
+  camera?: string;
+  /** 提示词正文（英文执行稿 = 模型请求真相；中文审阅稿仅供人读） */
+  promptBody: string;
+};
+
+export type H3BilingualPrompt = {
+  zh?: H3PromptLanguageData;
+  /** 中文审阅稿待确认草稿：模型生成后对白校验未过时暂存（不覆盖已有 zh），用户核对后升级或丢弃 */
+  zhDraft?: H3PromptLanguageData;
+  en: H3PromptLanguageData;
+  source: "paired-files" | "skill" | "manual" | "legacy";
+  syncStatus: "synced" | "zh-newer" | "en-newer" | "conflict";
+  generatedAt?: number;
+};
+
+export type SegmentLocks = {
+  /** 结构锁：禁止重新拆段/删除/重排（成品直录默认开） */
+  structure: boolean;
+  /** 中文审阅稿锁 */
+  reviewZh: boolean;
+  /** 英文执行稿锁：任何 Skill/角色同步都不得改写，只标过期 */
+  executionEn: boolean;
+};
+
+/** 3.5 项目文件夹绑定（P2 落地；类型先行） */
+export type DirectorWorkspaceBinding = {
+  mode: "managed" | "linked";
+  rootPath: string;
+  sourceScriptPath?: string;
+  sourceScriptHash?: string;
+  manifestPath: string;
+  /** 资产册相对路径（相对 rootPath，如 "资产提示词.md" / "全部素材/资产提示词.md"）——绝不存 Markdown 内容 */
+  assetCatalogPath?: string;
+  segmentRootPath?: string;
+  lastIndexedAt?: number;
+  indexFingerprint?: string;
+  status: "ready" | "missing" | "changed" | "conflict";
+  writePolicy: "copy-into-project" | "reference-in-place";
+  /** 绑定即导入的指纹（重复绑定同一目录幂等：内容没变就跳过对应导入步骤） */
+  imported?: {
+    fullScriptHash?: string;
+    segEnHash?: string;
+    segZhHash?: string;
+    assetCatalogHash?: string;
+    at: number;
   };
 };
 
@@ -1678,6 +2142,13 @@ export type DirectorAudioTrack = {
   takes?: Array<{ id: string; assetId?: string; note?: string }>;
   /** 采用的版本 id */
   approvedTakeId?: string;
+  /* —— 后期混音参数（成片工作区音轨，方案 §12.3）—— */
+  /** 轨道音量（0~1.5，默认 1） */
+  volume?: number;
+  muted?: boolean;
+  /** 淡入/淡出秒数 */
+  fadeIn?: number;
+  fadeOut?: number;
 };
 
 /** 导演项目（保存在 directorStore，不进画布 node.data） */
@@ -1727,6 +2198,10 @@ export type DirectorProject = {
   /** 最近一次导入的双语资产册来源与时间，仅用于重导提示和追溯 */
   assetCatalogSource?: string;
   assetCatalogImportedAt?: number;
+  /** 项目定调前言识别出的统一规格（优先级低于分段识别，高于项目默认；3.5 §6.4） */
+  videoSpecFromPrefix?: SegmentVideoSpec;
+  /** 解绑时目录离线没能清理的 manifest 路径（目录重新上线后自动补清理，防止占着目录绑不了新项目） */
+  pendingManifestCleanups?: string[];
   /** 项目默认生成配方 id（分镜页批量工具条选定；片段 recipeId > 项目默认 > 远程默认模型） */
   defaultRecipeId?: string;
   /** 时间线（采用版本顺序） */
@@ -1756,17 +2231,55 @@ export type DirectorProject = {
   exportAssetId?: string;
   /** 3D 站位实体（持久化，方案 §23.7） */
   threedEntities?: PrevizEntity[];
-  /** 项目级 Skill 绑定（作用于所有 Segment，方案 §17.8） */
-  skillBindings?: Array<{
-    skillId: string;
-    enabled: boolean;
-    values: Record<string, string | number | boolean>;
-  }>;
-  schemaVersion: 1;
+  /** 项目级 Skill 绑定（作用于所有 Segment，方案 §17.8；3.0 带引擎路由 scope/modelPattern） */
+  skillBindings?: SkillBinding[];
+  /* —— 导演台 2.0（方案 §16.4 V2 扩展，全部可选，v1 项目经 directorMigration 升级 —— */
+  /** 工作区模式：快速（隐藏技术细节）/ 专业（完整参数） */
+  workspaceMode?: "quick" | "pro";
+  /** 界面状态（当前工作区/检查器标签/选中片段等，跨会话恢复） */
+  uiState?: DirectorUiState;
+  /** 轻量后期时间线（成片工作区，方案 §11.2） */
+  postTimeline?: PostTimelineData;
+  /** 提示词修订历史（保存最终稿时留档，供差异对比，方案 §13.2） */
+  promptRevisions?: PromptRevision[];
+  /** 连续性上下文胶囊（方案 §10） */
+  continuityCapsules?: ContinuityCapsule[];
+  /** 质量报告（采用 Take 的确定性探测结果，方案 §15.4） */
+  qualityReports?: DirectorQualityReport[];
+  /** H3 快速模式的硬件档位（方案 §9.3） */
+  hardwareTier?: "eco" | "balanced" | "quality" | "custom";
+  /** 快速模式内置工作模式（方案 §9.2）：选择后自动匹配配方 */
+  quickMode?: string;
+  /* —— 导演台 3.0（MOMO AI 制片工作站，方案 §8.1 StudioProject v3 聚合）—— */
+  /** 剧本库（正式内容库；正文 script 仍是主链剧本，送入项目时写入） */
+  scripts?: ScriptDocument[];
+  /** AI MV 项目 */
+  mvProjects?: MVProject[];
+  /** AI 制图历史与预设 */
+  imageStudio?: { history?: ImageStudioRecord[] };
+  /** AI 导演：项目级提案池（含外部 Agent 提案；应用/驳回记录持久审计，3.2 §3.3） */
+  directorProposals?: DirectorProposal[];
+  /** AI 导演：项目会话（跨工位/跨会话保留，3.2 P1-1） */
+  directorSession?: DirectorSessionData;
+  /* —— 3.5 —— */
+  /** 主剧本（同故事的多文档仍是版本语义；不同故事应另建项目） */
+  primaryScriptId?: string;
+  /** 项目文件夹绑定（未绑定时 AppData 托管） */
+  workspace?: DirectorWorkspaceBinding;
+  /** 统一视频规格默认值（分辨率/帧率/时长） */
+  videoSpecDefaults?: VideoSpecDefaults;
+  /** 3.0 工位界面态（一壳七工位导航的恢复态；取代 workspaceMode/uiState 的导航职责） */
+  studioUi?: StudioUiState;
+  schemaVersion: number;
 };
 
 /** 3D 站位实体（角色/相机/光源/道具；x/y 为旧版俯视图 0-100 百分比坐标，3D 字段全部可选） */
 export type PrevizEntity = {
+  /** 导入骨骼的局部旋转偏移和独立关键帧；动画剪辑来自 GLB。 */
+  skeletal?: { clip?: string; speed?: number; loop?: boolean; bones?: Record<string, [number, number, number]>; keys?: Array<{ time: number; bones: Record<string, [number, number, number]> }> };
+  /** 仅在预演采样中填充，不作为项目时间真源。 */
+  animationTime?: number;
+  motion?: PrevizKeyframe[];
   id: string;
   kind: "character" | "camera" | "light" | "prop";
   name: string;
@@ -1784,10 +2297,402 @@ export type PrevizEntity = {
   rotDeg?: [number, number, number];
   /** 3D 三轴缩放 */
   scale3?: [number, number, number];
+  /** 人偶表现风格；未指定沿用素模。 */
+  appearance?: "mannequin" | "clay" | "costume";
   /** 人偶关节姿势：关节名 → 欧拉角（度），仅 character 有效 */
   pose?: Record<string, [number, number, number]>;
   /** 光源强度（仅 kind=light） */
   intensity?: number;
   /** 本地上传模型的资产路径（GLB/GLTF，经资产库落盘；blob URL 不持久化） */
   modelAssetPath?: string;
+};
+
+export type PrevizKeyframe = { time: number; pos: [number, number, number]; rotDeg: [number, number, number]; scale3: [number, number, number] };
+export type BrandKit = { name: string; colors: string[]; fonts: string; rules: string; forbidden: string; logoAssetIds: string[]; enabled: boolean };
+export type ArtboardSpec = { widthMm: number; heightMm: number; dpi: number; bleedMm: number; safeMm: number; scale: number; background: string };
+
+/* ---------------- 导演台 2.0（V2 扩展类型，方案 §16.4） ---------------- */
+
+/** 四工作区（方案 §4.1）：策划 / 导演 / 成片 / 3D */
+export type DirectorWorkspaceKey = "planning" | "directing" | "post" | "threed";
+
+/** 导演台界面状态（跨会话恢复「打开后回到上次的工作区和片段」，验收 22.1-1） */
+export type DirectorUiState = {
+  workspace: DirectorWorkspaceKey;
+  /** 右侧检查器当前标签 */
+  inspectorTab: "content" | "prompt" | "refs" | "gen";
+  /** 导演工作区视图：驾驶舱（默认）/ 详细分镜表（旧版保留入口，方案 §25.7） */
+  cockpitView: "cockpit" | "detail";
+  /** 项目 AI 导演抽屉 */
+  agentDockOpen?: boolean;
+  /** 场景树折叠（窄屏降级） */
+  treeCollapsed?: boolean;
+  /** 当前选中片段（跨工作区保持，方案 §4.3） */
+  segId?: string | null;
+};
+
+/**
+ * 连续性上下文胶囊（方案 §10）：把尾帧接力升级为显式的跨段状态包。
+ * 素材基础沿用现有接力槽（relayKind=frame/clip），胶囊额外携带状态摘要与过期标记。
+ */
+export type ContinuityCapsule = {
+  /** 胶囊归属的下游片段 id */
+  segmentId: string;
+  sourceSegmentId: string;
+  sourceTakeId: string;
+  bridgeFrameAssetId?: string;
+  motionClipAssetId?: string;
+  /** 微视频参考资产（H3 快速模式可选 16~32 帧，默认 22 帧） */
+  microReferenceAssetId?: string;
+  /* —— 3.0 微参考追溯字段（方案 §6.5：资产、来源 Take、帧区间、fps 和指纹必须可追溯）—— */
+  /** 微参考帧数（默认 22） */
+  microFrames?: number;
+  /** 微参考在源 Take 上的提取区间（秒） */
+  microRangeSec?: [number, number];
+  /** 源 Take 帧率 */
+  microFps?: number;
+  /** 来源指纹（sourceTakeId + 帧区间 + 源资产 hash），同指纹重建直接复用 */
+  microFingerprint?: string;
+  /** 提取引擎：ffmpeg（桌面端完整链）/ web（浏览器降级） */
+  microEngine?: "ffmpeg" | "web";
+  /** 状态摘要：人物姿势/朝向/服装/道具/机位/光线/环境/未完成动作 */
+  stateSummary: string;
+  characterState?: string[];
+  cameraState?: string;
+  environmentState?: string;
+  createdAt: number;
+  /** 上游重新采用后标记过期，由用户确认重建（方案 §10.3） */
+  stale?: boolean;
+};
+
+/** 轻量后期：视频片段覆盖（入出点/转场/原声音量/镜像旋转，按 segmentId 索引；时间线本身由 deriveTimeline 派生） */
+export type PostClipOverride = {
+  segmentId: string;
+  inSec?: number;
+  outSec?: number;
+  /** 与下一段之间的转场：硬切（默认）/ 短交叉淡化 */
+  transition?: "cut" | "fade";
+  transitionDur?: number;
+  /** 片段原声音量（0~1） */
+  volume?: number;
+  muted?: boolean;
+  fadeIn?: number;
+  fadeOut?: number;
+  /* —— 3.0 基础变换（方案 §6.7：真实进入预演与 MP4）—— */
+  flipH?: boolean;
+  flipV?: boolean;
+  /** 顺时针旋转：0 / 90 / 180 / 270 */
+  rotate?: 0 | 90 | 180 | 270;
+};
+
+/** 标题卡 / 黑场 / 图片卡（T1 轨，方案 §11.2） */
+export type PostTitleCard = {
+  id: string;
+  kind: "title" | "black" | "image";
+  text?: string;
+  /** 图片卡的资产 id */
+  assetId?: string;
+  durSec: number;
+  /** 在成片时间轴上的起点（秒） */
+  atSec: number;
+};
+
+/** 字幕（SUB 轨；导出 SRT 或烧录进 MP4） */
+export type PostSubtitle = {
+  id: string;
+  startSec: number;
+  endSec: number;
+  text: string;
+};
+
+/** 成片时间线数据（方案 §11.2：V1 采用视频 / T1 标题 / D1 N1 S1 A1 M1 音轨 / SUB 字幕） */
+export type PostTimelineData = {
+  /** 片段级覆盖（segmentId → 入出点/转场/音量） */
+  clipOverrides: Record<string, PostClipOverride>;
+  titleCards: PostTitleCard[];
+  subtitles: PostSubtitle[];
+  /** 画幅适配：包含（黑边）/ 裁切 / 模糊填充 */
+  fit: "contain" | "cover" | "blur";
+};
+
+/** 音频轨混音参数（挂在 DirectorAudioTrack 上的扩展字段用 PostClipOverride 同构；这里只做整轨） */
+export type PostAudioMix = {
+  volume?: number;
+  muted?: boolean;
+  fadeIn?: number;
+  fadeOut?: number;
+};
+
+/** 提示词修订（保存最终稿时留档，方案 §13.2） */
+export type PromptRevision = {
+  segmentId: string;
+  /** 修订时的完整文本 */
+  text: string;
+  at: number;
+  note?: string;
+};
+
+/** 质量报告（每个采用 Take 的确定性探测结果，方案 §15.4） */
+export type DirectorQualityReport = {
+  takeId: string;
+  segmentId: string;
+  assetId?: string;
+  probedAt: number;
+  width?: number;
+  height?: number;
+  fps?: number;
+  durationSec?: number;
+  hasAudio?: boolean;
+  corrupt?: boolean;
+  /** 音频峰值（0~1，峰值保护参考） */
+  audioPeak?: number;
+  /** 黑帧比例（0~1） */
+  blackRatio?: number;
+  issues?: Array<{ level: "error" | "warning" | "info"; message: string }>;
+};
+
+/* ==================================================================
+ * 导演台 3.0 —— MOMO AI 制片工作站（方案 §8 数据模型重构 / §4 一壳七工位）
+ *
+ * StudioProject 不另起炉灶：DirectorProject（v2 聚合）仍是唯一存储真相，
+ * 3.0 新实体（剧本库 / MV 项目 / 工位界面态 / 制图历史）作为可选字段挂在项目上，
+ * schemaVersion 升到 3，迁移在 directorMigration.ts。执行层（runBatch / 参考槽 /
+ * Take / 接力）完全复用，方案 §11.1「直接保留并接入新壳」。
+ * ================================================================== */
+
+/** 七个专业工位 + 底部共享工具（方案 §4.1；不编号、不表步骤，随时往返） */
+export type StudioStation = "director" | "scripts" | "characters" | "image" | "h3" | "mv" | "post";
+/** 共享工具位（导航底部，不参与主流程） */
+export type StudioToolKey = "previz" | "assets" | "jobs" | "engine";
+
+/** 剧本库：正式内容库实体（方案 §6.2）——不再是单页大文本框 */
+export type ScriptDocument = {
+  id: string;
+  title: string;
+  /** 草稿 / 正式 / 归档 */
+  status: "draft" | "official" | "archived";
+  /** 类型标签（奇幻 / 现实 / 广告 …） */
+  genre?: string;
+  /** 预计成片时长（秒） */
+  targetDurationSec?: number;
+  /** 版本时间线（追加式，最新一版即当前正文） */
+  versions: ScriptVersion[];
+  activeVersionId?: string;
+  /** 来源：AI 导演存入 / 文件导入 / 从项目另存 */
+  origin: "ai-director" | "import" | "project";
+  createdAt: number;
+  updatedAt: number;
+};
+
+/** 剧本版本（不可变快照；正文或结构化分段二选一携带） */
+export type ScriptVersion = {
+  id: string;
+  label: string;
+  body: string;
+  note?: string;
+  createdAt: number;
+  /** 送入项目时拆分出的场景/片段 id 快照（传播失效判定用） */
+  sceneIds?: string[];
+};
+
+/** AI MV 项目（方案 §6.6）：音乐分析 + 区间视觉绑定 + 口型支链 */
+export type MVProject = {
+  id: string;
+  name: string;
+  /** 音乐资产 id（资产库音频） */
+  musicAssetId?: string;
+  /** 音乐分析结果（探测 + Web Audio 节拍） */
+  analysis?: MVAnalysis;
+  /** 歌词（可选；LRC 导入或手填，带时间轴进字幕） */
+  lyrics?: Array<{ startSec: number; endSec: number; text: string }>;
+  /** 视觉区间（按音乐段落绑定图片/角色，逐区间生成） */
+  regions: MVRegion[];
+  /** 生成设置（与 H3 共用配方与模型体系） */
+  settings: {
+    recipeId?: string;
+    aspect?: string;
+    resolutionMP?: number;
+    /** 口型配方（独立能力；未配置时口型分支明确不可用） */
+    lipSyncRecipeId?: string;
+  };
+  /** 区间生成结果收进成片时间线的方式 */
+  createdAt: number;
+  updatedAt: number;
+};
+
+/** 音乐分析（方案 §6.6 首版：时长/节拍/段落/能量包络） */
+export type MVAnalysis = {
+  durationSec: number;
+  bpm?: number;
+  /** 节拍时间点（秒） */
+  beats?: number[];
+  /** 自动段落（副歌/主歌的粗切分，能量聚类） */
+  sections?: Array<{ startSec: number; endSec: number; energy: number; label?: string }>;
+  /** 能量包络（每秒 RMS，波形展示用） */
+  envelope?: number[];
+  analyzedAt: number;
+};
+
+/** MV 视觉区间：一段音乐绑一组图/角色，生成一段视频 */
+export type MVRegion = {
+  id: string;
+  startSec: number;
+  endSec: number;
+  /** 绑定的图片资产 id（有序，进 Picture 槽） */
+  imageAssetIds: string[];
+  /** 绑定角色 id（角色库外观参考叠加） */
+  characterIds: string[];
+  /** 本区间运动/氛围提示词 */
+  prompt?: string;
+  /** 是否人物口型区间（需口型配方） */
+  lipSync?: boolean;
+  /** 区间生成结果（takeId 关联项目里一个虚拟片段或直接资产） */
+  takes?: Array<{ id: string; assetId?: string; status: "queued" | "running" | "done" | "error"; error?: string }>;
+  approvedTakeId?: string;
+};
+
+/** 统一任务中心记录（方案 §9.4）：所有耗时操作可观察、可恢复、可取消 */
+export type JobRecord = {
+  id: string;
+  projectId?: string;
+  /** 任务类别：生成 / 微参考提取 / 渲染 / 音乐分析 / 制图 / 音频 */
+  kind: "generate" | "microref" | "render" | "analyze" | "image" | "audio" | "extract";
+  label: string;
+  /** 主线状态机：planned → prechecking → queued → running → reviewing → done */
+  status: "planned" | "prechecking" | "queued" | "running" | "reviewing" | "done" | "cancelled" | "failed" | "blocked" | "stale";
+  /** 0~100；无百分比的远程任务为 undefined（显示流动动画） */
+  pct?: number;
+  stage?: string;
+  segmentId?: string;
+  error?: string;
+  /** 远程计费任务提交后不可撤销（按钮 title 提示用） */
+  cancellable?: boolean;
+  /** 会话内取消钩子（runBatch 等接线到自己的中止机制；不持久化） */
+  cancelRun?: () => void;
+  /** 失败后按原请求续跑；由任务中心展示确认再执行 */
+  retryRun?: () => Promise<void>;
+  retryNote?: string;
+  createdAt: number;
+  finishedAt?: number;
+};
+
+/** AI 制图工位（方案 §6.4）：一次生成的参数与结果（历史/预设/复用） */
+export type ImageStudioRecord = {
+  id: string;
+  mode: "t2i" | "i2i" | "edit";
+  prompt: string;
+  /** 图生图/编辑的输入资产 id */
+  inputAssetIds?: string[];
+  /** 引擎：本地 ComfyUI 配方 or 远程 Provider 模型 */
+  engine: "comfy" | "provider";
+  recipeId?: string;
+  providerModelKey?: string;
+  params: Record<string, string | number | boolean>;
+  assetIds: string[];
+  createdAt: number;
+  durationMs?: number;
+  fav?: boolean;
+};
+
+/** 3.0 工位界面态（跨会话恢复；挂在 project.studioUi） */
+export type StudioUiState = {
+  /** 当前工位（七工位 + 3D 预演全屏位） */
+  station: StudioStation | "previz";
+  segId?: string | null;
+  /** H3 检查器分组展开态 */
+  inspectorOpen?: Record<string, boolean>;
+  /** 各停靠面板宽度（px；拖动调宽持久化） */
+  panelWidths?: Record<string, number>;
+  /** 剧本库选中 */
+  scriptId?: string | null;
+  /** 角色库选中 */
+  characterId?: string | null;
+  /** 制图工位模式 */
+  imageMode?: "t2i" | "i2i" | "edit";
+  /** MV 工位选中项目 */
+  mvId?: string | null;
+};
+
+/* ---------------- AI 导演（3.2 方案 §3：项目级理解 / 诊断 / 提案 / 计划） ---------------- */
+
+/** AI 导演的问题发现（有证据、可定位对象） */
+export type DirectorFinding = {
+  severity: "info" | "warning" | "blocker";
+  category: "story" | "continuity" | "prompt" | "reference" | "engine" | "quality" | "delivery";
+  targetId?: string;
+  evidence: string;
+  suggestion: string;
+};
+
+/** 对象级提案 patch：targetType 决定 patch 的结构（见 directorAgent.applyDirectorProposal） */
+export type DirectorProposal = {
+  id: string;
+  /** 提案标题（一句话） */
+  title: string;
+  targetType: "script" | "scene" | "segment" | "shot" | "characterState" | "prompt" | "slot" | "recipe" | "timeline";
+  /** 目标对象 id（script 可空 = 新剧本草稿） */
+  targetId: string;
+  /** 为什么这么改（给用户看） */
+  reason: string;
+  /** 依据（引用项目事实/分析结果） */
+  evidence: string[];
+  /** 对象级变更（结构与 targetType 对应；应用前用户可编辑） */
+  patch: unknown;
+  /** 影响面（应用前计算展示；片段失效 / Take 过期 / 微参考重建） */
+  impact?: {
+    invalidatedSegmentIds: string[];
+    staleTakeIds: string[];
+    rebuildMicroRefIds: string[];
+    estimatedRemoteJobs?: number;
+  };
+  status: "pending" | "applied" | "rejected";
+  /** 驳回原因（审计） */
+  rejectReason?: string;
+  origin: "ai-director" | "external-agent";
+  createdAt: number;
+  appliedAt?: number;
+};
+
+/** 生产计划条目：交给专业工位执行的一步（AI 导演只计划不执行，3.2 §3.4） */
+export type DirectorPlanItem = {
+  id: string;
+  /** 执行动作（对应现有专用函数/工位入口） */
+  action: "analyze" | "refine" | "precheck" | "generate" | "probe" | "upscale" | "bind-ref" | "manual";
+  title: string;
+  /** 目标片段/对象 id 列表 */
+  targetIds: string[];
+  note?: string;
+  /** 执行状态回流（工位完成后写回，§8.2） */
+  done?: boolean;
+  result?: string;
+};
+
+/** AI 导演每轮的结构化输出契约（3.2 §3.3） */
+export type DirectorResponse = {
+  reply: string;
+  findings?: DirectorFinding[];
+  proposals?: DirectorProposal[];
+  plan?: DirectorPlanItem[];
+  questions?: Array<{ id: string; text: string; options?: string[] }>;
+};
+
+/** AI 导演会话消息（持久化在 project.directorSession，与创作助手完全隔离） */
+export type DirectorMsg = {
+  id: string;
+  role: "user" | "director";
+  text: string;
+  at: number;
+  /** 本轮结构化输出（director 消息携带；解析失败降级为纯文本） */
+  response?: DirectorResponse;
+  /** 视觉审片附帧（dataURL，仅存引用不落库） */
+  images?: string[];
+};
+
+/** 项目级导演会话（3.2 P1-1：按 projectId 持久化 + 前情摘要压缩） */
+export type DirectorSessionData = {
+  messages: DirectorMsg[];
+  /** 前情摘要（旧消息压缩产物；epoch 守卫防旧摘要覆盖新会话） */
+  summary?: string;
+  summaryUpto?: number;
+  epoch: number;
 };

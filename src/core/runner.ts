@@ -8,6 +8,7 @@ import { pushError, toast, useUi } from "./stores/uiStore";
 import { useAssets } from "./stores/assetStore";
 import { usePromptHist } from "./stores/promptHistStore";
 import { chatStream, chatOnce, OPTIMIZE_SYSTEM } from "./services/llm";
+import { brandPrompt } from "./stores/designStore";
 import { generateImage } from "./services/imageGen";
 import { generateVideo } from "./services/videoGen";
 import { generateAudio } from "./services/audioGen";
@@ -23,10 +24,13 @@ import { ecomAnalysisSystem, h5AnalysisSystem, parseEcomAnalysis } from "./ecomP
 import { stitchVertical } from "./stitchCanvas";
 import { creativityPhrase } from "./editPrompts";
 import { errMsg, isTauri, parseJsonLoose, uid } from "./utils";
-import { acquireSlot, beginTask, endTask, isAbortError, taskSignal } from "./runControl";
+import { abortNode, acquireSlot, beginTask, endTask, isAbortError, taskSignal } from "./runControl";
 import { runGenWithFallback } from "./retry";
+import { budgetGate } from "./capability/budget";
 import { useUsage } from "./stores/usageStore";
 import { estimateCost } from "./pricing";
+import { nodeMainImage } from "./nodeEdit";
+import { renderToMp4, type RenderClipPlan, type RenderPlan } from "./directorRender";
 import { estimateEnhanceResources } from "./enhanceEstimate";
 import { assetUrl, fetchBytes, assetsDir } from "./services/assetFiles";
 import { notifyDone } from "./sound";
@@ -340,7 +344,7 @@ export function collectUpstream(
 }
 
 /* ---------- 上游明细（节点上「传入」徽标的弹窗预览用） ---------- */
-export type UpstreamPart = { from: string; kind: "text" | "image"; value: string };
+export type UpstreamPart = { from: string; nodeId: string; kind: "text" | "image"; value: string };
 
 function nodeTitle(n: LiteN): string {
   const d = n.data as Record<string, unknown>;
@@ -350,13 +354,13 @@ function nodeTitle(n: LiteN): string {
   return extra ? `${base} · ${String(extra).slice(0, 14)}` : base;
 }
 
-/** 与 collectUpstream 完全同序的上游明细，逐段标注来源节点 */
+/** 与 collectUpstream 完全同序的上游明细，逐段标注来源节点（nodeId 供弹窗点击定位） */
 export function collectUpstreamParts(nodeId: string): UpstreamPart[] {
   const { nodes, edges } = useBoard.getState();
   const out: UpstreamPart[] = [];
-  const push = (label: string, o: { texts: string[]; images: string[] }, only?: "text" | "image") => {
-    if (only !== "image") for (const t of o.texts) out.push({ from: label, kind: "text", value: t });
-    if (only !== "text") for (const s of o.images) out.push({ from: label, kind: "image", value: s });
+  const push = (label: string, srcId: string, o: { texts: string[]; images: string[] }, only?: "text" | "image") => {
+    if (only !== "image") for (const t of o.texts) out.push({ from: label, nodeId: srcId, kind: "text", value: t });
+    if (only !== "text") for (const s of o.images) out.push({ from: label, nodeId: srcId, kind: "image", value: s });
   };
   for (const e of orderedInEdges(nodeId, nodes, edges)) {
     const src = nodes.find((n) => n.id === e.source);
@@ -365,10 +369,10 @@ export function collectUpstreamParts(nodeId: string): UpstreamPart[] {
       const members = nodes
         .filter((n) => n.parentId === src.id && !(n.data as Record<string, unknown>).ignored)
         .sort((a, b) => a.position.y - b.position.y || a.position.x - b.position.x);
-      for (const m of members) push(`组 · ${nodeTitle(m)}`, nodeOutput(m, new Set([nodeId])));
+      for (const m of members) push(`组 · ${nodeTitle(m)}`, m.id, nodeOutput(m, new Set([nodeId])));
       continue;
     }
-    push(nodeTitle(src), nodeOutput(src, new Set([nodeId])));
+    push(nodeTitle(src), src.id, nodeOutput(src, new Set([nodeId])));
   }
   return out;
 }
@@ -419,7 +423,7 @@ function selfSig(id: string): string {
   }
   if (node.type === "vectorize") {
     const d = node.data as VectorizeData;
-    return `^self:vec:${d.preset}:${d.colorMode}:${d.hierarchical}:${d.colorPrecision}:${d.filterSpeckle}:${d.pathPrecision}:${d.geometry ? 1 : 0}:${d.quality ?? "balanced"}`;
+    return `^self:vec:${d.preset}:${d.colorMode}:${d.hierarchical}:${d.colorPrecision}:${d.filterSpeckle}:${d.pathPrecision}:${d.geometry ? 1 : 0}:${d.quality ?? "balanced"}:${d.flatColors??12}`;
   }
   return "";
 }
@@ -481,19 +485,7 @@ function estimateNodeCost(nid: string, nodes: LiteNode[]): number {
   return 0;
 }
 
-/** 预算护栏：超日预算阻断、超确认阈值弹确认（返回的 block/confirm 由调用方处理） */
-function budgetGate(cost: number): { block?: string; confirm?: string } {
-  const budget = useSettings.getState().settings.budget;
-  if (!budget.dailyCap && !budget.confirmOverCost) return {};
-  const today = useUsage.getState().todayCost();
-  if (budget.dailyCap && today + cost > budget.dailyCap) {
-    return { block: `已达日预算上限（今日已 ¥${today.toFixed(2)} + 本次预估 ¥${cost.toFixed(2)} > 上限 ¥${budget.dailyCap}）。可到「设置 → 用量」调整` };
-  }
-  if (budget.confirmOverCost && cost > budget.confirmOverCost) {
-    return { confirm: `本次预估花费 ¥${cost.toFixed(2)}（今日已 ¥${today.toFixed(2)}），是否继续？` };
-  }
-  return {};
-}
+/** 预算闸已抽到能力层统一入口（capability/budget.ts）：画布与创作助手共用同一道门，perRunCap 在此生效 */
 
 /** 角色卡输出模式（兼容旧字段 genImages） */
 function charOutMode(d: CharCardData): "image" | "prompt" {
@@ -681,6 +673,15 @@ function applySizeDirective(dir: string, family: string, tier?: string): { size?
   return s ? { size: `${s.w}x${s.h}` } : {};
 }
 
+/** 与画布提交预览同源；英文模式的远程翻译在执行阶段完成。 */
+export function imagePromptInput(id:string){
+  const data=useBoard.getState().nodes.find(n=>n.id===id)?.data as ImageGenData|undefined;if(!data)return "";
+  const {texts,images}=collectUpstream(id),raw=(data.prompt??"").trim()||texts.filter(t=>!isSizeDirective(t)).join("\n");
+  const prompt=resolveAtRefs(raw?brandPrompt(useBoard.getState().activeId,raw):"",id);
+  const cv=images.length?creativityPhrase(data.creativity):null;
+  return cv?`${prompt}\n${cv}`:prompt;
+}
+
 export async function runImageGen(id: string) {
   const node = useBoard.getState().nodes.find((n) => n.id === id);
   if (!node) return;
@@ -689,12 +690,13 @@ export async function runImageGen(id: string) {
   const { texts, images } = collectUpstream(id);
   const sizeDirectives = texts.filter(isSizeDirective);
   const promptTexts = texts.filter((t) => !isSizeDirective(t));
-  const prompt = (data.prompt ?? "").trim() || promptTexts.join("\n");
+  const rawPrompt = (data.prompt ?? "").trim() || promptTexts.join("\n");
+  const prompt = rawPrompt ? brandPrompt(useBoard.getState().activeId,rawPrompt) : "";
   if (!prompt && !images.length) {
     toast("请输入提示词，或连接一个提示词/对话节点", "err");
     return;
   }
-  upd(id, { status: "running", error: undefined });
+  upd(id, { status: "running", error: undefined, progress:undefined });
   let primaryCard: ModelCard | null = null;
   const t0 = Date.now();
   try {
@@ -706,7 +708,7 @@ export async function runImageGen(id: string) {
     if (cv) finalPrompt = `${finalPrompt}\n${cv}`;
 
     // 预算护栏：超日预算阻断、超确认阈值弹确认（生成类才预拦；返回 idle 不算错误）
-    const gate = budgetGate(estimateCost(card.model, { images: data.count ?? 1 }));
+    const gate = budgetGate(estimateCost(card.model, { images: data.count ?? 1 }),undefined,{billing:card.protocol==="codex"?"subscription":undefined});
     if (gate.block) throw new Error(gate.block);
     if (gate.confirm && !window.confirm(gate.confirm)) {
       upd(id, { status: "idle", error: undefined });
@@ -740,7 +742,10 @@ export async function runImageGen(id: string) {
         }
       }
       const parallel = Math.max(1, Math.min(3, Math.round(data.parallel ?? 1)));
+      if(c.protocol==="codex"&&(parallel>1||data.count>1))throw Error("Codex 会员通道请设置单路、每次 1 张，避免重复扣用额度");
       const req = {
+        newConversation: data.newConversation,
+        onProgress: (stage:string) => upd(id,{progress:stage}),
         prompt: finalPrompt,
         size,
         n: Math.max(1, Math.min(data.count ?? 1, familyMaxCount(family))),
@@ -1141,6 +1146,7 @@ export async function runVectorize(id: string) {
           flatRatio: amFlat,
           edgeDensity: amEdge,
           jpegScore: amJpeg,
+          flatColors: data.flatColors ?? 12,
         },
         onEvent,
       });
@@ -1154,8 +1160,8 @@ export async function runVectorize(id: string) {
     const gateLine = result.qualityPassed == null
       ? " · 未回评（极速档）"
       : result.qualityPassed
-        ? ` · 生产门禁通过${result.edgeIou != null ? `（边缘${Math.round(result.edgeIou * 100)}%）` : ""}`
-        : " · ⚠ 生产门禁未通过";
+        ? ` · 描摹一致性检查通过${result.edgeIou != null ? `（边缘${Math.round(result.edgeIou * 100)}%）` : ""}，请核对字形与生产尺寸`
+        : " · ⚠ 描摹一致性检查未通过";
     upd(id, {
       status: "done", result: url, svg: result.svg, resultW: result.width, resultH: result.height,
       pathCount: result.pathCount, productionReady: result.qualityPassed ?? undefined, qualityScore: result.score ?? undefined, progress: undefined, progressPct: 100,
@@ -1405,6 +1411,181 @@ export async function runVideoGen(id: string) {
   }
 }
 
+/* ---------- 首尾帧连拍：多张有序图片 → 相邻两两配对批量生成视频（可选拼接成片） ---------- */
+
+/**
+ * 画布位置即时间序（上→下、左→右，与 orderedInEdges 取上游图的规则一致）：
+ * 第 i 张作首帧、第 i+1 张作尾帧建一个视频节点，全部并行运行；成功段可一键 ffmpeg 拼接成片。
+ * 九宫格抽卡 → 宫格切分 → 框选全部切片 → 右键连拍，即 LibTV「多机位九宫格」同款动线。
+ */
+export async function runTailSequence(imgIds: string[]) {
+  const s = useBoard.getState();
+  const nodes = imgIds
+    .map((id) => s.nodes.find((n) => n.id === id))
+    .filter((n): n is NonNullable<typeof n> => !!n && !!nodeMainImage(n));
+  if (nodes.length < 2) {
+    toast("首尾帧连拍需要至少 2 张带图的图片节点", "err");
+    return;
+  }
+  const abs = (n: (typeof nodes)[number]) => {
+    const p = n.parentId ? s.nodes.find((x) => x.id === n.parentId) : undefined;
+    return { x: n.position.x + (p?.position.x ?? 0), y: n.position.y + (p?.position.y ?? 0) };
+  };
+  const sorted = [...nodes].sort((a, b) => {
+    const pa = abs(a);
+    const pb = abs(b);
+    return pa.y - pb.y || pa.x - pb.x || a.id.localeCompare(b.id);
+  });
+
+  // 预检模型（节点 init 显式清 modelId 走角色默认，与此一致）；无尾帧能力的家族直接拦下
+  let card: ModelCard;
+  try {
+    card = resolveModelCard("video");
+  } catch (e) {
+    toast(errMsg(e), "err");
+    return;
+  }
+  const meta = videoMeta(videoFamily(card));
+  if (!meta.tail) {
+    toast(`视频模型「${card.model}」不支持首尾帧，请在设置中把视频角色模型换成可灵 / Vidu / Wan / 海螺 Hailuo-02 等支持尾帧的模型`, "err");
+    return;
+  }
+  const pairs = sorted.slice(0, -1).map((n, i) => [n, sorted[i + 1]] as const);
+  const durationSec = Number(meta.defaultDuration ?? "5") || 5;
+  const est = estimateCost(card.model, { videoSec: durationSec }) * pairs.length;
+  const msg = `将按画布位置（上→下、左→右）把 ${sorted.length} 张图连成 ${pairs.length} 段视频：相邻两帧作首尾帧，每段约 ${durationSec} 秒。`
+    + `${est > 0 ? `\n预估费用：约 ¥${est.toFixed(2)}（按「${card.model}」单价）。` : ""}\n确定开始连拍？`;
+  let go: boolean;
+  if (isTauri) {
+    const { ask } = await import("@tauri-apps/plugin-dialog");
+    go = await ask(msg, { title: "首尾帧连拍", kind: "warning" });
+  } else {
+    go = window.confirm(msg);
+  }
+  if (!go) return;
+
+  const base = abs(sorted[0]);
+  const w = sorted[0].measured?.width ?? 300;
+  const ids: string[] = [];
+  pairs.forEach(([a, b], i) => {
+    const bs = useBoard.getState();
+    const nid = bs.addNode(
+      "videoGen",
+      { x: base.x + w + 160, y: base.y + i * 420 },
+      { status: "idle", prompt: "", modelId: undefined, useTail: true, parallel: 1 },
+    );
+    // 连边顺序不决定输入序（orderedInEdges 按源节点位置 y→x），sorted 的位置序保证前者=首帧
+    bs.connectNodes(a.id, nid, "in", "out");
+    bs.connectNodes(b.id, nid, "in", "out");
+    ids.push(nid);
+  });
+  toast(`已建立 ${pairs.length} 个视频节点（相邻图作首尾帧），并行生成中…`, "info");
+  const runOne = RUNNERS["videoGen"]!;
+  await Promise.all(ids.map((nid) => runOne(nid)));
+  notifyDone("首尾帧连拍");
+
+  // 拼接成片：只拼成功段，失败/停止段跳过（失败原因已进报错中心）
+  const s2 = useBoard.getState();
+  const segUrls = ids
+    .map((nid) => {
+      const d = s2.nodes.find((n) => n.id === nid)?.data as VideoGenData | undefined;
+      if (!d || d.status !== "done") return undefined;
+      return (d.resultUrls?.length ? d.resultUrls[d.picked ?? 0] : d.resultUrl) ?? undefined;
+    })
+    .filter((u): u is string => !!u);
+  const failed = pairs.length - segUrls.length;
+  if (segUrls.length < 2) {
+    toast(`连拍结束：成功 ${segUrls.length} 段${failed ? `、失败 ${failed} 段` : ""}，不足 2 段无法拼接`, failed ? "info" : "ok");
+    return;
+  }
+  const smsg = `连拍完成：成功 ${segUrls.length} 段${failed ? `、失败 ${failed} 段（已跳过）` : ""}。\n把成功的段按顺序拼接成一条视频？`;
+  let stitch: boolean;
+  if (isTauri) {
+    const { ask } = await import("@tauri-apps/plugin-dialog");
+    stitch = await ask(smsg, { title: "拼接成片", kind: "info" });
+  } else {
+    stitch = window.confirm(smsg);
+  }
+  if (!stitch) return;
+  await stitchTailClips(segUrls, { x: base.x + w + 160, y: base.y + pairs.length * 420 });
+}
+
+/** 连拍成片拼接：各段生成时已收录资产库（桌面端为本地文件），probe 实际时长后交 ffmpeg 拼接；浏览器降级 MediaRecorder */
+async function stitchTailClips(urls: string[], pos: { x: number; y: number }) {
+  try {
+    const assets = useAssets.getState().items;
+    const paths = urls.map((u) => assets.find((a) => a.path && assetUrl(a.path) === u)?.path ?? (/^asset:/i.test(u) ? "" : u));
+    const usable = paths.filter(Boolean);
+    if (usable.length < 2) {
+      toast("可拼接的本地视频不足 2 段（资产文件不可读）", "err");
+      return;
+    }
+    // 桌面端逐段 probe 真实时长/分辨率（模型标 5 秒未必正好 5.0s）；首段定输出规格
+    let width = 1280;
+    let height = 720;
+    let fps = 30;
+    const clips: RenderClipPlan[] = [];
+    for (let i = 0; i < usable.length; i++) {
+      let dur = 5;
+      if (isTauri && !/^(blob:|data:|https?:)/i.test(usable[i])) {
+        try {
+          const mediaTool = (await import("./stores/directorStore")).useDirector.getState().mediaTool;
+          const p = await invoke<{ duration_sec: number; width: number; height: number; fps: number }>("media_probe", {
+            input: usable[i],
+            ffprobePath: mediaTool.ffprobePath ?? null,
+          });
+          dur = p.duration_sec || 5;
+          if (i === 0 && p.width && p.height) {
+            width = p.width - (p.width % 2);
+            height = p.height - (p.height % 2);
+            fps = Math.round(p.fps) || 30;
+          }
+        } catch {
+          /* probe 失败按 5 秒兜底，不阻塞拼接 */
+        }
+      }
+      clips.push({ path: usable[i], inSec: 0, outSec: dur, durSec: dur, volume: 1, muted: false, transition: "cut" });
+    }
+    const plan: RenderPlan = {
+      clips,
+      audio: [],
+      titles: [],
+      srt: "",
+      width,
+      height,
+      fps,
+      fit: "contain",
+      totalSec: clips.reduce((n, c) => n + c.durSec, 0),
+      assetCount: clips.length,
+    };
+    let outPath = `momo_tailseq_${Date.now()}.mp4`;
+    if (isTauri) {
+      const { save } = await import("@tauri-apps/plugin-dialog");
+      const picked = await save({
+        title: "拼接成片",
+        defaultPath: `首尾帧连拍_${new Date().toISOString().slice(0, 10)}.mp4`,
+        filters: [{ name: "MP4 视频", extensions: ["mp4"] }],
+      });
+      if (!picked || typeof picked !== "string") return;
+      outPath = picked;
+    }
+    toast("拼接渲染中…（ffmpeg 逐段规范化后串联）", "info");
+    const r = await renderToMp4(plan, outPath);
+    if (r.path && isTauri) {
+      const asset = await useAssets.getState().collect({ src: r.path, kind: "video", prompt: "首尾帧连拍成片" });
+      if (asset) {
+        useBoard.getState().addNode("video", pos, { src: assetUrl(asset.path), name: "首尾帧连拍成片", status: "done" });
+      }
+      toast(`成片已导出：${r.path}`, "ok");
+    } else {
+      toast("浏览器降级拼接完成（webm，无字幕/转场）", "ok");
+    }
+  } catch (e) {
+    toast(`拼接失败：${errMsg(e)}`, "err");
+    pushError("首尾帧连拍", `拼接失败：${errMsg(e)}`);
+  }
+}
+
 /* ---------- ComfyUI ---------- */
 export async function runComfy(id: string) {
   const node = useBoard.getState().nodes.find((n) => n.id === id);
@@ -1566,17 +1747,34 @@ const LLM_TEXT_SYSTEMS: Record<Exclude<LlmTextData["op"], "custom">, string> = {
 /** cap* 开头的操作是反推类（消费图片） */
 export const isCaptionOp = (op: string) => op.startsWith("cap");
 
+/**
+ * 「自定义指令」的系统提示：把用户的一句话指令（如「改成赛博朋克」「换个配色」）框成
+ * 对已有文本的编辑操作，而不是让模型自由创作——否则模型会把指令当人设、把原文当新需求，
+ * 生成一大段与原文无关的内容。原文始终作为 user 消息传入。
+ */
+function customEditSystem(instruction: string): string {
+  return [
+    "你是提示词编辑器。用户会发来一段已有文本，请严格按照下方的修改指令编辑它，输出编辑后的完整文本。",
+    "规则：",
+    "- 只改动修改指令涉及的部分；指令没提到的内容（措辞、结构、语言、长度）一律原样保留",
+    "- 不要新增指令之外的内容，不要扩写、不要补充细节",
+    "- 不解释、不加任何前后缀或标题，只输出编辑后的文本",
+    "",
+    `修改指令：${instruction}`,
+  ].join("\n");
+}
+
 /** 提示词 AI 工具（生成弹窗 / 提示词节点共用）：对一段文本做单次 LLM 变换，返回结果文本（就地替换用） */
 export async function llmTextTransform(
   op: LlmTextData["op"],
-  custom: string | undefined,
+  custom: string,
   text: string,
   image?: string,
 ): Promise<string> {
   const card = resolveModelCard("chat");
   const caption = isCaptionOp(op);
   const system =
-    op === "custom" ? (custom ?? "").trim() || "按用户期望处理输入文本，只输出处理结果。" : LLM_TEXT_SYSTEMS[op];
+    op === "custom" ? customEditSystem((custom ?? "").trim() || "在不改变原意的前提下理顺文本") : LLM_TEXT_SYSTEMS[op];
   const { text: out } = await chatStream(
     card,
     [{ role: "user", text: caption ? "请分析这张图片。" : text, images: caption && image ? [image] : undefined }],
@@ -1606,7 +1804,7 @@ export async function runLlmText(id: string) {
     const card = resolveModelCard("chat", data.modelId);
     const system =
       data.op === "custom"
-        ? (data.custom ?? "").trim() || "按用户期望处理输入文本，只输出处理结果。"
+        ? customEditSystem((data.custom ?? "").trim() || "在不改变原意的前提下理顺文本")
         : LLM_TEXT_SYSTEMS[data.op];
     const { text } = await chatStream(
       card,
@@ -2545,18 +2743,22 @@ function hasFreshOutput(n: LiteNode): boolean {
 }
 
 /** 依次运行一串节点；某个节点出错则停止后续。force = 已有结果的也重算 */
-async function runSequence(ids: string[], opts: { clickedId?: string; force?: boolean } = {}): Promise<void> {
+async function runSequence(ids: string[], opts: { clickedId?: string; force?: boolean; signal?: AbortSignal } = {}): Promise<void> {
   for (const nid of ids) {
+    opts.signal?.throwIfAborted();
     const n = useBoard.getState().nodes.find((x) => x.id === nid);
     if (!n) continue;
     const run = RUNNERS[n.type as NodeKind];
     if (!run) continue;
     // 上游已经算过且有结果 → 直接用现成的（点击的目标节点本身总是重新跑）
     if (!opts.force && nid !== opts.clickedId && hasFreshOutput(n)) continue;
-    await run(nid);
+    const stop=()=>{abortNode(nid);};
+    opts.signal?.addEventListener("abort",stop,{once:true});
+    try { await run(nid); } finally {opts.signal?.removeEventListener("abort",stop);}
+    opts.signal?.throwIfAborted();
     const after = useBoard.getState().nodes.find((x) => x.id === nid);
     const st = (after?.data as Record<string, unknown> | undefined)?.status;
-    if (st === "error") {
+    if (st !== "done" && st !== "running") {
       if (nid !== opts.clickedId) toast("上游节点运行失败，工作流后续节点已停止", "err");
       return;
     }
@@ -2570,7 +2772,8 @@ async function runSequence(ids: string[], opts: { clickedId?: string; force?: bo
 }
 
 /** 点击节点运行：上游按依赖顺序补齐（已有结果的直接复用），再跑自己 */
-export async function runFlow(id: string) {
+export async function runFlow(id: string, signal?: AbortSignal) {
+  signal?.throwIfAborted();
   const { nodes, edges } = useBoard.getState();
   const order: string[] = [];
   visitChain(id, nodes, edges, new Set(), order);
@@ -2581,7 +2784,7 @@ export async function runFlow(id: string) {
     return n ? !hasFreshOutput(n) : false;
   }).length;
   if (pendingCount > 1) toast(`按工作流顺序运行 ${pendingCount} 个节点（已有结果的上游直接复用）…`, "info");
-  await runSequence(order, { clickedId: id });
+  await runSequence(order, { clickedId: id, signal });
   // 目标节点顺利跑完 → 完成提示音/语音播报（报错音在 pushError 里统一触发）
   const after = useBoard.getState().nodes.find((n) => n.id === id);
   if ((after?.data as Record<string, unknown> | undefined)?.status === "done")

@@ -2,9 +2,6 @@
  * 报错帮助 — 常见英文/网络错误翻译成中文提示 + AI 报错分析（报错中心用）
  */
 import { useSettings } from "./stores/settingsStore";
-import { validateProto } from "./services/protoSpec";
-import type { CustomProtocol } from "./types";
-import { parseJsonLoose } from "./utils";
 
 /** 常见英文/网络报错 → 中文解释；匹配不到返回 null */
 export function humanizeError(msg: string): string | null {
@@ -49,7 +46,7 @@ export function isTransientError(msg: string): boolean {
   )
     return false;
   if (
-    /connection (refused|reset|closed)|failed to connect|ECONNREFUSED|error sending request|timed? ?out|ETIMEDOUT|\b429\b|rate.?limit|\b5\d{2}\b|internal server error|bad gateway|service unavailable|gateway timeout/i.test(
+    /connection (refused|reset|closed)|failed to connect|ECONNREFUSED|error sending request|timed? ?out|ETIMEDOUT|请求超时|\b429\b|rate.?limit|\b5\d{2}\b|internal server error|bad gateway|service unavailable|gateway timeout/i.test(
       msg,
     )
   )
@@ -57,11 +54,10 @@ export function isTransientError(msg: string): boolean {
   return false;
 }
 
-export const ERR_ANALYZE_SYSTEM = `你是 momo 智能画布（调用各类 AI 生成服务的桌面应用）的排障专家。用户给你一条应用内的报错，以及当前配置上下文（服务商 Base URL 列表、自定义协议 JSON，均不含密钥）。
+export const ERR_ANALYZE_SYSTEM = `你是 momo 智能画布（调用各类 AI 生成服务的桌面应用）的排障专家。用户给你一条应用内的报错，以及当前配置上下文（服务商 Base URL 列表与协议绑定，均不含密钥）。
 请用中文精炼输出：
 1.【原因】一句话点明最可能的原因
-2.【解决】具体可操作的解决步骤，对应到应用内位置（如「设置 → 协议」「设置 → 模型配置」）
-3. 若问题出在某个自定义协议的字段配置（如 taskIdPath / resultPath / statusPath 路径写错），依据报错里的响应片段推断正确写法，并在最后单独输出一个 \`\`\`json 代码块：内容是修正后的完整协议 JSON（保留原 id、name、role），应用会提供一键应用。与协议无关时不要输出 JSON 代码块。`;
+2.【解决】具体可操作的解决步骤，对应到应用内位置（如「设置 → 模型配置」）`;
 
 /** 组装脱敏的配置上下文（不含任何密钥） */
 export function buildErrContext(): string {
@@ -71,30 +67,5 @@ export function buildErrContext(): string {
     baseUrl: p.baseUrl,
     槽位: Object.fromEntries(Object.entries(p.models).map(([r, slot]) => [r, { 协议: slot!.protocol, 模型: slot!.models }])),
   }));
-  return JSON.stringify({ 服务商: providers, 自定义协议: s.customProtocols }, null, 1).slice(0, 6000);
-}
-
-/**
- * 从 AI 分析结果里提取「修正后的协议 JSON」（没有、不合法、或对不上已存协议时返回 null）。
- * 用途（role）一律以本机已存的那份为准：模型回显得再对，也不能让一键修复把
- * 音频协议改成图片协议——那会让它从音频槽位里直接消失，还很难反推是哪一步干的。
- */
-export function extractProtocolFix(text: string): CustomProtocol | null {
-  const m = text.match(/```json\s*([\s\S]*?)```/);
-  if (!m) return null;
-  const raw = parseJsonLoose<CustomProtocol>(m[1]);
-  if (!raw?.id) return null;
-  // 必须对应一条真实存在的协议，否则模型编个 id 就会凭空插入一条没人用的协议
-  const exist = useSettings.getState().settings.customProtocols.find((x) => x.id === raw.id);
-  if (!exist) return null;
-  try {
-    const { proto } = validateProto(raw);
-    proto.id = exist.id;
-    proto.name = exist.name;
-    proto.role = exist.role;
-    delete proto.verifiedAt; // 没跑过真实测试，不能带着「已校准」章落地
-    return proto;
-  } catch {
-    return null;
-  }
+  return JSON.stringify({ 服务商: providers }, null, 1).slice(0, 6000);
 }
