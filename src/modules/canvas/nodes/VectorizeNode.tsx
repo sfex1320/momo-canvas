@@ -21,7 +21,7 @@ export const VectorizeNode = memo(function VectorizeNode({ id, data, selected }:
   return (
     <NodeShell
       id={id}
-      title="智能矢量"
+      title="矢量"
       icon={<IcVector size={17} />}
       status={d.status}
       error={d.error}

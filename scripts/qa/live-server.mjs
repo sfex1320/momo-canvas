@@ -6,15 +6,16 @@ import {execFileSync} from 'node:child_process';
 const root=path.join(process.env.APPDATA,'site.jinpengi.momo');
 const settings=JSON.parse(await readFile(path.join(root,'settings.json'),'utf8')).v4;
 const prefs=JSON.parse(await readFile(path.join(root,'agent-prefs.json'),'utf8')).v1??{};
-const selected={chat:prefs.modelId||settings.models.defaults.chat,image:prefs.imageModelId||settings.models.defaults.image};
+const selected={chat:process.env.MOMO_QA_CHAT||prefs.modelId||settings.models.defaults.chat,image:process.env.MOMO_QA_IMAGE||prefs.imageModelId||settings.models.defaults.image};
 const ids=new Set(Object.values(selected).map(s=>s.split('::')[0]));
 const providers=settings.models.providers.filter(p=>ids.has(p.id));
 for(const p of providers)if(p.apiKey?.startsWith('dpapi:')){
   p.apiKey=execFileSync('powershell',['-NoProfile','-Command',"Add-Type -AssemblyName System.Security; $h=[Console]::In.ReadToEnd(); $b=New-Object byte[] ($h.Length/2); for($i=0;$i -lt $b.Length;$i++){$b[$i]=[Convert]::ToByte($h.Substring($i*2,2),16)}; [Console]::Write([Text.Encoding]::UTF8.GetString([Security.Cryptography.ProtectedData]::Unprotect($b,$null,[Security.Cryptography.DataProtectionScope]::CurrentUser)))"],{input:p.apiKey.slice(6),encoding:'utf8',windowsHide:true});
 }
+const posterMode=process.env.MOMO_QA_MODE==='poster';
 const elementMode=process.env.MOMO_QA_MODE==='elements',planarMode=process.env.MOMO_QA_MODE==='planar', maxImages=planarMode?1:elementMode?3:2;
 const endpoint='http://[::1]:1433', records=[],media=new Map();let images=0,chats=0;
-const safeSettings=structuredClone(settings);safeSettings.models.providers=providers.map(p=>({...p,apiKey:'LOCAL_QA_KEY',baseUrl:endpoint+'/p/'+p.id+new URL(p.baseUrl).pathname.replace(/\/$/,'')}));safeSettings.search={...safeSettings.search,apiKey:''};safeSettings.eagle={...safeSettings.eagle,apiToken:''};
+const safeSettings=structuredClone(settings);safeSettings.models.providers=providers.map(p=>({...p,apiKey:'LOCAL_QA_KEY',baseUrl:p.baseUrl?endpoint+'/p/'+p.id+new URL(p.baseUrl).pathname.replace(/\/$/,''):''}));safeSettings.search={...safeSettings.search,apiKey:''};safeSettings.eagle={...safeSettings.eagle,apiToken:''};
 const server=http.createServer(async(req,res)=>{
   if(req.headers.origin!=='http://[::1]:1430'){res.writeHead(403);res.end();return;}
   res.setHeader('Access-Control-Allow-Origin','http://[::1]:1430');res.setHeader('Access-Control-Allow-Headers','Content-Type,Authorization,x-api-key,anthropic-version');res.setHeader('Access-Control-Allow-Methods','GET,POST,OPTIONS');
@@ -25,8 +26,8 @@ const server=http.createServer(async(req,res)=>{
     if(req.url==='/report'){res.setHeader('Content-Type','application/json');res.end(JSON.stringify(records));return;}
     if(req.url==='/save'&&req.method==='POST'){
       const chunks=[];for await(const chunk of req)chunks.push(chunk);const data=JSON.parse(Buffer.concat(chunks).toString());
-      const dir=path.resolve(planarMode?'.Codex/planar-acceptance':elementMode?'.Codex/element-acceptance':'.Codex/live-acceptance');await mkdir(dir,{recursive:true});
-      for(let i=0;i<Math.min(maxImages,data.images?.length??0);i++){const value=data.images[i];if(/^data:image\/(png|jpeg|webp);base64,/.test(value))await writeFile(path.join(dir,`${planarMode?"平面总稿":elementMode?"元素实测":"连续生图"}-${i+1}.png`),Buffer.from(value.split(',')[1],'base64'));}
+      const dir=path.resolve(posterMode?'.Codex/poster-acceptance':planarMode?'.Codex/planar-acceptance':elementMode?'.Codex/element-acceptance':'.Codex/live-acceptance');await mkdir(dir,{recursive:true});
+      for(let i=0;i<Math.min(posterMode?10:maxImages,data.images?.length??0);i++){const value=data.images[i];if(/^data:image\/(png|jpeg|webp);base64,/.test(value))await writeFile(path.join(dir,`${posterMode?"海报实测":planarMode?"平面总稿":elementMode?"元素实测":"连续生图"}-${i+1}.png`),Buffer.from(value.split(',')[1],'base64'));}
       await writeFile(path.join(dir,'report.json'),JSON.stringify({records,messages:data.messages},null,2));res.end('ok');return;
     }
     let target,provider;

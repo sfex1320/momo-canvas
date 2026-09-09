@@ -148,6 +148,11 @@ export function LayerEditor() {
       return n;
     });
   const checkedItems = items?.filter((it) => checked.has(it.id)) ?? [];
+  const overlapping = checkedItems.some((a, i) => checkedItems.slice(i + 1).some(b => {
+    const x = Math.max(0, Math.min(a.box[0] + a.box[2], b.box[0] + b.box[2]) - Math.max(a.box[0], b.box[0]));
+    const y = Math.max(0, Math.min(a.box[1] + a.box[3], b.box[1] + b.box[3]) - Math.max(a.box[1], b.box[1]));
+    return x * y > Math.min(a.box[2] * a.box[3], b.box[2] * b.box[3]) * 0.5;
+  }));
   const working = busy || splitting;
   let outputSize: { w: number; h: number } | undefined, sizeError = "";
   if (mode === "flat") { try { outputSize = flatOutputSize(flat); } catch(e) { sizeError = errMsg(e); } }
@@ -261,8 +266,8 @@ export function LayerEditor() {
       <div ref={dialogRef} className="le-dialog" role="dialog" aria-modal="true" aria-labelledby="le-title">
         <header className="le-head">
           <div>
-            <h2 id="le-title"><IcLayers size={18} /> 元素分层</h2>
-            <p>识别文字 / 主体 / Logo / 装饰 → 拆成透明图层（重绘档 = 高清重制每层）· 框可拖动 / 右下角缩放 / 圈选新增 / Delete 删除 · 识别使用已配置视觉模型，可能计费</p>
+            <h2 id="le-title"><IcLayers size={18} /> 元素</h2>
+            <p>识别 → 校准 → 拆解或重绘 → 回画布合成。拖动边框调整范围；识别和重绘调用已配置模型，可能计费。</p>
           </div>
           <button className="icon-btn" aria-label="关闭元素工坊" title="关闭（Esc）" onClick={() => close(null)}><IcClose size={16} /></button>
         </header>
@@ -324,7 +329,11 @@ export function LayerEditor() {
 
           <aside className={`le-side${mode === "flat" ? " flat" : ""}`}>
             {precision&&items?.find(it=>it.id===precision)&&<PrecisionCutout src={src!} item={items.find(it=>it.id===precision)!} onClose={()=>setPrecision(null)} onSave={cutout=>setItems(prev=>prev?.map(it=>it.id===precision?{...it,cutout}:it)??prev)}/>}
-            <button className="btn sm" disabled={working||!selected} onClick={()=>setPrecision(selected)}>精细蒙版：标记保留 / 删除</button>
+            <button className="btn sm" disabled={working||!selected} title="标记要保留或删除的区域，校准透明边缘" onClick={()=>setPrecision(selected)}>精修抠图</button>
+            {overlapping && <p className="le-report" role="status">有元素框大幅重叠：请检查是否重复拆出了主体印花或相邻文字。</p>}
+            {items?.find(it => it.id === selected)?.role === "text" && <label className="le-report">校对原文
+              <input className="input" aria-label="校对文字原文" disabled={working} value={items.find(it => it.id === selected)?.text ?? ""} onChange={e => setItems(prev => prev?.map(it => it.id === selected ? { ...it, text: e.target.value } : it) ?? prev)} />
+            </label>}
             <div className="le-side-title">
               <span>元素</span>
               <b>{checkedItems.length}/{items?.length ?? 0}</b>
@@ -405,7 +414,8 @@ export function LayerEditor() {
             {items?.length ? (
               <div className="le-report">
                 <p>框不准可直接拖动修正、右下角缩放，圈选可新增；名称 = 重绘档的提示词（双击改）。</p>
-                <p>保像素档免费（裁切 + 色键抠图）；重绘档逐元素高清重制（计费，按局部 2 倍尺寸重画）。</p>
+                <p>先核对文字与边框。商品印花、图标内部结构通常随主体保留，取消重复勾选，避免叠出重影。</p>
+                <p>直接拆图使用裁切与色键，复杂背景建议先精修抠图。高清重绘逐元素补细节，可能改变外观。文字保留为图片层，可在画布上用「改字」重绘。</p>
               </div>
             ) : null}
           </aside>
@@ -413,12 +423,11 @@ export function LayerEditor() {
 
         <footer className="le-foot">
           <div className="le-mode" role="group" aria-label="拆解档位">
-            <button className={mode === "pixel" ? "on" : ""} title="bbox 裁切 + 色键抠图：不重画、与原图像素一致、免费" onClick={() => setMode("pixel")}>保像素</button>
-            <button className={mode === "redraw" ? "on" : ""} title="逐元素局部特写图生图（按 2 倍尺寸高清重制）再抠图：元素干净高清、有轻微风格漂移、计费" onClick={() => setMode("redraw")}>高清重绘</button>
-            <button className={mode === "flat" ? "on" : ""} disabled={working} onClick={() => setMode("flat")}>单件视图重绘</button>
+            <button disabled={working} className={mode === "pixel" ? "on" : ""} title="裁切与色键抠图，不调用绘图模型；复杂背景需精修" onClick={() => setMode("pixel")}>直接拆图</button>
+            <button disabled={working} className={mode === "redraw" ? "on" : ""} title="逐元素图生图后抠图；可能改变外观，计费" onClick={() => setMode("redraw")}>高清重绘</button>
           </div>
           <label className="le-check-label" title="把元素遮挡住的背景区域用边界扩散补全（本地免费；复杂纹理背景建议关闭）">
-            <input type="checkbox" disabled={mode === "flat" || working} checked={bgComplete} onChange={(e) => setBgComplete(e.target.checked)} /> 背景补全
+            <input type="checkbox" disabled={mode === "flat" || working} checked={bgComplete} onChange={(e) => setBgComplete(e.target.checked)} /> 简单补底
           </label>
           <button
             className={`btn ${addMode ? "primary" : ""}`}

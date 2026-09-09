@@ -5,6 +5,12 @@ import type { CSSProperties, ReactNode } from "react";
 
 type IconProps = { size?: number; className?: string; style?: CSSProperties };
 
+/** 设计工具：统一线宽，分别用版面、笔尖和镜片区分类别。 */
+export const IcPoster = (p: IconProps) => <I {...p}><rect x="5" y="3" width="14" height="18" rx="2"/><path d="M8 7h8M8 10h5M8 17l3-4 2 2 3-3v5Z"/></I>;
+export const IcInk = (p: IconProps) => <I {...p}><path d="m12 3 7 9-7 9-7-9 7-9ZM12 3v8"/><circle cx="12" cy="13" r="2"/></I>;
+export const IcLens = (p: IconProps) => <I {...p}><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="4"/><path d="m8 4 4 4m8 0-4 4m0 8-4-4m-8 0 4-4"/></I>;
+export const IcToolbox = (p: IconProps) => <I {...p}><rect x="3" y="8" width="18" height="12" rx="2"/><path d="M8 8V5h8v3M3 13h18M9 12v3m6-3v3"/></I>;
+
 function I({ children, size = 20, className, style, fill = false }: IconProps & { children: ReactNode; fill?: boolean }) {
   return (
     <svg

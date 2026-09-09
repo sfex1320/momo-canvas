@@ -11,8 +11,9 @@ import { join } from "@tauri-apps/api/path";
 import { assetsDir } from "./services/assetFiles";
 import { loadImg } from "./maskCanvas";
 import { dataUrlToBytes, isTauri, uid } from "./utils";
+import { layerRect } from "./layerGeometry";
 
-/** 待导出图层：透明 PNG dataURL + 图层名；box（原图归一化位置）存在时 PSD 按原位放置（高清层中心对齐 box 中心） */
+/** 待导出图层：box 为原图归一化位置，输出尺寸与源图层像素尺寸独立。 */
 export type ExportLayer = { name: string; src: string; box?: [number, number, number, number] };
 
 function makeCanvas(w: number, h: number) {
@@ -118,36 +119,44 @@ function triggerDownload(bytes: Uint8Array, name: string, mime: string) {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
+/** 预览与 PSD 共用定位和缩放后的图层画布。 */
+export async function positionedLayer(layer: ExportLayer, width: number, height: number) {
+  const source = await loadImg(layer.src);
+  const rect = layer.box ? layerRect(layer.box, width, height) : { left: 0, top: 0, width: source.naturalWidth, height: source.naturalHeight };
+  const { canvas, ctx } = makeCanvas(rect.width, rect.height);
+  ctx.drawImage(source, 0, 0, canvas.width, canvas.height);
+  return { name: layer.name, canvas, left: rect.left, top: rect.top, hidden: false };
+}
+
+export async function composePositionedLayers(layers: ExportLayer[], width: number, height: number) {
+  const { canvas, ctx } = makeCanvas(width, height);
+  // 顺序加载，避免多张大图同时解码造成内存峰值。
+  for (const layer of layers) {
+    const placed = await positionedLayer(layer, width, height);
+    ctx.drawImage(placed.canvas, placed.left, placed.top);
+  }
+  return canvas.toDataURL("image/png");
+}
+
+export async function layeredPsdBytes(opts: { width: number; height: number; composite: string; layers: ExportLayer[] }, dpi = 300) {
+  if (!opts.layers.length) throw new Error("至少保留一个图层");
+  const { writePsd } = await import("ag-psd");
+  const composite = await canvasFrom(opts.composite);
+  const children = [];
+  for (const layer of opts.layers) children.push(await positionedLayer(layer, opts.width, opts.height));
+  // ag-psd 的图层顺序为顶→底；输入为底→顶。
+  return new Uint8Array(writePsd({
+    width: opts.width, height: opts.height, canvas: composite, children: children.reverse(),
+    imageResources: { resolutionInfo: { horizontalResolution: dpi, horizontalResolutionUnit: "PPI", widthUnit: "Inches", verticalResolution: dpi, verticalResolutionUnit: "PPI", heightUnit: "Inches" } },
+  }, { generateThumbnail: true }));
+}
+
 /** 导出分层 PSD：composite 为合成预览底图（可用 stitchCanvas.stackLayers 的结果）；layers 序 = 底→顶 */
 export async function exportLayeredPsd(
   opts: { width: number; height: number; composite: string; layers: ExportLayer[] },
   dpi = 300,
 ): Promise<string> {
-  if (!opts.layers.length) throw new Error("至少保留一个图层");
-  const [{ writePsd }, composite, ...canvases] = await Promise.all([
-    import("ag-psd"),
-    canvasFrom(opts.composite),
-    ...opts.layers.map((layer) => canvasFrom(layer.src)),
-  ]);
-  // ag-psd 的 children 顺序是图层面板从上到下；图层组内部为底→顶（数组序），因此反转。
-  // 带 box 的层按原图原位放置（left/top 像素）：高清重绘层（约 2×box 尺寸）以中心对齐，PS 里直接可用
-  const children = opts.layers
-    .map((layer, index) => {
-      const canvas = canvases[index];
-      const box = layer.box;
-      if (!box) return { name: layer.name, canvas, hidden: false };
-      const left = Math.round(box[0] * opts.width - (canvas.width - box[2] * opts.width) / 2);
-      const top = Math.round(box[1] * opts.height - (canvas.height - box[3] * opts.height) / 2);
-      return { name: layer.name, canvas, hidden: false, left, top };
-    })
-    .reverse();
-  const bytes = new Uint8Array(writePsd({
-    width: opts.width,
-    height: opts.height,
-    canvas: composite,
-    children,
-    imageResources: { resolutionInfo: { horizontalResolution: dpi, horizontalResolutionUnit: "PPI", widthUnit: "Inches", verticalResolution: dpi, verticalResolutionUnit: "PPI", heightUnit: "Inches" } },
-  }, { generateThumbnail: true }));
+  const bytes = await layeredPsdBytes(opts, dpi);
   const fileName = `MOMO分层_${Date.now()}.psd`;
   if (!isTauri) {
     triggerDownload(bytes, fileName, "image/vnd.adobe.photoshop");

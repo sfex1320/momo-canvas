@@ -375,7 +375,7 @@ export async function redrawElementImage(id: string, userPrompt: string) {
       size: "auto",
       aspect: imageFamily(card) === "banana" && dm ? nearestAspect(dm.w / dm.h) : undefined,
     });
-    const png = await chromaKey(results[0], { key: [255, 255, 255], tolerance: 36, soft: 24 });
+    const png = await chromaKey(results[0], { key: [255, 255, 255], tolerance: 36, soft: 24, edgeConnected: (node.data as ImageData).elemMeta?.role !== "text" });
     writeMainImage(id, png);
     finishNodeEdit(id, "元素重绘", [png], userPrompt.trim() || "元素重绘（保持原样提升质量）", card.name, card.model);
     toast("元素已重绘并抠回透明图层（Ctrl+Z 可撤销）", "ok");

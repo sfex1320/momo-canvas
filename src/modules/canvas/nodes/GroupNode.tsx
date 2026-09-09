@@ -94,14 +94,15 @@ export const GroupNode = memo(function GroupNode({ id, selected }: NodeProps) {
           </>
         ) : null}
         {layerGroup && !frameless && !artboard ? (
+          <><PopSelect title="合成与 PSD 输出倍率（受最长边 8192 与总像素 2400 万限制；细节取决于素材）" value={String(gdata?.layerOutputScale ?? 1)} options={[1, 2, 4].map(v => ({ value: String(v), label: v === 1 ? "原尺寸" : `${v} 倍`, icon: <IcImage size={14} /> }))} onChange={v => updateData(id, { layerOutputScale: Number(v) as 1 | 2 | 4 })} className="gn-pop nodrag" />
           <button
             className="icon-btn nodrag"
-            title="按成员顺序叠加合成一张图（组内排在上面/靠左的成员在底层），生成合成图节点"
+            title="按元素原图位置与所选倍率合成海报；移动节点卡片不改变海报排版"
             aria-label="合成图层"
             onClick={() => void composeLayerGroup(id)}
           >
             <IcImage size={15} />
-          </button>
+          </button></>
         ) : null}
         {naming ? (
           <span className="gn-name nodrag">

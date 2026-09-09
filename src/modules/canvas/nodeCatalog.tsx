@@ -59,6 +59,6 @@ export const NODE_CATALOG: CatalogItem[] = [
   { kind: "videoDub", label: "视频配音", desc: "把上游音频混入/替换视频原声（本地重编码，零成本）", icon: <IcDub size={18} />, group: "视频", hotkey: "addVideoDub", dockHidden: true },
   { kind: "director", label: "导演台", desc: "项目级复合节点：剧本→分镜→生成调度→选片→串片预演→剪辑交付", icon: <IcFilmFrame size={18} />, group: "视频", hotkey: "addDirector" },
   { kind: "charCard", label: "角色卡", desc: "分析人物图片/描述，一键产出三视图/表情/立绘/设定卡", icon: <IcIdCard size={18} />, group: "角色", hotkey: "addCharCard" },
-  { kind: "enhanceLocal", label: "超清放大", desc: "本地 GPU（DirectML）多模型融合超分：4K/8K/印刷尺寸，非破坏、可取消、自动 Tile", icon: <IcUpscale size={18} />, group: "编辑", hotkey: "addEnhanceLocal" },
-  { kind: "vectorize", label: "智能矢量", desc: "本地 VTracer 位图转矢量 SVG：Logo/打卡框/文化墙/扁平插画，非破坏，可导出 AI/CDR", icon: <IcVector size={18} />, group: "编辑", hotkey: "addVectorize" },
+  { kind: "enhanceLocal", label: "本地放大", desc: "本地 GPU（DirectML）多模型融合超分：4K/8K/印刷尺寸，非破坏、可取消、自动 Tile", icon: <IcUpscale size={18} />, group: "编辑", hotkey: "addEnhanceLocal" },
+  { kind: "vectorize", label: "矢量", desc: "本地 VTracer 位图转矢量 SVG：Logo/打卡框/文化墙/扁平插画，非破坏，可导出 AI/CDR", icon: <IcVector size={18} />, group: "编辑", hotkey: "addVectorize" },
 ];

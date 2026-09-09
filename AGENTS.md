@@ -9,6 +9,10 @@ This file provides guidance to Codex (Codex.ai/code) when working with code in t
 
 MOMO 智能画布：Tauri 2 (Rust 壳) + React 19 + TypeScript + React Flow (@xyflow/react) + Zustand 的桌面 AI 创作工作站。单一画布范式——图片、提示词、生图、生视频、ComfyUI 工作流都是画布节点，连线即工作流；对话/Agent/语音收在右侧「创作助手」侧栏。UI 文案、代码注释、commit message 全部使用中文。
 
+## 海报元素路线约束
+
+用户已明确排除 Qwen-Image-Layered 及依赖该模型的封装路线，后续不再推荐或集成。目标是整图生成 → 元素识别与人工校准 → 精修蒙版 → 按需逐元素高清重绘 → 原位合成与分层导出。风格文字层当前仍是位图，「改字」是模型重绘，不等于原生字体编辑。图片编辑入口收敛为元素、高清、局部重绘、创意模板及整理工具；实验平面稿收进更多工具。图层组的 layerOutputScale 控制合成/PSD 倍率，默认旧组 1 倍、高清拆解新组 2 倍；layerGeometry/positionedLayer 为预览与 PSD 的统一位置规则。
+
 ## 常用命令
 
 ```bash

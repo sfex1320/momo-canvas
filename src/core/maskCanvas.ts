@@ -87,7 +87,7 @@ export type OutpaintPadsPx = { l: number; r: number; t: number; b: number };
  *  与 layering 同款策略：全分辨率主线程单遍处理，调用前让调用方 rAF 让位一次。 */
 export async function chromaKey(
   src: string,
-  opts: { key?: [number, number, number]; tolerance?: number; soft?: number } = {},
+  opts: { key?: [number, number, number]; tolerance?: number; soft?: number; edgeConnected?: boolean } = {},
 ): Promise<string> {
   const img = await loadImg(src);
   const w = img.naturalWidth;
@@ -132,7 +132,33 @@ export async function chromaKey(
   const soft = opts.soft ?? 30;
   const hard = tolerance * tolerance;
   const softSq = (tolerance + soft) * (tolerance + soft);
+  // 主体优先只移除与画面边缘相连的背景，避免把封闭的白色高光一起挖空。
+  // 文字不启用：字腔内的背景也需要移除。复杂轮廓仍应使用精修蒙版。
+  let connected: Uint8Array | undefined;
+  if (opts.edgeConnected) {
+    connected = new Uint8Array(w * h);
+    const queue = new Int32Array(w * h);
+    let head = 0, tail = 0;
+    const add = (pixel: number) => {
+      if (connected![pixel]) return;
+      const i = pixel * 4;
+      const distance = (data[i] - key![0]) ** 2 + (data[i + 1] - key![1]) ** 2 + (data[i + 2] - key![2]) ** 2;
+      if (data[i + 3] !== 0 && distance >= softSq) return;
+      connected![pixel] = 1;
+      queue[tail++] = pixel;
+    };
+    for (let x = 0; x < w; x++) { add(x); add((h - 1) * w + x); }
+    for (let y = 0; y < h; y++) { add(y * w); add(y * w + w - 1); }
+    while (head < tail) {
+      const p = queue[head++], x = p % w;
+      if (x > 0) add(p - 1);
+      if (x < w - 1) add(p + 1);
+      if (p >= w) add(p - w);
+      if (p + w < w * h) add(p + w);
+    }
+  }
   for (let i = 0; i < data.length; i += 4) {
+    if (connected && !connected[i / 4]) continue;
     if (data[i + 3] === 0) continue;
     const dr = data[i] - key[0];
     const dg = data[i + 1] - key[1];

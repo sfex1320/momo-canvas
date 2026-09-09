@@ -474,8 +474,12 @@ export type GroupData = {
   status: RunStatus;
   error?: string;
   title?: string;
-  /** 图层组（元素工坊拆解产物）：组内 y 序 = 图层 z 序，禁用瀑布流重排、组头多「合成图层」按钮 */
+  /** 图层组：成员创建顺序为底→顶；禁止瀑布流重排，按元素框合成。 */
   layerGroup?: boolean;
+  /** 图层组合成与 PSD 的输出倍率；旧图层组缺省保持原尺寸。 */
+  layerOutputScale?: 1 | 2 | 4;
+  /** 拆解时的原海报尺寸；更换或移除背景后，元素坐标仍使用这个基准。 */
+  layerCanvasSize?: { width: number; height: number };
   /** 无框组（分镜组）：默认隐藏虚线框与组头，悬停显示，成员统一尺寸严格网格贴片 */
   frameless?: boolean;
   /** 分镜组：切片 id 的分镜顺序（点击序；重排/序号/拼接都按它） */

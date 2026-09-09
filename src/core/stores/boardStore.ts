@@ -213,8 +213,8 @@ export const NODE_LABEL: Record<NodeKind, string> = {
   charCard: "角色卡",
   ecomImage: "电商长图",
   storyboard: "分镜",
-  enhanceLocal: "超清放大",
-  vectorize: "智能矢量",
+  enhanceLocal: "本地放大",
+  vectorize: "矢量",
   director: "导演台",
 };
 

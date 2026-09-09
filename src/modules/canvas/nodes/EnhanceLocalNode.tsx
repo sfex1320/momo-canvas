@@ -29,7 +29,7 @@ export const EnhanceLocalNode = memo(function EnhanceLocalNode({ id, data, selec
     if (!main) return;
     if (d.productionReady === false && !window.confirm(`${d.qualityMessage ?? "这张图片未通过生产质量门禁"}\n\n仍要保存到本地吗？`)) return;
     try {
-      const p = await saveImageAs(main, useSettings.getState().settings.save, { model: "超清放大" });
+      const p = await saveImageAs(main, useSettings.getState().settings.save, { model: "本地放大" });
       if (p) toast(`已保存 → ${p}`, "ok");
     } catch (e) {
       toast(errMsg(e), "err");
@@ -39,7 +39,7 @@ export const EnhanceLocalNode = memo(function EnhanceLocalNode({ id, data, selec
   return (
     <NodeShell
       id={id}
-      title="超清放大"
+      title="本地放大"
       icon={<IcUpscale size={17} />}
       status={d.status}
       error={d.error}

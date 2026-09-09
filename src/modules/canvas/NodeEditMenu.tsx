@@ -5,7 +5,7 @@
  *   高清增强 / 扩图 / 尺寸调整：弹卡内调参运行，结果就地写回（可 Ctrl+Z 撤销）；
  *   视频节点：视频配音（产物是新音轨视频，仍派生下游节点）。
  */
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { outPortType, useBoard } from "../../core/stores/boardStore";
 import { evenSplit, toast, useUi } from "../../core/stores/uiStore";
 import { applyCropToNewNode, applyEnhance, applyGridSplitFractional, applyInpaint, applyMark, applyOutpaint, applyResize, createStoryboardGroup, nodeMainImage, redrawElementImage, retouchElementText, spawnAiPresetNode } from "../../core/nodeEdit";
@@ -15,7 +15,7 @@ import { imageDims } from "../../core/imageInfo";
 import { PopLayer, PopSelect } from "../../ui/PopSelect";
 import { NumInput } from "../../ui/kit";
 import {
-  IcArrowL, IcBox, IcBrush, IcCheck, IcChevronD, IcClose, IcCrop, IcDub, IcEnhance, IcExpand, IcGrid, IcIdCard, IcImage, IcLayers, IcLoading, IcOrbit, IcPerson, IcPose, IcResize, IcScan, IcTag, IcText, IcTimer, IcTrash, IcUndo, IcUpscale, IcVector, IcWand,
+  IcPoster, IcToolbox, IcRefresh, IcArrowL, IcBox, IcBrush, IcCheck, IcChevronD, IcClose, IcCrop, IcDub, IcEnhance, IcExpand, IcGrid, IcIdCard, IcImage, IcLayers, IcLoading, IcOrbit, IcPerson, IcPose, IcResize, IcScan, IcTag, IcText, IcTimer, IcTrash, IcUndo, IcUpscale, IcVector, IcWand,
 } from "../../ui/icons";
 import type { EditChannel, ImageData, NodeKind, OutpaintPads, ResizeParams } from "../../core/types";
 
@@ -60,7 +60,7 @@ function VideoDubButton({ id }: { id: string }) {
 
 /* ================= 图片：编辑菜单 + 参数卡 ================= */
 
-type View = "menu" | "enhance" | "outpaint" | "resize" | "gridAI" | "elemRedraw" | "elemText";
+type View = "menu" | "quality" | "enhance" | "outpaint" | "resize" | "gridAI" | "elemRedraw" | "elemText";
 
 function EditMenuButton({ id }: { id: string }) {
   const [open, setOpen] = useState(false);
@@ -83,109 +83,37 @@ function EditMenuButton({ id }: { id: string }) {
       {open ? (
         <PopLayer anchorRef={wrapRef} onClose={close} className={view === "menu" ? "ne-menu-pop" : view === "gridAI" ? "ne-ai-pop" : "ne-pop"}>
           {view === "menu" ? (
-            <div className="pop-list ne-menu2">
-              <button className="pop-item" onClick={() => { close(); openMediaEdit(id, "crop"); }}>
-                <span className="pi-icon"><IcCrop size={16} /></span>
-                <span className="pi-text">
-                  <span className="pi-label">聚焦裁剪</span>
-                  <span className="pi-desc">在图上框选局部，裁出为新节点</span>
-                </span>
-              </button>
-              <button className="pop-item" onClick={() => { close(); openMediaEdit(id, "inpaint"); }}>
-                <span className="pi-icon"><IcBrush size={16} /></span>
-                <span className="pi-text">
-                  <span className="pi-label">局部重绘</span>
-                  <span className="pi-desc">在图上涂抹蒙版，只重画选区</span>
-                </span>
-              </button>
-              {elemMeta ? (
-                <button className="pop-item" onClick={() => setView("elemRedraw")}>
-                  <span className="pi-icon"><IcWand size={16} /></span>
-                  <span className="pi-text">
-                    <span className="pi-label">元素重绘</span>
-                    <span className="pi-desc">按描述重画这个图层元素，仍抠回透明底</span>
-                  </span>
-                </button>
-              ) : null}
-              {elemMeta?.role === "text" && elemMeta.text ? (
-                <button className="pop-item" onClick={() => setView("elemText")}>
-                  <span className="pi-icon"><IcText size={16} /></span>
-                  <span className="pi-text">
-                    <span className="pi-label">改字</span>
-                    <span className="pi-desc">替换文字内容，保持字体风格与颜色</span>
-                  </span>
-                </button>
-              ) : null}
-              <button className="pop-item" onClick={() => { close(); openMediaEdit(id, "gridsplit"); }}>
-                <span className="pi-icon"><IcGrid size={16} /></span>
-                <span className="pi-text">
-                  <span className="pi-label">宫格切分</span>
-                  <span className="pi-desc">图上拖线调格，勾选宫格一键创建分镜组</span>
-                </span>
-              </button>
-              <button className="pop-item" onClick={() => setView("gridAI")}>
-                <span className="pi-icon"><IcWand size={16} /></span>
-                <span className="pi-text">
-                  <span className="pi-label">AI 模板…</span>
-                  <span className="pi-desc">分镜推演/多机位/三视图/设定图：铺生成节点图生图，可再切分建组</span>
-                </span>
-              </button>
-              <button className="pop-item" onClick={() => { close(); openMediaEdit(id, "mark"); }}>
-                <span className="pi-icon"><IcTag size={16} /></span>
-                <span className="pi-text">
-                  <span className="pi-label">标记</span>
-                  <span className="pi-desc">画笔、点位与框选标记，合成后就地写回</span>
-                </span>
-              </button>
-              <button className="pop-item" onClick={() => { close(); useUi.getState().setPlanarSheetNodeId(id); }}>
-                <span className="pi-icon"><IcVector size={16}/></span><span className="pi-text"><span className="pi-label">立体转平面矢量…</span><span className="pi-desc">立体效果图 → 平面部件总稿 → SVG → 原图拆件与重绘</span></span>
-              </button>
-              <button className="pop-item" onClick={() => { close(); useUi.getState().setLayerEditorNodeId(id); }}>
-                <span className="pi-icon"><IcLayers size={16} /></span>
-                <span className="pi-text">
-                  <span className="pi-label">元素分层…</span>
-                  <span className="pi-desc">识别文字/主体/Logo，拆成透明图层（可重绘、改字、合成）</span>
-                </span>
-              </button>
-              <button className="pop-item" onClick={() => setView("enhance")}>
-                <span className="pi-icon"><IcEnhance size={16} /></span>
-                <span className="pi-text">
-                  <span className="pi-label">高清增强</span>
-                  <span className="pi-desc">云端重绘式放大提清，就地写回</span>
-                </span>
-              </button>
-              <button className="pop-item" onClick={() => { close(); useBoard.getState().spawnEdit(id, "enhanceLocal"); }}>
-                <span className="pi-icon"><IcUpscale size={16} /></span>
-                <span className="pi-text">
-                  <span className="pi-label">超清放大</span>
-                  <span className="pi-desc">本地 GPU 多模型超分 4K/8K，非破坏（新建节点，结果入资产库）</span>
-                </span>
-              </button>
-              <button className="pop-item" onClick={() => { close(); useBoard.getState().spawnEdit(id, "vectorize"); }}>
-                <span className="pi-icon"><IcVector size={16} /></span>
-                <span className="pi-text">
-                  <span className="pi-label">智能矢量</span>
-                  <span className="pi-desc">本地 VTracer 位图转 SVG（Logo/打卡框/文化墙），可导出 AI/CDR</span>
-                </span>
-              </button>
-              <button className="pop-item" onClick={()=>{close();useBoard.getState().spawnEdit(id,"vectorize");const n=useBoard.getState().nodes.find(n=>n.selected&&n.type==="vectorize");if(n)useBoard.getState().updateData(n.id,{preset:"flat",flatColors:12,quality:"high-fidelity",filterSpeckle:1});}}>
-                <span className="pi-icon"><IcVector size={16}/></span><span className="pi-text"><span className="pi-label">平面拆件清理与矢量</span><span className="pi-desc">整理色块 → 矢量路径 → 高清 PNG / 矢量 PDF</span></span>
-              </button>
-              <button className="pop-item" onClick={() => setView("outpaint")}>
-                <span className="pi-icon"><IcExpand size={16} /></span>
-                <span className="pi-text">
-                  <span className="pi-label">扩图</span>
-                  <span className="pi-desc">向四周延展画面，就地写回</span>
-                </span>
-              </button>
-              <button className="pop-item" onClick={() => setView("resize")}>
-                <span className="pi-icon"><IcResize size={16} /></span>
-                <span className="pi-text">
-                  <span className="pi-label">尺寸调整</span>
-                  <span className="pi-desc">本地重采样像素，就地写回</span>
-                </span>
-              </button>
+            <div className="ne-tools">
+              <div className="ne-section-label">创作</div>
+              <div className="ne-menu2">
+                <EditTool label="元素" desc="识别、拆解与高清重绘" icon={<IcLayers />} onClick={() => { close(); useUi.getState().setLayerEditorNodeId(id); }} />
+                <EditTool label="高清" desc="本地放大或模型重绘" icon={<IcEnhance />} onClick={() => setView("quality")} />
+                <EditTool label="局部重绘" desc="涂选区域，修改画面" icon={<IcBrush />} onClick={() => { close(); openMediaEdit(id, "inpaint"); }} />
+                <EditTool label="创意模板" desc="分镜、机位与设定图" icon={<IcPoster />} onClick={() => setView("gridAI")} />
+                {elemMeta && <EditTool label="重绘元素" desc="重画当前透明图层" icon={<IcRefresh />} onClick={() => setView("elemRedraw")} />}
+                {elemMeta?.role === "text" && elemMeta.text && <EditTool label="改字" desc="模型重绘字形，保留风格" icon={<IcText />} onClick={() => setView("elemText")} />}
+              </div>
+              <div className="ne-section-label">整理</div>
+              <div className="ne-menu2">
+                <EditTool label="裁剪" desc="框选局部，另存图片" icon={<IcCrop />} onClick={() => { close(); openMediaEdit(id, "crop"); }} />
+                <EditTool label="切图" desc="宫格拆分，创建分镜组" icon={<IcGrid />} onClick={() => { close(); openMediaEdit(id, "gridsplit"); }} />
+                <EditTool label="扩图" desc="向四周延展画面" icon={<IcExpand />} onClick={() => setView("outpaint")} />
+                <EditTool label="标记" desc="画笔、点位与框选" icon={<IcTag />} onClick={() => { close(); openMediaEdit(id, "mark"); }} />
+              </div>
+              <details className="ne-more">
+                <summary><IcToolbox size={14} /> 更多工具 <IcChevronD size={12} /></summary>
+                <div className="ne-menu2">
+                  <EditTool label="尺寸" desc="调整像素，不增加细节" icon={<IcResize />} onClick={() => setView("resize")} />
+                  <EditTool label="矢量" desc="描摹轮廓，清理色块" icon={<IcVector />} onClick={() => { close(); useBoard.getState().spawnEdit(id, "vectorize"); }} />
+                  <EditTool label="平面稿" desc="立体转平面 · 实验功能" icon={<IcBox />} onClick={() => { close(); useUi.getState().setPlanarSheetNodeId(id); }} />
+                </div>
+              </details>
             </div>
+          ) : view === "quality" ? (
+            <><CardHead title="高清" onBack={() => setView("menu")} /><div className="ne-quality">
+              <EditTool label="本地放大" desc="超分模型放大，生成新节点" icon={<IcUpscale />} onClick={() => { close(); useBoard.getState().spawnEdit(id, "enhanceLocal"); }} />
+              <EditTool label="模型重绘" desc="绘图模型补细节，可能改变外观" icon={<IcEnhance />} onClick={() => setView("enhance")} />
+            </div></>
           ) : view === "enhance" ? (
             <EnhanceCard id={id} onBack={() => setView("menu")} onDone={close} />
           ) : view === "outpaint" ? (
@@ -203,6 +131,10 @@ function EditMenuButton({ id }: { id: string }) {
       ) : null}
     </div>
   );
+}
+
+function EditTool({ label, desc, icon, onClick }: { label: string; desc: string; icon: ReactNode; onClick: () => void }) {
+  return <button className="pop-item" title={desc} onClick={onClick}><span className="pi-icon">{icon}</span><span className="pi-text"><span className="pi-label">{label}</span><span className="pi-desc">{desc}</span></span></button>;
 }
 
 /** 参数卡头部：返回箭头 + 标题 */

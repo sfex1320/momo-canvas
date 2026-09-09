@@ -79,10 +79,11 @@ export function creativityPhrase(v?: number): string | null {
 }
 
 /** 元素重绘（元素工坊重绘档 / 图层节点「元素重绘」共用）：只画这一个元素，背景纯白（回来色键抠图） */
-export function elementRedrawPrompt(desc: string): string {
+export function elementRedrawPrompt(desc: string, text?: string): string {
   return [
     `请单独绘制这一个设计元素：${desc.trim() || "保持参考图中该元素的原样"}。`,
-    "参考图1是这个元素的局部特写（含少量周边背景，仅供理解风格与光影），输出只包含这一个元素本身，不要包含画面中的其他元素或文字。",
+    "参考图1是这个元素的局部特写，输出只包含这一个元素本身，不要带入周边装饰。保持参考图的画幅比例，以及元素在画幅内的位置、大小和留白，不要重新居中或缩放主体。",
+    text ? `本元素是文字，请逐字绘制「${text}」，保留字形、配色和排版，不得删字、改字或增加其他文字。` : "不要增加参考元素之外的文字。",
     "背景必须是纯净的纯白色（#FFFFFF），不要阴影投在背景上、不要渐变、不要边框；元素细节、配色、质感与参考保持一致。",
     "输出完整元素，边缘干净不裁切。",
   ].join("\n");

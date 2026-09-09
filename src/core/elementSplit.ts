@@ -18,13 +18,14 @@ import { estimateCost } from "./pricing";
 import { budgetGate } from "./capability/budget";
 import { useUsage } from "./stores/usageStore";
 import { chromaKey, cropByRect, loadImg } from "./maskCanvas";
-import { completeBackgroundToDataUrl } from "./layering";
+import { completeBackgroundToDataUrl, composePositionedLayers } from "./layering";
+import { layerOutputSize } from "./layerGeometry";
 import { stackLayers } from "./stitchCanvas";
 import { elementRedrawPrompt } from "./editPrompts";
 import { nodeMainImage } from "./nodeEdit";
 import { imageDims } from "./imageInfo";
 import { errMsg, isTauri, parseJsonLoose, uid } from "./utils";
-import type { ElementFlatOptions, ElementRole, ImageData, ModelCard } from "./types";
+import type { ElementFlatOptions, ElementRole, GroupData, ImageData, ModelCard } from "./types";
 
 export type ElementItem = {
   /** 用户核对的原像素透明裁片；边界框改变后失效。 */
@@ -64,6 +65,8 @@ export async function analyzeElements(src: string, signal?:AbortSignal): Promise
     "- 识别海报、美陈、文化墙或展陈效果图中的标题/副标题/正文块（role=text，text 必须填图上原文）、人物/商品主体（role=subject）、Logo/徽章（role=logo）、装饰图形/边框/图标（role=decoration）；",
     "- name 必须是外观描述（如「红色毛笔字大标题」「穿蓝色卫衣的男孩半身像」「金色圆形徽章」），不要只写「标题」「元素」——它会直接用作重绘提示词；",
     "- 同类的独立对象分开列；背景不要列；框要完整包住元素但尽量紧；最多 16 项。",
+    "- 不要把主体表面的印花、文字、花纹、高光拆成独立装饰；太阳圆心与射线等构成一个图标的部分只列一个元素。除非用户明确要求拆开，完整对象优先。",
+    "- 文字必须逐字核对原图，保留全部汉字。文字框只包住对应文字，不要把副标题、下一行或大片留白框进去；无法读清不要猜字。",
   ].join("\n");
   const result = await chatStream(
     card,
@@ -201,7 +204,7 @@ export async function splitElementsToCanvas(srcNodeId: string, items: ElementIte
         let png: string;
         if (opts.mode === "pixel") {
           const crop = await cropByRect(src, { x: it.box[0], y: it.box[1], w: it.box[2], h: it.box[3] });
-          png = it.cutout ?? await chromaKey(crop.dataUrl);
+          png = it.cutout ?? await chromaKey(crop.dataUrl, { edgeConnected: it.role !== "text" });
         } else {
           // 高清重绘：先裁出局部特写作参考（模型注意力聚焦在元素本身），按 2 倍目标尺寸重画——
           // 拆出来的每层都是高清素材，按原位拼回/导 PSD 即得到「高清分层重建」
@@ -213,7 +216,7 @@ export async function splitElementsToCanvas(srcNodeId: string, items: ElementIte
           const up = (v: number) => Math.max(256, Math.min(2048, Math.round((v * 2) / 8) * 8));
           const started = Date.now();
           const results = await generateImage(card, {
-            prompt: elementRedrawPrompt(it.name),
+            prompt: elementRedrawPrompt(it.name, it.role === "text" ? it.text : undefined),
             refImages: [crop.dataUrl],
             n: 1, signal,
             size: fam === "banana" ? undefined : `${up(crop.w)}x${up(crop.h)}`,
@@ -222,7 +225,7 @@ export async function splitElementsToCanvas(srcNodeId: string, items: ElementIte
           });
           if (!results.length) throw new Error("绘画模型未返回元素图片");
           useUsage.getState().record(card, { ok: true, images: results.length, durMs: Date.now() - started });
-          png = await chromaKey(results[0], { key: [255, 255, 255], tolerance: 36, soft: 24 });
+          png = await chromaKey(results[0], { key: [255, 255, 255], tolerance: 36, soft: 24, edgeConnected: it.role !== "text" });
         }
         check();
         // 摆放位先落在源节点下方（建组后由 placeGroupMembers 统一改写为原图位置）
@@ -268,7 +271,7 @@ export async function splitElementsToCanvas(srcNodeId: string, items: ElementIte
           pos[nid] = { x: Math.round(cx - NODE_W / 2), y: Math.round(cy - h / 2) };
         }
         s3.placeGroupMembers(gid, pos, { w: CW + 40, h: CH + 110 });
-        s3.updateData(gid, { layerGroup: true, title: `图层组 · ${base}` });
+        s3.updateData(gid, { layerGroup: true, layerOutputScale: opts.mode === "redraw" ? 2 : 1, layerCanvasSize: { width: srcD.w, height: srcD.h }, title: `图层组 · ${base}` });
       }
       toast(
         `已拆解 ${created.length - 1} 个元素 + 背景层，图层按原图位置摆放${failed.length ? `；${failed.length} 个失败已跳过` : ""}。改完点组头「合成图层」按原位拼回`,
@@ -305,29 +308,10 @@ export async function composeLayerGroup(groupId: string): Promise<void> {
   }
   const gx = group.position.x + (group.measured?.width ?? 640) + 160;
   try {
-    const boxes = members.map((n) => (n.data as ImageData).elemMeta?.box);
-    if (boxes.every((b) => b) && nodeMainImage(members[0])) {
-      // 按原位拼回：高清重绘后的每层贴回原位 =「高清分层重建」的合成
-      const bgD = (await imageDims(nodeMainImage(members[0])!)) ?? { w: 1024, h: 1024 };
-      const c = document.createElement("canvas");
-      c.width = Math.max(64, bgD.w);
-      c.height = Math.max(64, bgD.h);
-      const ctx = c.getContext("2d");
-      if (!ctx) throw new Error("无法创建合成画布上下文");
-      for (const m of members) {
-        const src = nodeMainImage(m);
-        const b = (m.data as ImageData).elemMeta?.box;
-        if (!src || !b) continue;
-        const img = await loadImg(src);
-        ctx.drawImage(img, b[0] * c.width, b[1] * c.height, b[2] * c.width, b[3] * c.height);
-      }
-      useBoard.getState().addNode("image", { x: gx, y: group.position.y }, { src: c.toDataURL("image/png"), name: "图层合成（原位拼回）", status: "done" });
-      toast(`已按原图位置拼回 ${members.length} 层（背景铺底），需要 AI 融合光影可把合成图接入图生图`, "ok");
-      return;
-    }
-    const out = await stackLayers(srcs);
-    useBoard.getState().addNode("image", { x: gx, y: group.position.y }, { src: out.dataUrl, name: "图层合成", status: "done" });
-    toast(`已按 ${srcs.length} 层合成（组内排在上面/靠左的成员在底层），需要 AI 融合光影可把合成图接入图生图`, "ok");
+    const result = await layerGroupForExport(groupId);
+    if (!result || useBoard.getState().activeId !== s.activeId) return;
+    useBoard.getState().addNode("image", { x: gx, y: group.position.y }, { src: result.composite, name: "海报合成", status: "done" });
+    toast(`已合成 ${result.layers.length} 层 · ${result.width}×${result.height}px`, "ok");
   } catch (e) {
     toast(`合成失败：${errMsg(e)}`, "err");
   }
@@ -351,14 +335,21 @@ export async function layerGroupForExport(
   if (!layers.length) return null;
   if (layers.every(l => l.box)) {
     const bg = await loadImg(layers[0].src);
-    const c = document.createElement("canvas"); c.width = bg.naturalWidth; c.height = bg.naturalHeight;
-    const ctx = c.getContext("2d"); if (!ctx) throw new Error("无法创建图层导出预览");
-    for (const layer of layers) {
-      const [x, y, w, h] = layer.box!;
-      ctx.drawImage(await loadImg(layer.src), x * c.width, y * c.height, w * c.width, h * c.height);
-    }
-    return { layers, composite: c.toDataURL("image/png"), width: c.width, height: c.height };
+    const group = s.nodes.find(n => n.id === groupId);
+    const data = group?.data as GroupData | undefined;
+    const size = layerOutputSize(data?.layerCanvasSize?.width ?? bg.naturalWidth, data?.layerCanvasSize?.height ?? bg.naturalHeight, data?.layerOutputScale);
+    const composite = await composePositionedLayers(layers, size.width, size.height);
+    return { layers, composite, ...size };
   }
   const out = await stackLayers(layers.map((l) => l.src));
-  return { layers, composite: out.dataUrl, width: out.w, height: out.h };
+  // 旧图层组按 stackLayers 的居中适配规则补位置，使 PSD 与旧预览一致。
+  const positioned = [];
+  for (const layer of layers) {
+    const img = await loadImg(layer.src);
+    const fit = Math.min(out.w / img.naturalWidth, out.h / img.naturalHeight, 1);
+    const rawW = img.naturalWidth * fit, rawH = img.naturalHeight * fit;
+    const w = Math.round(rawW), h = Math.round(rawH);
+    positioned.push({ ...layer, box: [Math.round((out.w - rawW) / 2) / out.w, Math.round((out.h - rawH) / 2) / out.h, w / out.w, h / out.h] as [number, number, number, number] });
+  }
+  return { layers: positioned, composite: out.dataUrl, width: out.w, height: out.h };
 }
