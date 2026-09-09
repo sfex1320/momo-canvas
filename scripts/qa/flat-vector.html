@@ -1,0 +1,12 @@
+<!doctype html><html lang="zh"><meta charset="utf-8"><title>平面图形对比</title><style>body{font:14px system-ui;background:#edeef2;color:#283039;margin:24px}main{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}section{background:white;padding:12px;border-radius:8px}canvas{width:100%;image-rendering:auto}pre{white-space:pre-wrap;font:12px monospace}</style><h1>128 × 96 → 512 × 384 · 人工几何样例</h1><p>SVG 用浏览器按目标尺寸重新渲染；ONNX 为独立裸权重。数字越低仅表示像素误差越小。</p><main id="results"></main><pre id="metrics"></pre><script type="module">
+const base='../../.codex/vector-research/';
+async function render(file) { const img=new Image(); img.src=base+file; await img.decode(); const c=document.createElement('canvas');c.width=512;c.height=384; c.getContext('2d').drawImage(img,0,0,512,384);return c; }
+const reference=await render('reference.png'), ref=reference.getContext('2d').getImageData(0,0,512,384).data, rows=[];
+for(const [label,file] of [['高分辨率真值','reference.png'],['Lanczos 插值','lanczos.png'],['SPAN 裸模型','span.png'],['NomosWebPhoto 裸模型','nomos.png'],['VTracer 1.0 默认','trace-default.svg'],['VTracer 1.0 固定色盘','trace-palette.svg'],['VTracer 1.0 共享边界','trace-cutout.svg']]) {
+const c=await render(file), a=c.getContext('2d').getImageData(0,0,512,384).data;
+let sum=0;for(let i=0;i<a.length;i++)if(i%4!==3)sum+=Math.abs(a[i]-ref[i]);
+const mae=+(sum/(512*384*3)).toFixed(3);rows.push({label,mae});
+const section=document.createElement('section'),title=document.createElement('h3');title.textContent=label+' · MAE '+mae;section.append(title,c);document.getElementById('results').append(section);
+}
+document.getElementById('metrics').textContent=JSON.stringify(rows,null,2);
+</script></html>

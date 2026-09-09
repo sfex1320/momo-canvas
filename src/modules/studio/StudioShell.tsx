@@ -6,8 +6,7 @@ import { nextStudioStep } from "../../core/studio/nextStep";
  * 左侧一级导航不再是「第 1/2/3/4 步」，而是随时切换、共享同一项目数据的专业工位：
  *   AI 导演 / 剧本库 / 角色库 / AI 制图 / H3 导演台（主工位）/ AI MV / 成片交付
  * 底部共享工具：3D 预演 / 资产库 / 任务中心 / 引擎状态。
- * 顶栏只保项目、保存状态、引擎状态、任务条、导出、关闭（§4.3）——画幅/时长/像素/配方
- * 全部移入检查器与项目设置，不再出现在顶栏。
+ * 顶栏保留项目、任务与导出；项目名、规格与目录绑定在「项目设置」内按需展开。
  * 工位态持久化到 project.studioUi；当前片段全局选中（useDirectorCtx）跨工位保持。
  */
 import { lazy, Suspense, useEffect, useMemo, useState } from "react";
@@ -31,7 +30,7 @@ import { entriesFromDataTransfer, importDroppedEntries } from "../../core/studio
 import { bindProjectFolderFlow, checkWorkspace, unbindProjectFolder } from "../../core/studio/projectWorkspace";
 import {
   IcClose, IcBrain, IcLibrary, IcUsers, IcBrush, IcClapper, IcMusic, IcFilmCut, IcFilmFrame, IcVideo, IcTimer,
-  IcGallery, IcActivity, IcGear, IcDownload,
+  IcGallery, IcActivity, IcGear, IcDownload, IcFolder,
 } from "../../ui/icons";
 import type { DirectorProject, StudioStation, StudioToolKey } from "../../core/types";
 
@@ -52,7 +51,7 @@ const STATIONS: Array<{ key: StudioStation; label: string; icon: React.ReactNode
   { key: "scripts", label: "剧本库", icon: <IcLibrary size={20} />, desc: "草稿 · 正式剧本 · 版本 · 送入项目" },
   { key: "characters", label: "角色库", icon: <IcUsers size={20} />, desc: "角色档案 · 外观 · 声音 · 受影响片段" },
   { key: "image", label: "AI 制图", icon: <IcBrush size={20} />, desc: "文生图 · 图生图 · 编辑 · 结果入库" },
-  { key: "h3", label: "H3 导演台", icon: <IcClapper size={20} />, desc: "分镜 · 22 帧微参考 · 生成 · 选 Take" },
+  { key: "h3", label: "H3 导演台", icon: <IcClapper size={20} />, desc: "整理分镜 · 生成画面 · 对比选片" },
   { key: "mv", label: "AI MV", icon: <IcMusic size={20} />, desc: "音乐 · 节拍 · 图像映射 · 口型" },
   { key: "post", label: "成片交付", icon: <IcFilmCut size={20} />, desc: "多轨时间线 · 质检 · 预演 · 导出" },
 ];
@@ -78,6 +77,8 @@ export function StudioShell({ project }: { project: DirectorProject }) {
   const ui = project.studioUi ?? studioUiOf(project.id);
   const station: StationKey = ui.station ?? "h3";
   const previzOn = station === "previz";
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const stationInfo = STATIONS.find((s) => s.key === station) ?? TOOLS[0];
 
   // 全局选中片段写回 studioUi（跨会话恢复）；打开时恢复上次选中
   useEffect(() => {
@@ -162,26 +163,15 @@ export function StudioShell({ project }: { project: DirectorProject }) {
       {/* 顶栏（§4.3）：项目 / 面包屑 / 保存状态 / 引擎状态 / 任务条 / 导出 / 关闭。
           全屏工位层盖住了壳的自定义标题栏，这里必须自带拖动区才能拖动窗口 */}
       <header className="st-header" data-tauri-drag-region>
+        <strong className="st-brand" data-tauri-drag-region><IcClapper size={19} /> 制片工作站</strong>
         {/* 3.5 P0：剧本项目切换器——切换整个 DirectorProject（角色/H3/MV/时间线/资产全隔离） */}
         <ProjectSwitcher current={project} />
-        {/* 3.5 P1：统一视频规格默认值（分辨率/帧率/默认时长；分段识别值优先于这里） */}
-        <VideoSpecDefaultsControl project={project} />
-        {/* 3.5 P2：项目文件夹绑定（Take/成片物理落盘路由；未绑定 = AppData 托管） */}
-        <WorkspaceBindButton project={project} />
-        <input
-          className="st-title-input nodrag"
-          value={project.name}
-          onChange={(e) => updateProject(project.id, { name: e.target.value })}
-          placeholder="未命名项目"
-          aria-label="项目名"
-        />
         <span className="st-crumb" data-tauri-drag-region title="当前对象：项目 / 场景 / 片段">
           {crumb.length ? (
             <>
-              <b data-tauri-drag-region>{project.name}</b>
               {crumb.map((c, i) => (
                 <span key={i} style={{ display: "inline-flex", gap: 4 }}>
-                  <i data-tauri-drag-region>/</i>
+                  {i > 0 ? <i data-tauri-drag-region>/</i> : null}
                   <b data-tauri-drag-region>{c}</b>
                 </span>
               ))}
@@ -190,17 +180,12 @@ export function StudioShell({ project }: { project: DirectorProject }) {
             <b data-tauri-drag-region>{progress.total ? `已采用 ${progress.approved}/${progress.total} 片段` : "尚无片段"}</b>
           )}
         </span>
-        <span className="st-saved" data-tauri-drag-region title={`上次保存 ${new Date(project.updatedAt).toLocaleTimeString()}`}>
-          <span className={`st-dot${engineOk ? "" : " off"}`} style={engineOk ? {} : { background: "var(--warn)" }} />
-          {remoteConfigured?"模型已配置":localConfigured?"本地配方已配置":"待配置模型或配方"}
-        </span>
-        <span className="st-saved" data-tauri-drag-region title={chatReady ? "AI 导演已接入对话模型" : "未配置对话模型——AI 导演需要 chat 角色模型"}>
-          <span className={`st-dot${chatReady ? "" : " off"}`} />
-          AI
-        </span>
         <div className="st-head-right">
           <JobStrip />
-          <button className="st-btn sm" title="前往成片交付工位完成预演与正式导出" onClick={() => go("post")}>
+          <button className={`st-btn ghost${settingsOpen ? " on" : ""}`} aria-expanded={settingsOpen} aria-controls="studio-project-settings" onClick={() => setSettingsOpen((v) => !v)}>
+            <IcGear size={15} /> 项目设置
+          </button>
+          <button className="st-btn" title="前往成片交付工位完成预演与正式导出" onClick={() => go("post")}>
             <IcDownload size={13} /> 导出
           </button>
           <button className="st-iconbtn" title="关闭制片工作站" aria-label="关闭" onClick={close}>
@@ -209,14 +194,25 @@ export function StudioShell({ project }: { project: DirectorProject }) {
         </div>
       </header>
 
+      {settingsOpen ? <section id="studio-project-settings" className="st-project-settings" aria-label="项目设置">
+        <label className="st-settings-label" htmlFor="studio-project-name">项目名</label>
+        <input id="studio-project-name" className="st-title-input" value={project.name} onChange={(e) => updateProject(project.id, { name: e.target.value })} placeholder="未命名项目" />
+        <span className="st-settings-label">默认规格</span>
+        <VideoSpecDefaultsControl project={project} />
+        <WorkspaceBindButton project={project} />
+        <span className="st-saved"><span className={`st-dot${engineOk ? "" : " off"}`} />{remoteConfigured ? "生成模型已配置" : localConfigured ? "本地配方已配置" : "待配置生成模型"}</span>
+        <span className="st-saved"><span className={`st-dot${chatReady ? "" : " off"}`} />{chatReady ? "对话模型已配置" : "待配置对话模型"}</span>
+      </section> : null}
+
       <div className="st-guide" aria-label="制作流程">
-        <div className="st-guide-steps">{["剧本", "分镜", "生成与选片", "交付"].map((label, i) => <span key={label} className={nextStep.stage === i ? "on" : nextStep.stage > i ? "done" : ""}>{i + 1} · {label}</span>)}</div>
-        <span className="st-guide-hint">{nextStep.hint}</span>
-        <button className="st-btn primary" onClick={() => { if (nextStep.segmentId) setSeg(nextStep.segmentId); go(nextStep.station); }}>{nextStep.label} →</button>
+        <div className="st-station-heading"><h1>{stationInfo.label}</h1><span>{stationInfo.desc}</span></div>
+        <div className="st-guide-steps">{["剧本", "分镜", "选片", "交付"].map((label, i) => <span key={label} aria-current={nextStep.stage === i ? "step" : undefined} className={nextStep.stage === i ? "on" : nextStep.stage > i ? "done" : ""}><i>{i + 1}</i>{label}</span>)}</div>
+        <button className="st-btn primary" title={nextStep.hint} onClick={() => { if (nextStep.segmentId) setSeg(nextStep.segmentId); go(nextStep.station); }}>{nextStep.label} →</button>
       </div>
       <div className="st-body">
         {/* 一级导航：七工位（不编号）+ 底部共享工具 */}
         <nav className="st-nav" aria-label="工位导航">
+          <span className="st-nav-heading">创作工位</span>
           {STATIONS.map((s) => (
             <button
               key={s.key}
@@ -226,7 +222,7 @@ export function StudioShell({ project }: { project: DirectorProject }) {
               onClick={() => go(s.key)}
             >
               {s.icon}
-              {s.label}
+              <span className="st-nav-label">{s.label}</span>
               {s.key === "director" && pendingProposals ? <span className="st-badge">{pendingProposals}</span> : null}
               {s.key === "post" && progress.missing ? (
                 <span className="st-badge" title={`缺片 ${progress.missing} 个片段`}>
@@ -237,6 +233,7 @@ export function StudioShell({ project }: { project: DirectorProject }) {
           ))}
           <div className="st-nav-gap" />
           <div className="st-nav-split" />
+          <span className="st-nav-heading">项目工具</span>
           {TOOLS.map((t) => (
             <button
               key={t.key}
@@ -245,7 +242,7 @@ export function StudioShell({ project }: { project: DirectorProject }) {
               onClick={() => onTool(t.key)}
             >
               {t.icon}
-              {t.label}
+              <span className="st-nav-label">{t.label}</span>
               {t.key === "jobs" ? <JobsBadge /> : null}
             </button>
           ))}
@@ -298,7 +295,7 @@ function WorkspaceBindButton({ project }: { project: DirectorProject }) {
           title={`已绑定：${w.rootPath}（${w.status === "ready" ? "就绪" : w.status === "missing" ? "目录离线——产物暂回托管" : w.status}）；Take 写入 分段资产库/NN_标题/Takes/，成片写入 成片/`}
           style={{ display: "inline-flex", alignItems: "center", gap: 4, maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
         >
-          📁 {w.rootPath.split(/[\\/]/).pop()}
+          <IcFolder size={14} /> {w.rootPath.split(/[\\/]/).pop()}
           {w.status === "missing" ? "（离线）" : ""}
           <button
             className="st-iconbtn"

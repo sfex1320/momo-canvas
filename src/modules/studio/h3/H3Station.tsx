@@ -622,11 +622,10 @@ function MonitorStage({
           <div className="mon-empty">
             <IcVideo size={36} />
             <b>从故事开始你的影片</b>
-            <span>这里是监看舞台：生成的片段会按「采用 Take → 最新成功 → 分镜图」的顺位在这里预览。</span>
+            <span>导入一份剧本，或与 AI 一起构思。分镜与生成画面会在这里呈现。</span>
             <div className="st-row" style={{ gap: 8, marginTop: 6 }}>
               <button
                 className="st-btn sm"
-                style={{ background: "rgba(255,255,255,0.1)", borderColor: "rgba(255,255,255,0.18)", color: "#e6eaf2" }}
                 title="和 AI 共创故事梗概、角色与分段方案"
                 onClick={() => updateProject(project.id, { studioUi: { ...(project.studioUi ?? { station: "h3" }), station: "director" } })}
               >
@@ -634,7 +633,6 @@ function MonitorStage({
               </button>
               <button
                 className="st-btn sm"
-                style={{ background: "rgba(255,255,255,0.1)", borderColor: "rgba(255,255,255,0.18)", color: "#e6eaf2" }}
                 title="导入剧本文件 / 三态识别后拆分成片段"
                 onClick={() => updateProject(project.id, { studioUi: { ...(project.studioUi ?? { station: "h3" }), station: "scripts" } })}
               >

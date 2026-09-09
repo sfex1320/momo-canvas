@@ -11,49 +11,37 @@
 /* ---------- 语义令牌（三主题；组件禁止直接写主题色） ---------- */
 .director-studio {
   /* 云白（默认浅色） */
-  --studio-chrome: #eceef2;
-  --studio-panel: #ffffff;
-  --studio-panel-2: #f5f6f9;
+  --studio-chrome: var(--bg-app);
+  --studio-panel: var(--panel-solid);
+  --studio-panel-2: color-mix(in srgb, var(--panel-solid) 70%, var(--bg-app));
   --studio-stage: #0d0f14;
   --studio-stage-panel: #1a1d26;
   --studio-stage-border: rgba(255, 255, 255, 0.07);
-  --studio-border: rgba(24, 32, 56, 0.1);
+  --studio-monitor-text: #d7dbe6;
+  --studio-monitor-muted: #a0a9ba;
+  --studio-border: var(--panel-border);
   --studio-text-1: var(--text-1);
   --studio-text-2: var(--text-2);
   --studio-text-3: var(--text-3);
   --studio-accent: var(--accent);
-  --studio-hover: rgba(30, 60, 140, 0.06);
-  --studio-active: rgba(30, 60, 140, 0.1);
-  --studio-input-bg: rgba(20, 40, 90, 0.045);
-  --studio-input-border: rgba(30, 45, 90, 0.14);
-  --studio-head-h: 44px;
-  --studio-nav-w: 64px;
+  --studio-on-accent: #fff;
+  --studio-hover: var(--hover);
+  --studio-active: color-mix(in srgb, var(--accent) 12%, var(--panel-solid));
+  --studio-input-bg: var(--studio-panel-2);
+  --studio-input-border: var(--panel-border);
+  --studio-head-h: 56px;
+  --studio-nav-w: 152px;
 }
 :root[data-theme="dark"] .director-studio {
-  --studio-chrome: #141b30;
-  --studio-panel: #1a2340;
-  --studio-panel-2: #212c4e;
   --studio-stage: #0b0f1c;
   --studio-stage-panel: #151d33;
   --studio-stage-border: rgba(126, 156, 255, 0.12);
-  --studio-border: rgba(126, 156, 255, 0.14);
-  --studio-hover: rgba(140, 165, 255, 0.09);
-  --studio-active: rgba(140, 165, 255, 0.14);
-  --studio-input-bg: rgba(8, 14, 32, 0.4);
-  --studio-input-border: rgba(126, 156, 255, 0.18);
 }
 :root[data-theme="black"] .director-studio {
-  --studio-chrome: #0f111a;
-  --studio-panel: #171a26;
-  --studio-panel-2: #1e2230;
+  --studio-on-accent: var(--bg-app);
   --studio-stage: #0a0c12;
   --studio-stage-panel: #161924;
   --studio-stage-border: rgba(148, 163, 210, 0.1);
-  --studio-border: rgba(148, 163, 210, 0.1);
-  --studio-hover: var(--hover);
-  --studio-active: var(--active);
-  --studio-input-bg: rgba(8, 10, 18, 0.35);
-  --studio-input-border: rgba(148, 163, 210, 0.14);
 }
 
 /* ---------- 外壳骨架 ---------- */
@@ -71,29 +59,32 @@
 .director-studio.studio3 *::before,
 .director-studio.studio3 *::after { box-sizing: border-box; }
 
-/* 顶栏（§4.3：只保项目、状态、命令、导出、关闭；44px） */
+/* 项目栏：规格与路径按需展开，创作区域保留足够高度。 */
 .st-header {
   height: var(--studio-head-h);
   flex: none;
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 0 10px 0 14px;
+  padding: 0 16px;
   background: var(--studio-panel);
   border-bottom: 1px solid var(--studio-border);
 }
 .st-title-input {
-  width: 200px;
-  height: 28px;
+  width: clamp(120px, 17vw, 240px);
+  min-width: 90px;
+  height: 34px;
   padding: 0 8px;
   border: 1px solid transparent;
   border-radius: 4px;
   background: transparent;
   color: var(--studio-text-1);
-  font-size: 13.5px;
+  font-size: 15px;
   font-weight: 600;
 }
 .st-title-input:hover { background: var(--studio-hover); }
+.st-brand { display: flex; align-items: center; gap: 8px; flex: none; margin-right: 8px; font-size: 14px; }
+.st-header > .pop-wrap { min-width: 100px; max-width: 280px; }
 .st-title-input:focus { outline: none; border-color: var(--studio-input-border); background: var(--studio-input-bg); }
 .st-crumb {
   display: flex;
@@ -102,15 +93,20 @@
   font-size: 12px;
   color: var(--studio-text-3);
   min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
 }
 .st-crumb b { color: var(--studio-text-2); font-weight: 500; white-space: nowrap; }
 .st-crumb i { opacity: 0.5; font-style: normal; }
-.st-head-right { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+.st-head-right { margin-left: auto; flex: none; display: flex; align-items: center; gap: 8px; }
+.st-project-settings { flex: none; display: flex; align-items: center; flex-wrap: wrap; gap: 12px; padding: 10px 18px; background: var(--studio-panel-2); border-bottom: 1px solid var(--studio-border); }
+.st-settings-label { font-size: 12px; color: var(--studio-text-2); }
+.st-header .st-btn.on { color: var(--studio-accent); background: var(--studio-active); }
 .st-saved { font-size: 11.5px; color: var(--studio-text-3); display: inline-flex; gap: 5px; align-items: center; }
 .st-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ok); }
 .st-dot.off { background: var(--text-3); }
 
-/* 一级导航（§4.1 七工位 + 底部共享工具；60px 窄条图标+短标签） */
+/* 七工位与工具分组；较小窗口收窄导航，低高度窗口可独立滚动。 */
 .st-body { flex: 1; display: flex; min-height: 0; }
 .st-nav {
   width: var(--studio-nav-w);
@@ -120,25 +116,32 @@
   align-items: stretch;
   background: var(--studio-panel);
   border-right: 1px solid var(--studio-border);
-  padding: 6px 0;
+  padding: 12px 8px;
+  overflow-y: auto;
+  gap: 3px;
 }
+.st-nav-heading { flex: none; padding: 4px 12px 8px; font-size: 11px; color: var(--studio-text-3); letter-spacing: 1px; }
 .st-nav-item {
   position: relative;
-  height: 56px;
+  height: 42px;
+  flex: none;
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
   align-items: center;
-  justify-content: center;
-  gap: 3px;
+  justify-content: flex-start;
+  gap: 10px;
+  padding: 0 12px;
   border: 0;
   background: none;
   color: var(--studio-text-2);
-  font-size: 10.5px;
+  font-size: 12.5px;
   cursor: pointer;
-  border-radius: 0;
+  border-radius: 8px;
 }
+.st-nav-item > svg { flex: none; width: 18px; height: 18px; }
+.st-nav-label { white-space: nowrap; }
 .st-nav-item:hover { background: var(--studio-hover); color: var(--studio-text-1); }
-.st-nav-item.on { color: var(--studio-text-1); font-weight: 600; }
+.st-nav-item.on { color: var(--studio-accent); background: var(--studio-active); font-weight: 600; }
 /* 激活态：左侧窄色条，不画大圆角边框（§5.3） */
 .st-nav-item.on::before {
   content: "";
@@ -150,21 +153,21 @@
 }
 .st-nav-item .st-badge {
   position: absolute;
-  top: 7px; right: 10px;
+  top: 2px; right: 3px;
   min-width: 14px; height: 14px;
   padding: 0 3px;
   border-radius: 7px;
   background: var(--studio-accent);
-  color: #fff;
+  color: var(--studio-on-accent);
   font-size: 9.5px;
   line-height: 14px;
   font-weight: 600;
 }
-.st-nav-gap { flex: 1; }
+.st-nav-gap { flex: 1; min-height: 12px; }
 .st-nav-split { height: 1px; margin: 6px 10px; background: var(--studio-border); }
 
 /* 工位内容区（自适应，无页面级滚动——列表/编辑器/检查器各自滚动 §4.3） */
-.st-content { flex: 1; min-width: 0; display: flex; min-height: 0; position: relative; }
+.st-content { flex: 1; min-width: 0; display: flex; min-height: 0; position: relative; margin: 0 12px 12px; border: 1px solid var(--studio-border); border-radius: 10px; overflow: clip; }
 
 /* ---------- 拖拽导入提示（资源管理器拖文件/文件夹进任意工位） ---------- */
 .st-drop-hint {
@@ -205,12 +208,12 @@
 .st-panel + .st-panel, .st-stage + .st-panel, .st-panel + .st-stage { border-left: 1px solid var(--studio-border); }
 .st-panel-h {
   flex: none;
-  height: 34px;
+  height: 44px;
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 0 10px;
-  font-size: 11.5px;
+  padding: 0 14px;
+  font-size: 13px;
   font-weight: 600;
   letter-spacing: 0.4px;
   color: var(--studio-text-2);
@@ -251,13 +254,13 @@
 
 /* ---------- 通用小件 ---------- */
 .st-btn {
-  height: 30px;
+  height: 32px;
   padding: 0 12px;
   display: inline-flex;
   align-items: center;
   gap: 6px;
   border: 1px solid var(--studio-border);
-  border-radius: 4px;
+  border-radius: 7px;
   background: var(--studio-panel-2);
   color: var(--studio-text-1);
   font-size: 12.5px;
@@ -268,7 +271,7 @@
 .st-btn.primary {
   background: var(--studio-accent);
   border-color: transparent;
-  color: #fff;
+  color: var(--studio-on-accent);
   font-weight: 600;
 }
 .st-btn.primary:hover { filter: brightness(1.08); }
@@ -276,7 +279,8 @@
 .st-btn.ghost:hover { color: var(--studio-text-1); background: var(--studio-hover); }
 .st-btn.danger { color: var(--danger); }
 .st-btn:disabled { opacity: 0.45; cursor: not-allowed; }
-.st-btn.sm { height: 26px; padding: 0 8px; font-size: 11.5px; }
+.st-btn.sm { height: 28px; padding: 0 9px; font-size: 12px; }
+.studio3 button:focus-visible, .studio3 [role="separator"]:focus-visible { outline: 2px solid var(--studio-accent); outline-offset: -2px; }
 .st-iconbtn {
   width: 30px; height: 30px;
   display: inline-flex; align-items: center; justify-content: center;
@@ -364,21 +368,20 @@ textarea.st-area:focus { outline: none; border-color: var(--studio-accent); }
 .st-group:not(.open) .st-group-b { display: none; }
 .st-group-b { padding: 4px 10px 10px; display: flex; flex-direction: column; gap: 8px; }
 .st-field { display: flex; flex-direction: column; gap: 4px; }
-.st-field > label { font-size: 11px; color: var(--studio-text-3); }
+.st-field > label { font-size: 12px; color: var(--studio-text-2); }
 .st-row { display: flex; align-items: center; gap: 6px; }
 .st-row.between { justify-content: space-between; }
 
 /* ---------- H3 导演台（§6.5 三栏） ---------- */
 .h3-left { width: 250px; flex: none; }
 .h3-right { width: 320px; flex: none; }
-/* 3.5 一屏化：检查器（主片段视图）紧凑排版——默认宽 400 已在组件里放宽；
-   这里收紧分组内距/字段间距/标签行高，让 参考图 → 导演描述 → 生成 在一屏内摆完（不出纵向滚动条） */
-.h3-right .st-group-b { padding: 3px 8px 8px; gap: 5px; }
-.h3-right .st-field { gap: 3px; }
-.h3-right .st-field > label { font-size: 10.5px; line-height: 1.3; }
-.h3-right .st-group-h { height: 26px; }
-.h3-right .st-area { padding: 4px 6px; line-height: 1.45; }
-.h3-right .st-hint { line-height: 1.45; }
+/* 检查器优先保证字段可读，分组独立折叠，内容区域独立滚动。 */
+.h3-right .st-group-b { padding: 6px 12px 14px; gap: 10px; }
+.h3-right .st-field { gap: 5px; }
+.h3-right .st-field > label { font-size: 12px; line-height: 1.5; }
+.h3-right .st-group-h { height: 36px; font-size: 12.5px; }
+.h3-right .st-area { padding: 8px; line-height: 1.6; }
+.h3-right .st-hint { line-height: 1.6; }
 /* 片段树 */
 .st-tree-search { padding: 8px; display: flex; gap: 6px; border-bottom: 1px solid var(--studio-border); }
 .st-tree-search .st-input { flex: 1; height: 28px; }
@@ -396,7 +399,9 @@ textarea.st-area:focus { outline: none; border-color: var(--studio-accent); }
   display: flex;
   gap: 8px;
   align-items: center;
-  padding: 6px 8px 6px 10px;
+  padding: 10px;
+  margin: 3px 7px;
+  border-radius: 7px;
   cursor: pointer;
   border-left: 2px solid transparent;
   min-height: 48px;
@@ -407,7 +412,7 @@ textarea.st-area:focus { outline: none; border-color: var(--studio-accent); }
 .st-seg:hover { background: var(--studio-hover); }
 .st-seg.on { background: var(--studio-active); border-left-color: var(--studio-accent); }
 .st-seg-thumb {
-  width: 52px; height: 30px;
+  width: 60px; height: 38px;
   flex: none;
   border-radius: 3px;
   overflow: hidden;
@@ -417,14 +422,17 @@ textarea.st-area:focus { outline: none; border-color: var(--studio-accent); }
 }
 .st-seg-thumb img, .st-seg-thumb video { width: 100%; height: 100%; object-fit: cover; }
 .st-seg-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
-.st-seg-t { font-size: 12px; color: var(--studio-text-1); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.st-seg-t { font-size: 13px; color: var(--studio-text-1); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .st-seg.on .st-seg-t { font-weight: 600; }
 .st-seg-meta { display: flex; align-items: center; gap: 6px; font-size: 10.5px; color: var(--studio-text-3); }
 
 /* 监看舞台（连续暗色：监看器 → Take 条 → 微参考/镜头条 → 音频波形，§6.5） */
 .h3-monitor { flex: 1; min-height: 0; position: relative; display: flex; align-items: center; justify-content: center; background: var(--studio-stage); }
 .h3-monitor video, .h3-monitor img { max-width: 100%; max-height: 100%; object-fit: contain; }
-.h3-monitor .mon-empty { color: #565e70; display: flex; flex-direction: column; align-items: center; gap: 8px; font-size: 12.5px; }
+.h3-monitor .mon-empty { color: var(--studio-monitor-muted); display: flex; flex-direction: column; align-items: center; gap: 14px; font-size: 13px; max-width: 410px; padding: 28px; text-align: center; line-height: 1.8; }
+.h3-monitor .mon-empty b { color: var(--studio-monitor-text); font-size: 20px; font-weight: 500; }
+.h3-monitor .mon-empty > svg { width: 52px; height: 52px; padding: 12px; border: 1px solid var(--studio-stage-border); border-radius: 14px; color: var(--studio-monitor-text); }
+.h3-monitor .mon-empty .st-btn { background: var(--studio-stage-panel); border-color: var(--studio-stage-border); color: var(--studio-monitor-text); }
 .h3-monitor .mon-overlay {
   position: absolute;
   left: 12px; top: 12px;
@@ -805,13 +813,25 @@ textarea.st-area:focus { outline: none; border-color: var(--studio-accent); }
 }
 
 /* 四步导引只指路，七工位仍可随时直达。 */
-.st-guide { flex: none; display: flex; align-items: center; gap: 14px; padding: 8px 14px; border-bottom: 1px solid var(--studio-border); background: var(--studio-panel); }
-.st-guide-steps { display: flex; gap: 12px; color: var(--studio-text-3); font-size: 12px; white-space: nowrap; }
+.st-guide { flex: none; display: flex; align-items: center; gap: 24px; min-height: 72px; padding: 12px 18px 12px calc(var(--studio-nav-w) + 14px); background: var(--studio-chrome); }
+.st-station-heading { flex: 1; min-width: 0; }
+.st-station-heading h1 { margin: 0 0 3px; font-size: 19px; font-weight: 600; line-height: 1.4; }
+.st-station-heading > span { display: block; font-size: 12px; color: var(--studio-text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.st-guide-steps { display: flex; gap: 16px; color: var(--studio-text-3); font-size: 12px; white-space: nowrap; }
+.st-guide-steps > span { display: flex; align-items: center; gap: 6px; }
+.st-guide-steps i { display: grid; place-items: center; width: 22px; height: 22px; border: 1px solid var(--studio-border); border-radius: 50%; font-size: 11px; font-style: normal; }
+.st-guide-steps .on i { background: var(--studio-active); border-color: var(--studio-accent); }
 .st-guide-steps .on { color: var(--studio-accent); font-weight: 600; }
 .st-guide-steps .done { color: var(--studio-text-2); }
-.st-guide-hint { font-size: 11.5px; color: var(--studio-text-3); flex: 1; }
 .st-guide > button { flex: none; margin-left: auto; }
-@media (max-width: 1150px) { .st-guide-hint { display: none; } }
+@media (max-width: 1250px) { .st-guide-steps { display: none; } .st-header .st-crumb { display: none; } }
+@media (max-width: 1100px) {
+  .director-studio { --studio-nav-w: 76px; }
+  .st-nav { padding: 8px 4px; }
+  .st-nav-heading { text-align: center; font-size: 10px; padding: 4px 0; letter-spacing: 0; }
+  .st-nav-item { height: 52px; flex-direction: column; justify-content: center; gap: 4px; padding: 0; font-size: 10px; }
+  .st-content { margin-right: 8px; margin-bottom: 8px; margin-left: 8px; }
+}
 
 .local-revision{padding:8px 12px;border-top:1px solid var(--border);max-height:45%;overflow:auto;flex-shrink:0}.local-revision-body{display:grid;gap:10px;padding-top:10px}.local-revision-body input[type=number]{width:80px}.local-revision-videos{display:grid;grid-template-columns:1fr 1fr;gap:8px}.local-revision-videos figure{margin:0}.local-revision-videos video{width:100%;max-height:180px;background:var(--bg-canvas)}
 .h3-authoring { border:1px solid var(--panel-border); border-radius:var(--r-sm); padding:10px; margin-bottom:12px; }
