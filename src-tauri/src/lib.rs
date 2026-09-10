@@ -145,6 +145,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             codex_bridge::codex_bridge_status,
             codex_bridge::codex_bridge_generate,
+            codex_bridge::codex_bridge_text,
             codex_bridge::codex_bridge_cancel,
             production_tools::production_detect,
             production_tools::production_run,

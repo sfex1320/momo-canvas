@@ -11,7 +11,7 @@ import {
   BANANA_ASPECTS,
   BANANA_SIZES,
   familyPresets,
-  GPT_QUALITIES,
+  gptQualities,
   GPT_RATIOS,
   GPT_TIERS,
   type ImageFamily,
@@ -34,12 +34,16 @@ export function ArIcon({ ratio }: { ratio: string }) {
 
 export function AspectSelector({
   family,
+  model,
+  qualityNotice,
   aspect,
   resolution,
   quality,
   patch,
 }: {
   family: ImageFamily;
+  model?: string;
+  qualityNotice?: string;
   aspect?: string;
   resolution?: string;
   quality?: string;
@@ -105,8 +109,9 @@ export function AspectSelector({
         </div>
         <div className="gp-sec-title">质量</div>
         <div className="gp-seg">
-          {GPT_QUALITIES.map((q) => (
+          {gptQualities(model).map((q) => (
             <button
+              disabled={Boolean(qualityNotice)}
               key={q.value}
               className={(quality ?? "auto") === q.value ? "on" : ""}
               onClick={() => patch({ quality: q.value })}
@@ -115,6 +120,7 @@ export function AspectSelector({
             </button>
           ))}
         </div>
+        {qualityNotice && <p className="gp-hint">{qualityNotice}</p>}
       </>
     );
   }

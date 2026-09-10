@@ -3,6 +3,8 @@
  */
 import { useEffect, useRef, useState } from "react";
 import { CodexBridgeCard } from "../CodexBridgeCard";
+import { ModelCatalogTools } from "../ModelCatalogTools";
+import { fetchProviderCatalog } from "../../../core/modelCatalog";
 import { createPortal } from "react-dom";
 import { Field, Row } from "../../../ui/kit";
 import { PopSelect } from "../../../ui/PopSelect";
@@ -98,6 +100,7 @@ export function ModelsTab() {
   const [editing, setEditing] = useState<ProviderDraft | null>(null);
   const [confirmDel, setConfirmDel] = useState<string | null>(null);
   const [testing, setTesting] = useState<string | null>(null);
+  const [testPrice, setTestPrice] = useState("");
   const [showPresets, setShowPresets] = useState(false);
   const [dragIdx, setDragIdx] = useState<number | null>(null);
   const [overIdx, setOverIdx] = useState<number | null>(null);
@@ -119,14 +122,31 @@ export function ModelsTab() {
     const card = flattenCard(p, "chat");
     if (!card) return;
     setTesting(p.id);
+    setTestPrice("");
     try {
       const r = await chatOnce(card, "你是一个连通性测试助手。", "请只回复两个字：正常");
       toast(`「${p.name}」对话模型连通 ✓ 回复：${r.slice(0, 40)}`, "ok");
+      try {
+        const catalog = await fetchProviderCatalog(p);
+        setTestPrice(`${p.name} · ${card.model}：${catalog.find(m => m.id === card.model)?.price ?? "目录未提供该型号的报价"}`);
+      } catch { setTestPrice(`${p.name}：连接成功，站点未提供可查询的报价。请以站点账单为准。`); }
     } catch (e) {
       toast(errMsg(e), "err");
     } finally {
       setTesting(null);
     }
+  };
+
+  const checkImageCatalog = async (p: ProviderCard) => {
+    setTesting(p.id); setTestPrice("");
+    try {
+      const catalog = await fetchProviderCatalog(p);
+      setTestPrice(p.models.image!.models.map(model => {
+        const row = catalog.find(m => m.id === model);
+        return `${p.name} · ${model}：${row ? row.price : "目录未列出，生成兼容性尚未确认"}`;
+      }).join("\n"));
+    } catch (e) { setTestPrice(`${p.name}：${errMsg(e)}。报价请以站点页面和账单为准。`); }
+    finally { setTesting(null); }
   };
 
   const saveEditing = (d: ProviderDraft) => {
@@ -185,6 +205,8 @@ export function ModelsTab() {
 
       {/* 默认模型：五类用途各选一个，节点/面板不单独指定时全用这里的 */}
       <CodexBridgeCard />
+      <ModelCatalogTools />
+      {testPrice && <p className="set-card" style={{ whiteSpace: "pre-wrap" }} role="status">{testPrice}</p>}
       <div className="set-card">
         <div className="set-card-h">
           默认模型
@@ -378,6 +400,7 @@ export function ModelsTab() {
               <div className="pf-head">
                 <b>{isExisting ? savedEditing?.name || "编辑服务商" : "添加服务商"}</b>
                 <span className="pf-head-acts">
+                  {isExisting && savedEditing?.models.image && <button className="btn sm" disabled={testing === savedEditing.id} onClick={() => void checkImageCatalog(savedEditing)}>型号与报价</button>}
                   {isExisting && savedEditing?.models.chat ? (
                     <button className="btn sm" disabled={testing === savedEditing.id} onClick={() => void testChat(savedEditing)}>
                       {testing === savedEditing.id ? <IcLoading size={14} /> : null} 测试
@@ -394,6 +417,7 @@ export function ModelsTab() {
                   </button>
                 </span>
               </div>
+              {testPrice && <p style={{ whiteSpace: "pre-wrap", padding: "8px 16px", fontSize: 12, maxHeight: 140, overflow: "auto", flexShrink: 0 }} role="status">{testPrice}</p>}
               <div className="pf-body">
                 {isExisting && savedEditing ? (
                   <div className="pd-actions">

@@ -9,6 +9,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useReactFlow } from "@xyflow/react";
 import { useAssets, assetVisibleInProject } from "../../core/stores/assetStore";
 import { useBoard } from "../../core/stores/boardStore";
+import { useDirector } from "../../core/stores/directorStore";
+import { projectDisplayName } from "../../core/studio/projectDisplay";
 import { useSettings } from "../../core/stores/settingsStore";
 import { toast, useUi } from "../../core/stores/uiStore";
 import { useEagle } from "../../core/stores/eagleStore";
@@ -287,6 +289,9 @@ export function AssetLibrary() {
   const [folderId, setFolderId] = useState<string | "all">("all");
   const [tagFilter, setTagFilter] = useState<string | null>(null);
   const [keyword, setKeyword] = useState("");
+  const [mediaType, setMediaType] = useState<AssetKind | "all">("all");
+  const [sort, setSort] = useState("newest");
+  const [grouped, setGrouped] = useState(true);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   /** 多选模式：左键点选勾选、拖动可批量拖出；右键按住滑动涂抹勾选 */
   const [pickMode, setPickMode] = useState(false);
@@ -350,23 +355,26 @@ export function AssetLibrary() {
   // 3.5 §9.5：项目资产视图——从导演台打开资产库时默认「本项目」；用户可手动切到「全部资产」，
   // 切换剧本后回到默认（跟随新 projectId，不闪旧项目资产）。projectOnly = null 表示未手动设置（跟默认）。
   const directorProjectId = useUi((s) => s.directorProjectId);
+  const directorOpen = useUi((s) => s.directorOpen);
+  const currentProject = useDirector(s => s.projects.find(p => p.id === directorProjectId));
   const [projectOnlyManual, setProjectOnlyManual] = useState<boolean | null>(null);
   const prevProjectRef = useRef(directorProjectId);
   if (prevProjectRef.current !== directorProjectId) {
     prevProjectRef.current = directorProjectId;
     setProjectOnlyManual(null); // 剧本切换：过滤目标跟随新 projectId，手动偏好复位到默认
   }
-  const projectOnly = projectOnlyManual ?? !!directorProjectId;
+  const projectOnly = projectOnlyManual ?? (!!directorProjectId && directorOpen);
+  const scopedItems = useMemo(() => items.filter(i => assetVisibleInProject(i, directorProjectId, projectOnly)), [items, directorProjectId, projectOnly]);
+  useEffect(() => { setSelected(new Set()); setFocusedGroupId(null); setPreviewIdx(null); }, [kind, folderId, tagFilter, keyword, mediaType, projectOnly, directorProjectId, tab, sort, grouped]);
   const filtered = useMemo(() => {
     const kw = keyword.trim().toLowerCase();
-    return items.filter((i) => {
-      if (!assetVisibleInProject(i, directorProjectId, projectOnly)) return false;
-      // 来源维度：导演台参考素材（上游同步/参考格上传/声音提取落库）默认不混进普通视图，
-      // 收进「导演台参考」分类统一管理；收藏与关键词搜索不受隐藏影响（要找的时候找得到）
+    return scopedItems.filter((i) => {
+      if (mediaType !== "all" && i.kind !== mediaType) return false;
+      // 来源与媒体类型正交；「全部」包含参考素材，专项分类仅额外缩小范围。
       const isDirRef = i.director?.role === "reference";
       if (kind === "directorRef") {
         if (!isDirRef) return false;
-      } else if (isDirRef && kind !== "fav" && !kw) return false;
+      }
       if (kind === "fav") {
         if (!i.fav) return false;
       } else if (kind !== "all" && kind !== "directorRef" && i.kind !== kind) return false;
@@ -375,15 +383,15 @@ export function AssetLibrary() {
       if (kw && !`${i.name} ${i.prompt ?? ""} ${i.promptZh ?? ""} ${i.promptEn ?? ""} ${i.catalogId ?? ""} ${i.spatialLockZh ?? ""} ${i.spatialLockEn ?? ""} ${i.model ?? ""} ${(i.tags ?? []).join(" ")}`.toLowerCase().includes(kw))
         return false;
       return true;
-    });
-  }, [items, kind, folderId, tagFilter, keyword, projectOnly, directorProjectId]);
+    }).sort((a,b) => sort === "name" ? a.name.localeCompare(b.name, "zh-CN") : sort === "oldest" ? a.createdAt-b.createdAt : b.createdAt-a.createdAt);
+  }, [scopedItems, kind, folderId, tagFilter, keyword, mediaType, sort]);
 
   /** 同一次生成的多份资产在网格中只占一张组卡；展开后仍操作真实资产项。 */
   const entries = useMemo(() => {
     const out: { key: string; items: AssetItem[] }[] = [];
     const groupAt = new Map<string, number>();
     for (const item of filtered) {
-      if (!item.groupId) {
+      if (!grouped || !item.groupId) {
         out.push({ key: item.id, items: [item] });
         continue;
       }
@@ -396,7 +404,7 @@ export function AssetLibrary() {
       }
     }
     return out;
-  }, [filtered]);
+  }, [filtered, grouped]);
 
   const focusedGroup = focusedGroupId
     ? entries.find((entry) => entry.key === focusedGroupId && entry.items.length > 1)
@@ -404,26 +412,25 @@ export function AssetLibrary() {
 
   const counts = useMemo(() => {
     const c: Record<string, number> = {};
-    for (const i of items) {
+    for (const i of scopedItems) {
       if (i.director?.role === "reference") {
-        // 导演台参考不占「全部」与各类型计数（默认视图看不到，计数大于可见数会误导）
+        // 参考素材同时计入总数与对应媒体类型。
         c.directorRef = (c.directorRef ?? 0) + 1;
-      } else {
+      }
         c.all = (c.all ?? 0) + 1;
         c[i.kind] = (c[i.kind] ?? 0) + 1;
-      }
       if (i.fav) c.fav = (c.fav ?? 0) + 1;
     }
     c.trash = trash.length;
     return c;
-  }, [items, trash]);
+  }, [scopedItems, trash]);
 
   /** 全部标签 → 出现次数（按次数降序） */
   const allTags = useMemo(() => {
     const m = new Map<string, number>();
-    for (const i of items) for (const t of i.tags ?? []) m.set(t, (m.get(t) ?? 0) + 1);
+    for (const i of scopedItems) for (const t of i.tags ?? []) m.set(t, (m.get(t) ?? 0) + 1);
     return [...m.entries()].sort((a, b) => b[1] - a[1]);
-  }, [items]);
+  }, [scopedItems]);
 
   /* 筛选中的标签被删光后自动复位 */
   useEffect(() => {
@@ -710,9 +717,9 @@ export function AssetLibrary() {
             <IcLibrary size={21} />
             资产库
           </div>
-          <div className="side-sec">分类</div>
-          {KIND_TABS.map((t) => (
-            <button key={t.key} className={`side-item ${kind === t.key ? "on" : ""}`} onClick={() => setKind(t.key)}>
+          <div className="side-sec">素材视图</div>
+          {KIND_TABS.filter(t => ["all","fav","directorRef","trash"].includes(t.key)).map((t) => (
+            <button key={t.key} className={`side-item ${tab === "local" && kind === t.key ? "on" : ""}`} onClick={() => { setTab("local"); setKind(t.key); setFolderId("all"); setTagFilter(null); }}>
               {t.icon}
               {t.label}
               <span className="cnt">{counts[t.key] ?? 0}</span>
@@ -732,7 +739,7 @@ export function AssetLibrary() {
               <IcFolderPlus size={14} />
             </button>
           </div>
-          <button className={`side-item ${folderId === "all" ? "on" : ""}`} onClick={() => setFolderId("all")}>
+            <button className={`side-item ${folderId === "all" ? "on" : ""}`} onClick={() => { setTab("local"); setFolderId("all"); setKind("all"); setTagFilter(null); }}>
             <IcFolder size={17} />
             全部位置
           </button>
@@ -740,7 +747,7 @@ export function AssetLibrary() {
             <button
               key={f.id}
               className={`side-item ${folderId === f.id ? "on" : ""}`}
-              onClick={() => setFolderId(f.id)}
+              onClick={() => { setTab("local"); setKind("all"); setFolderId(f.id); setTagFilter(null); }}
             >
               <IcFolder size={17} />
               {editingFolder === f.id ? (
@@ -798,7 +805,7 @@ export function AssetLibrary() {
                   key={t}
                   className={`side-item ${tagFilter === t ? "on" : ""}`}
                   title={tagFilter === t ? "再点一次取消筛选" : `筛选标签「${t}」`}
-                  onClick={() => setTagFilter(tagFilter === t ? null : t)}
+                onClick={() => { setTab("local"); setKind("all"); setTagFilter(tagFilter === t ? null : t); }}
                 >
                   <IcTag size={16} />
                   <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{t}</span>
@@ -837,7 +844,8 @@ export function AssetLibrary() {
 
         {/* 主区 */}
         <div className="al-main">
-        <div className="al-toolbar">
+        <header className="al-view-head"><div><h2>{tab === "eagle" ? "Eagle 素材" : kind === "trash" ? "回收站" : folderId !== "all" ? folders.find(f => f.id === folderId)?.name : KIND_TABS.find(t => t.key === kind)?.label || "全部素材"}</h2><span>{tab === "eagle" ? "远程素材 · 按需导入" : kind === "trash" ? "全库已删除素材" : projectOnly && currentProject ? projectDisplayName(currentProject) : "全部项目与画布"}</span></div><button className="icon-btn" aria-label="关闭资产库" title="关闭 (Esc)" onClick={() => setOpen(false)}><IcClose size={18}/></button></header>
+        <div className="al-toolbar" style={tab === "local" && kind === "trash" ? { display: "none" } : undefined}>
           {tab === "local" && <div className="al-scope" role="group" aria-label="资产范围">
             <button aria-pressed={!projectOnly} onClick={()=>setProjectOnlyManual(false)}><IcLayers size={14}/>全部资产</button>
             <button aria-pressed={projectOnly} disabled={!directorProjectId} title={directorProjectId?"仅显示当前导演项目的参考与生成资产":"打开导演项目后可筛选"} onClick={()=>setProjectOnlyManual(true)}><IcFolder size={14}/>本项目</button>
@@ -862,7 +870,7 @@ export function AssetLibrary() {
                 {entries.length === filtered.length ? `${filtered.length} 项` : `${entries.length} 张卡片 · ${filtered.length} 项`}
               </span>
             ) : null}
-            <span style={{ flex: 1 }} />
+            <div className="al-toolbar-actions">
             <button
               className={`btn sm ${pickMode ? "primary" : ""}`}
               title={
@@ -885,9 +893,7 @@ export function AssetLibrary() {
             <button className="btn sm" onClick={() => fileRef.current?.click()}>
               <IcUpload size={15} /> 导入文件
             </button>
-            <button className="icon-btn" title="关闭 (Esc)" onClick={() => setOpen(false)}>
-              <IcClose size={18} />
-            </button>
+            </div>
             <input
               ref={fileRef}
               type="file"
@@ -901,6 +907,13 @@ export function AssetLibrary() {
             />
           </div>
 
+          {tab === "local" && kind !== "trash" ? <div className="al-filterbar">
+            <PopSelect value={mediaType} onChange={v => setMediaType(v as AssetKind | "all")} options={[{value:"all",label:"所有类型"}, ...KIND_TABS.filter(t => !["all","fav","directorRef","trash"].includes(t.key)).map(t => ({value:t.key,label:t.label,icon:t.icon}))]}/>
+            <PopSelect value={sort} onChange={setSort} options={[{value:"newest",label:"最新在前"},{value:"oldest",label:"最早在前"},{value:"name",label:"名称排序"}]}/>
+            <button className="btn sm" aria-pressed={grouped} onClick={() => setGrouped(v=>!v)}><IcLayers size={14}/>{grouped ? "按生成分组" : "逐项显示"}</button>
+            {tagFilter ? <span className="al-filter-note">标签：{tagFilter}</span> : null}
+            {(keyword || tagFilter || folderId !== "all" || mediaType !== "all") ? <button className="btn sm" onClick={() => {setKeyword("");setTagFilter(null);setFolderId("all");setMediaType("all");}}>清除筛选</button> : null}
+          </div> : null}
           {tab === "eagle" ? (
             <EagleBrowser />
           ) : kind === "trash" ? (

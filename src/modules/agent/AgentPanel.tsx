@@ -6,6 +6,7 @@
  * 面板停靠在画布右侧，聊天与画布操作互不遮挡；支持把图片（作参考图）、视频（落画布）、文字直接拖入。
  */
 import { useEffect, useRef, useState } from "react";
+import { CodexConsole } from "./CodexConsole";
 import { useAgent } from "../../core/stores/agentStore";
 import { generationRefs } from "../../core/agentTurn";
 import { useUi } from "../../core/stores/uiStore";
@@ -290,6 +291,7 @@ function AgentAssistantMsg({ m }: { m: AgentMsg }) {
 }
 
 export function AgentPanel() {
+  const [codexOpen, setCodexOpen] = useState(false);
   const messages = useAgent((s) => s.messages);
   const draft = useAgent((s) => s.draft);
   const attachments = useAgent((s) => s.attachments);
@@ -419,8 +421,10 @@ export function AgentPanel() {
       onDrop={(e) => void onDrop(e)}
     >
       <div className="ag-head">
+        {codexOpen && <CodexConsole onClose={() => setCodexOpen(false)} />}
         <IcSparkles size={18} />
         <b>创作助手</b>
+        <button className="btn sm" title="使用本机 Codex 会员对话或执行文件任务" onClick={() => setCodexOpen(true)}>Codex</button>
         <span className="ag-seg">
           <button className={mode === "chat" ? "on" : ""} title="多模态聊天：完善想法与提示词，一键在画布生图" onClick={() => setMode("chat")}>
             聊天

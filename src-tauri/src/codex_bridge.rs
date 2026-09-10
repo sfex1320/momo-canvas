@@ -97,6 +97,14 @@ struct Server {
 }
 impl Drop for Server {
     fn drop(&mut self) {
+        // 文件任务可能仍有命令子进程，停止时回收本次后台进程树。
+        #[cfg(windows)]
+        if matches!(self.child.try_wait(), Ok(None)) {
+            let mut command = Command::new("taskkill");
+            hidden(&mut command);
+            let _ = command.args(["/PID", &self.child.id().to_string(), "/T", "/F"])
+                .stdout(Stdio::null()).stderr(Stdio::null()).status();
+        }
         let _ = self.child.kill();
         let _ = self.child.wait();
         if let Some(p) = PIDS.get() {
@@ -153,7 +161,7 @@ impl Server {
     fn next(&mut self) -> R<Value> {
         loop {
             if self.cancelled.load(Ordering::SeqCst) {
-                return Err("已取消 Codex 生图；已提交的远程计算可能仍计入额度".into());
+                return Err("已取消 Codex 请求；已提交的远程计算可能仍计入额度".into());
             }
             if Instant::now() > self.deadline {
                 return Err("Codex 请求超时。请检查网络或代理；不会自动重试或改走付费 API".into());
@@ -161,8 +169,8 @@ impl Server {
             match self.output.recv_timeout(Duration::from_millis(100)) {
                 Ok(v) => {
                     if v.get("method").is_some() && v.get("id").is_some() {
-                        self.write(json!({"id":v["id"],"error":{"code":-32601,"message":"MOMO 图片桥不支持此交互，请在 Codex 中完成必要设置"}}))?;
-                        continue;
+                        self.write(json!({"id":v["id"],"error":{"code":-32601,"message":"MOMO 暂不支持此交互授权，请在 Codex 中完成必要设置"}}))?;
+                        return Err("此操作需要额外交互授权，已停止。请在 Codex 中完成必要设置后重试".into());
                     }
                     return Ok(v);
                 }
@@ -447,6 +455,28 @@ fn generate(
 mod tests {
     use super::*;
     #[test]
+    fn conversation_and_task_permissions_are_separate() {
+        let p = PathBuf::from("C:/momo-qa");
+        assert_eq!(text_sandbox(false, &p)["type"], "readOnly");
+        let task = text_sandbox(true, &p);
+        assert_eq!(task["type"], "workspaceWrite");
+        assert_eq!(task["networkAccess"], false);
+        assert_eq!(task["writableRoots"].as_array().unwrap().len(), 1);
+    }
+    #[test]
+    #[ignore = "消耗少量会员额度，显式运行对话与隔离文件任务验收"]
+    fn real_chat_and_file_task() {
+        let dir = PathBuf::from(std::env::var("MOMO_CODEX_TEXT_QA_DIR").expect("需指定隔离文件夹"));
+        std::fs::create_dir_all(&dir).unwrap();
+        let chat = run_text(&dir, "", TextRequest { mode:"chat".into(), workspace:None, messages:vec![TextMessage { role:"user".into(), text:"请只回复：对话连通。不要使用任何工具。".into() }] }, Arc::new(AtomicBool::new(false)), |_| {}).unwrap();
+        assert!(chat["text"].as_str().unwrap().contains("对话连通"));
+        println!("只读对话已通过");
+        let task = run_text(&dir, "", TextRequest { mode:"task".into(), workspace:Some(dir.to_string_lossy().into()), messages:vec![TextMessage { role:"user".into(), text:"这是已授权的隔离功能验收。只在当前目录新建 codex-task-result.md，内容为：文件任务通过。不要删除或读取其他文件，完成后只报告文件名。".into() }] }, Arc::new(AtomicBool::new(false)), |_| {}).unwrap();
+        assert!(!task["text"].as_str().unwrap().is_empty());
+        assert!(std::fs::read_to_string(dir.join("codex-task-result.md")).unwrap().contains("文件任务通过"));
+        println!("指定文件夹任务已通过");
+    }
+    #[test]
     fn rejects_non_images() {
         assert!(decode_image("SGVsbG8=").is_err());
         assert!(decode_image("https://example.com/a.png").is_err());
@@ -527,6 +557,102 @@ pub async fn codex_bridge_generate(
     })
     .await
     .map_err(|e| e.to_string());
+    tasks().lock().unwrap().remove(&id);
+    result?
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TextRequest {
+    mode: String,
+    workspace: Option<String>,
+    messages: Vec<TextMessage>,
+}
+#[derive(Deserialize)]
+struct TextMessage { role: String, text: String }
+#[derive(Serialize, Clone)]
+pub struct TextEvent { stage: Option<String>, delta: Option<String> }
+
+fn text_sandbox(task: bool, dir: &Path) -> Value {
+    if task {
+        json!({"type":"workspaceWrite","writableRoots":[dir],"networkAccess":false,"excludeTmpdirEnvVar":true,"excludeSlashTmp":true})
+    } else { json!({"type":"readOnly"}) }
+}
+
+fn run_text(dir: &Path, exe: &str, request: TextRequest, flag: Arc<AtomicBool>, event: impl Fn(TextEvent)) -> R<Value> {
+    let task = request.mode == "task";
+    if !task && request.mode != "chat" { return Err("不支持的 Codex 模式".into()); }
+    if request.messages.is_empty() || request.messages.len() > 12 || request.messages.iter().any(|m| !["user", "assistant"].contains(&m.role.as_str()) || m.text.len() > 100_000) {
+        return Err("对话内容过长或格式不正确，请新建对话".into());
+    }
+    if flag.load(Ordering::SeqCst) { return Err("已取消 Codex 请求".into()); }
+    let mut server = Server::start(exe, dir, flag, 900)?;
+    if server.account()?["type"] != "chatgpt" { return Err("请先在 Codex 中使用 ChatGPT 账号登录".into()); }
+    let base = if task {
+        "你是 MOMO 的本地项目助手。仅执行用户本次明确要求的任务，在指定工作目录处理文件。未获得明确要求不得删除原素材、提交远程仓库、发布内容或向他人发送消息。不要绕过沙盒、获取凭据或改写工作目录之外的文件。不调用外部应用连接器。遇到需要额外交互授权的操作请说明并停止。用中文报告完成的文件与验证结果。"
+    } else {
+        "你是 MOMO 的创作对话助手。帮助用户讨论、分析文字与整理提示词；仅返回文字，不运行命令、不编辑文件、不执行任务、不调用外部应用。用户想生成图片时说明可在画布选择 Codex 会员生图。使用中文清晰回答。"
+    };
+    let started = server.call("thread/start", json!({"cwd":dir,"modelProvider":"openai","sandbox":if task {"workspace-write"} else {"read-only"},"approvalPolicy":"never","baseInstructions":base,"config":{"features.shell_tool":task,"features.unified_exec":task,"features.image_generation":false}}))?;
+    let thread = started["thread"]["id"].as_str().ok_or("Codex 未返回会话编号")?.to_owned();
+    // 每次构造独立会话，权限不随历史对话或用户切换文件夹继承。
+    let transcript = request.messages.iter().map(|m| format!("{}：\n{}", if m.role == "user" {"用户"} else {"助手"}, m.text)).collect::<Vec<_>>().join("\n\n");
+    server.seq += 1;
+    let start_id = server.seq;
+    server.write(json!({"id":start_id,"method":"turn/start","params":{"threadId":thread,"cwd":dir,"approvalPolicy":"never","sandboxPolicy":text_sandbox(task,dir),"input":[{"type":"text","text":transcript}]}}))?;
+    event(TextEvent { stage:Some(if task {"正在执行项目任务"} else {"正在回复"}.into()), delta:None });
+    let mut finals = Vec::new();
+    let mut streamed = String::new();
+    loop {
+        let v = match server.next() {
+            Ok(v) => v,
+            Err(e) => {
+                if let Some((tid, turn)) = &server.active {
+                    let _ = server.write(json!({"id":99999,"method":"turn/interrupt","params":{"threadId":tid,"turnId":turn}}));
+                }
+                return Err(e);
+            }
+        };
+        if v["id"] == start_id && v.get("error").is_some() { return Err(format!("Codex：{}", v["error"]["message"])); }
+        if v["params"]["threadId"].as_str().is_some_and(|id| id != thread) { continue; }
+        let turn_id = if v["id"] == start_id { v["result"]["turn"]["id"].as_str() } else if v["method"] == "turn/started" { v["params"]["turn"]["id"].as_str() } else { None };
+        if let Some(id) = turn_id { server.active = Some((thread.clone(), id.into())); }
+        if v["method"] == "item/agentMessage/delta" {
+            if let Some(delta) = v["params"]["delta"].as_str() { streamed.push_str(delta); event(TextEvent { stage:None, delta:Some(delta.into()) }); }
+        }
+        if v["method"] == "item/started" && v["params"]["item"]["type"] == "commandExecution" { event(TextEvent { stage:Some("正在运行文件夹任务，可随时停止".into()), delta:None }); }
+        if v["method"] == "item/completed" && v["params"]["item"]["type"] == "agentMessage" {
+            if let Some(text) = v["params"]["item"]["text"].as_str() { finals.push(text.to_owned()); }
+        }
+        if v["method"] == "turn/completed" {
+            if v["params"]["turn"]["status"] != "completed" { return Err(format!("Codex 任务未完成：{}", v["params"]["turn"]["error"]["message"].as_str().unwrap_or("任务已停止"))); }
+            break;
+        }
+    }
+    let text = if finals.is_empty() { streamed } else { finals.join("\n\n") };
+    if text.trim().is_empty() { return Err("Codex 没有返回文字结果".into()); }
+    server.deadline = Instant::now() + Duration::from_secs(10);
+    let rates = server.call("account/rateLimits/read", json!({})).map(rate_snapshot).ok();
+    Ok(json!({"text":text,"limits":rates}))
+}
+
+#[tauri::command]
+pub async fn codex_bridge_text(app: tauri::AppHandle, task_id: String, executable: String, request: TextRequest, on_event: Channel<TextEvent>) -> R<Value> {
+    let flag = tasks().lock().unwrap().entry(task_id.clone()).or_insert_with(|| Arc::new(AtomicBool::new(false))).clone();
+    let id = task_id.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        let dir = if request.mode == "task" {
+            let raw = request.workspace.as_deref().ok_or("请先选择任务文件夹")?;
+            let dir = PathBuf::from(raw).canonicalize().map_err(|_| "任务文件夹不可用")?;
+            if !dir.is_dir() { return Err("请选择文件夹".into()); }
+            dir
+        } else {
+            let dir = root(&app)?.join("conversation");
+            std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+            dir
+        };
+        run_text(&dir, &executable, request, flag, |e| { let _ = on_event.send(e); })
+    }).await.map_err(|e| e.to_string());
     tasks().lock().unwrap().remove(&id);
     result?
 }

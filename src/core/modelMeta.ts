@@ -8,7 +8,24 @@
  *  - kolors   可图/可灵图像：1K 级预设
  *  - generic  其他 OpenAI 兼容生图：预设尺寸 + 自定义宽高
  */
-import type { ModelCard } from "./types";
+import type { CustomProtocol, ModelCard } from "./types";
+
+export function imageQualityNotice(card: ModelCard, protocols: CustomProtocol[]): string | undefined {
+  if (!card.protocol.startsWith("custom:")) return;
+  const proto = protocols.find(p => `custom:${p.id}` === card.protocol);
+  if (!proto?.submit.body?.includes("{{quality}}")) return "此通道未接收质量参数，按所选型号生成";
+}
+
+/** Grsai 现有 Banana 卡可共存 GPT；后者使用站点已公开的 OpenAI 图片接口。 */
+export function grsaiGptRoute(card: ModelCard): ModelCard {
+  if (!/^gpt-image-2(?:\.5)?(?:$|-)/i.test(card.model)) return card;
+  try {
+    const url = new URL(card.baseUrl);
+    if (!["grsai.dakka.com.cn", "grsaiapi.com", "api.grsai.com", "api.grsai.ai"].includes(url.hostname)) return card;
+    if (!/^\/(?:v1\/?)?$/.test(url.pathname)) return card;
+    return { ...card, protocol: "openai", baseUrl: `${url.origin}/v1` };
+  } catch { return card; }
+}
 
 export type ImageFamily = "banana" | "gpt" | "seedream" | "flux" | "qwen" | "kolors" | "generic";
 
@@ -44,6 +61,19 @@ export const GPT_QUALITIES: { value: string; label: string }[] = [
   { value: "medium", label: "中" },
   { value: "low", label: "低" },
 ];
+
+/** 2.5 的两种型号均支持六档质量；型号与质量是独立参数。 */
+export function gptQualities(model = "") {
+  return /gpt[-_]?image[-_]?2\.5/i.test(model)
+    ? [GPT_QUALITIES[0], { value: "max", label: "最高" }, { value: "xhigh", label: "精细" }, ...GPT_QUALITIES.slice(1)]
+    : GPT_QUALITIES;
+}
+
+export function gptImageVariant(model = "") {
+  if (/gpt[-_]?image[-_]?2\.5.*sunburst/i.test(model)) return "Sunburst · 复杂创作";
+  if (/gpt[-_]?image[-_]?2\.5.*flare/i.test(model)) return "Flare · 快速创作";
+  return "";
+}
 
 /** GPT Image 常用宽高比（比例限制 1:3 ~ 3:1），配合分辨率档位换算实际宽高 */
 export const GPT_RATIOS = ["1:1", "3:2", "2:3", "4:3", "3:4", "5:4", "4:5", "16:9", "9:16", "21:9", "2:1", "1:2"];

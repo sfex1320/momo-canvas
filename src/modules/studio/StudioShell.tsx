@@ -1,5 +1,6 @@
 import { useComfy } from "../../core/stores/comfyStore";
 import { nextStudioStep } from "../../core/studio/nextStep";
+import { projectDisplayName, projectHasContent } from "../../core/studio/projectDisplay";
 /**
  * MOMO AI 制片工作站 · Studio Shell（导演台 3.0 · 方案 §4 一壳七工位）
  *
@@ -434,7 +435,13 @@ function VideoSpecDefaultsControl({ project }: { project: DirectorProject }) {
  *  切换只走 doSwitch 一个函数（普通分支与确认分支共用——不重复写状态、不重复 toast、不竞态）。 */
 function ProjectSwitcher({ current }: { current: DirectorProject }) {
   const projects = useDirector((s) => s.projects);
-  const others = projects.filter((p) => p.id !== current.id);
+  const [showEmpty, setShowEmpty] = useState(false);
+  const assets = useAssets(s => s.items);
+  const hasContent = (p: DirectorProject) => projectHasContent(p) || assets.some(a => a.director?.projectId === p.id || a.projectMirrors?.[p.id]);
+  const isEmptyDraft = (p: DirectorProject) => (!p.name.trim() || p.name.trim() === "未命名项目") && !hasContent(p);
+  const others = projects.filter((p) => p.id !== current.id && (showEmpty || !isEmptyDraft(p)));
+  const hiddenCount = projects.filter(p => p.id !== current.id && isEmptyDraft(p)).length;
+  const option = (p: DirectorProject) => ({ value: p.id, label: projectDisplayName(p), desc: `${p.scenes.reduce((n,s)=>n+s.segments.length,0)} 个片段 · ${new Date(p.updatedAt).toLocaleDateString('zh-CN')}`, icon: <IcFilmFrame size={14} /> });
   const [confirmSwitch, setConfirmSwitch] = useState<{ target: string; run: () => void } | null>(null);
   const doSwitch = (target: DirectorProject) => {
     // 全局选中态清空：segId/takeId/对比全部属于旧项目，绝不能带进新项目
@@ -442,7 +449,7 @@ function ProjectSwitcher({ current }: { current: DirectorProject }) {
     ctx.setSeg(null);
     ctx.setCompare(null);
     useUi.setState({ directorProjectId: target.id, directorNodeId: target.nodeId || null });
-    useUi.getState().toast?.(`已切换到「${target.name}」`, "ok");
+    useUi.getState().toast?.(`已切换到「${projectDisplayName(target)}」`, "ok");
     // §7-5：加载新项目 workspace 并校验目录（离线只标状态不清数据）
     void checkWorkspace(target.id);
   };
@@ -453,7 +460,7 @@ function ProjectSwitcher({ current }: { current: DirectorProject }) {
     // 在途批量：AskCard 确认（继续后台跑/取消后切）——结果按原 projectId 写回原项目，不丢
     const busyRunning = useJobCenter.getState().jobs.some((j) => j.projectId === current.id && ["queued", "running", "prechecking"].includes(j.status));
     if (busyRunning) {
-      setConfirmSwitch({ target: target.name, run: () => doSwitch(target) });
+      setConfirmSwitch({ target: projectDisplayName(target), run: () => doSwitch(target) });
       return;
     }
     doSwitch(target);
@@ -463,16 +470,17 @@ function ProjectSwitcher({ current }: { current: DirectorProject }) {
       <PopSelect
         value={current.id}
         triggerIcon
-        title={`剧本项目（${projects.length} 个）——切换后角色库/H3/MV/时间线整体跟随`}
+        title={`切换项目 · ${others.length + 1} 个`}
         options={[
-          { value: current.id, label: current.name, icon: <IcFilmFrame size={14} /> },
-          ...others.map((p) => ({ value: p.id, label: p.name, icon: <IcFilmFrame size={14} /> })),
+          option(current),
+          ...others.map(option),
+          ...(hiddenCount ? [{ value: "__empty", label: showEmpty ? "收起空项目" : `显示 ${hiddenCount} 个空项目`, desc: "空项目保留，可随时继续编辑" }] : []),
         ]}
-        onChange={(v) => switchTo(String(v))}
+        onChange={(v) => v === "__empty" ? setShowEmpty(s => !s) : switchTo(String(v))}
       />
       {confirmSwitch ? (
         <AskCard
-          text={<>「{current.name}」有生成任务在运行。切换后任务继续后台运行、结果写回原项目。确认切换到「{confirmSwitch.target}」？</>}
+          text={<>「{projectDisplayName(current)}」有生成任务在运行。切换后任务继续后台运行、结果写回原项目。确认切换到「{confirmSwitch.target}」？</>}
           okText="确认切换"
           onConfirm={() => {
             confirmSwitch.run();

@@ -7,7 +7,7 @@ import type { CustomProtocol, ModelCard } from "../types";
 import { xfetch, trimBase, readErrorBody } from "./http";
 import { absolutize, extractResultStrings, resolveCustomProto, runCustomFlow, render } from "./customProto";
 import { dataUrlToBlob, toDataUrl } from "../utils";
-import { gptSize } from "../modelMeta";
+import { gptSize, grsaiGptRoute } from "../modelMeta";
 
 export type ImageGenReq = {
   prompt: string;
@@ -303,6 +303,7 @@ async function genCustom(card: ModelCard, req: ImageGenReq): Promise<string[]> {
 }
 
 export async function generateImage(card: ModelCard, req: ImageGenReq): Promise<string[]> {
+  card = grsaiGptRoute(card);
   if (card.protocol === "codex") return (await import("../codexBridge")).codexGenerate(req);
   if (!card.model) throw new Error(`模型「${card.name}」缺少模型名称`);
   if (!card.baseUrl && card.protocol !== "gemini") throw new Error(`模型「${card.name}」缺少 Base URL`);

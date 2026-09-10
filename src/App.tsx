@@ -396,6 +396,8 @@ export default function App() {
       useDirector.getState().init(),
       useSkills.getState().init(),
     ]).then(() => {
+      // 仅消费用户提供的本机导入单，正常启动不触发模型目录查询。
+      void import("./core/modelCatalog").then(m => m.applyPendingModelUpgrade()).catch(() => toast("模型批量导入未完成，请到设置检查", "err"));
       // 导演台：恢复上次中断的任务（运行中的标中断，不静默重置）
       const n = recoverInterruptedTasks();
       if (n) toast(`导演台：上次有 ${n} 个任务被中断，请到导演台查看`, "info");

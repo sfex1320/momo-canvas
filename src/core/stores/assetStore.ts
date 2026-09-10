@@ -39,12 +39,12 @@ const TRASH_DAYS = 30;
 
 /**
  * 项目资产过滤谓词（3.5 §9.5，纯函数——AssetLibrary 与集成测试共用同一份逻辑）：
- * 开启「本项目」时只保留 director.projectId 匹配的资产；projectId 为空时不过滤（无项目上下文）。
+ * 开启「本项目」时保留导演项目归属或项目镜像账本匹配的资产；无项目上下文时不过滤。
  */
-export function assetVisibleInProject(item: Pick<AssetItem, "director">, projectId: string | undefined | null, projectOnly: boolean): boolean {
+export function assetVisibleInProject(item: Pick<AssetItem, "director" | "projectMirrors">, projectId: string | undefined | null, projectOnly: boolean): boolean {
   if (!projectOnly) return true;
   if (!projectId) return true;
-  return item.director?.projectId === projectId;
+  return item.director?.projectId === projectId || Boolean(item.projectMirrors?.[projectId]);
 }
 
 type AssetState = {

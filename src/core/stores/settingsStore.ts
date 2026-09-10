@@ -21,6 +21,7 @@ import { isTauri, uid } from "../utils";
 import { PROTO_PRESETS, presetProtoId } from "../protoPresets";
 import { useLocalGguf } from "./localGgufStore";
 import { toast } from "./uiStore";
+import { grsaiGptRoute } from "../modelMeta";
 
 /** API Key 落盘加密前缀（DPAPI 密文 hex）；内存中始终是明文，只有写盘/读盘时转换 */
 const KEY_ENC_PREFIX = "dpapi:";
@@ -451,7 +452,7 @@ export const useSettings = create<SettingsState>((set, get) => {
 export function flattenCard(p: ProviderCard, role: ModelRole, model?: string): ModelCard | null {
   const slot = p.models[role];
   if (!slot?.models.length) return null;
-  return {
+  const card: ModelCard = {
     id: p.id,
     role,
     name: p.name,
@@ -460,6 +461,7 @@ export function flattenCard(p: ProviderCard, role: ModelRole, model?: string): M
     apiKey: p.apiKey,
     model: model && slot.models.includes(model) ? model : slot.models[0],
   };
+  return role === "image" ? grsaiGptRoute(card) : card;
 }
 
 /** 解析节点应使用的模型：节点指定的「pid::model」 > 角色默认 > 第一家配了该角色的。兼容旧数据的纯 pid。 */

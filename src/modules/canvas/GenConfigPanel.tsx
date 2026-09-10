@@ -23,7 +23,9 @@ import {
   familyPresets,
   GPT_RATIOS,
   GPT_TIERS,
-  GPT_QUALITIES,
+  gptQualities,
+  gptImageVariant,
+  imageQualityNotice,
   familyMaxCount,
   familyMaxRef,
   gptSize,
@@ -566,6 +568,11 @@ function chipAr(ratio: string): ReactNode {
   return <ArIcon ratio={ratio === "adaptive" ? "auto" : ratio} />;
 }
 
+function qualityNoticeForKey(key?: string) {
+  try { return imageQualityNotice(resolveModelCard("image", key), useSettings.getState().settings.customProtocols ?? []); }
+  catch { return undefined; }
+}
+
 export function GenConfigPanel() {
   const selId = useBoard((s) => {
     const sel = s.nodes.filter((n) => n.selected);
@@ -696,10 +703,10 @@ export function GenConfigPanel() {
                       </button>
                     ))}
                   </div>
-                  <div className="gp-sec-title">质量</div>
+                  <div className="gp-sec-title">质量<span className="gp-hint">{qualityNoticeForKey(d.modelId) || gptImageVariant(d.modelId ?? models.defaults.image) || "按模型支持的档位发送"}</span></div>
                   <div className="gp-seg">
-                    {GPT_QUALITIES.map((q) => (
-                      <button key={q.value} className={(d.quality ?? "auto") === q.value ? "on" : ""} onClick={() => patch({ quality: q.value })}>
+                    {gptQualities(d.modelId ?? models.defaults.image).map((q) => (
+                      <button disabled={Boolean(qualityNoticeForKey(d.modelId))} key={q.value} className={(d.quality ?? "auto") === q.value ? "on" : ""} onClick={() => patch({ quality: q.value })}>
                         {q.label}
                       </button>
                     ))}
@@ -1272,7 +1279,7 @@ export function CharConfigPanel() {
                 title="图片比例 / 分辨率"
                 up
               >
-                <AspectSelector family={family} aspect={d.aspect} resolution={d.resolution} quality={d.quality} patch={patch} />
+                <AspectSelector family={family} model={d.imageModelId ?? models.defaults.image} qualityNotice={qualityNoticeForKey(d.imageModelId)} aspect={d.aspect} resolution={d.resolution} quality={d.quality} patch={patch} />
               </NodeParamsPop>
             </>
           ) : null}
@@ -1477,7 +1484,7 @@ export function EcomConfigPanel() {
                 title="切片比例 / 分辨率"
                 up
               >
-                <AspectSelector family={family} aspect={d.aspect} resolution={d.resolution} quality={d.quality} patch={patch} />
+                <AspectSelector family={family} model={d.imageModelId ?? models.defaults.image} qualityNotice={qualityNoticeForKey(d.imageModelId)} aspect={d.aspect} resolution={d.resolution} quality={d.quality} patch={patch} />
               </NodeParamsPop>
             </>
           ) : null}

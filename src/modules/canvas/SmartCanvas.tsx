@@ -1,3 +1,4 @@
+import { prepareNodeDrag } from "../../core/nodeDrag";
 /**
  * 智能画布 — 单一画布范式：
  *  移动工具（V，默认）：左键拖空白平移 · 点击选择 · 长按节点拖动
@@ -1141,6 +1142,7 @@ export function SmartCanvas() {
     <div
       className="canvas-wrap"
       ref={wrapRef}
+      onTouchStartCapture={(e) => { prepareNodeDrag(e.target); }}
       onClickCapture={(e) => {
         const t = e.target as HTMLElement;
         clickOnControl.current = !!t.closest("button, select, textarea, input, [contenteditable]");
@@ -1149,10 +1151,11 @@ export function SmartCanvas() {
         queueMicrotask(() => (clickOnControl.current = false));
       }}
       onMouseDownCapture={(e) => {
+        const onControl = prepareNodeDrag(e.target);
         // Alt+拖拽复制节点：拦截在 React Flow 拖动/框选之前（可交互控件上不抢）
         if (e.button !== 0 || !e.altKey) return;
         const t = e.target as HTMLElement;
-        if (t.closest(".nodrag, button, input, textarea, select, [contenteditable]")) return;
+        if (onControl) return;
         let id = (t.closest(".react-flow__node") as HTMLElement | null)?.getAttribute("data-id");
         if (!id && t.closest(".react-flow__nodesselection")) {
           // 多选时落点常在多选框遮罩（nodesselection-rect）上而非节点本体：拿第一个选中节点当抓手
@@ -1198,6 +1201,7 @@ export function SmartCanvas() {
         proOptions={{ hideAttribution: true }}
         minZoom={0.15}
         maxZoom={2.5}
+        noDragClassName="momo-node-control"
         panOnDrag={tool === "move" ? [0, 1] : [1]}
         selectionOnDrag={tool !== "move"}
         selectionKeyCode={["Shift", "Control"]}

@@ -125,7 +125,7 @@ src-tauri/              Rust 壳：插件配置（dialog/fs/http/store/opener + 
 - **zustand v5 selector 禁止返回新引用**（曾致同步中心打开即白屏）：`useXxx((s) => s.items.filter(...))` / `.map(...)` / 对象字面量 `({ a: s.a })` 每次求值都是新引用 → `useSyncExternalStore` 快照不稳定 → Maximum update depth 无限重渲染 → 整树卸载白屏（tsc/build 均查不出，只有运行时炸）。正确写法：订阅原数组/原字段，组件里 `useMemo` 派生；多字段聚合用 `useShallow`。安全形态：`.filter().length`（number）、`.find()`（元素引用）、原始值比较。
 - **节点内大图必须用 `<Thumb>`**（`src/ui/Thumb.tsx`）而非 `<img>`：图片全程是 dataURL，原图直塞 img 会让画布拖动掉帧；原图仅用于灯箱预览/保存/传模型。
 - **参数浮层与底部栏样式必须隔离**：`NodeParamsPop` Portal 到 `document.body`，只能使用 `.gd-param-pop/.gp-scope` 作为参数内容作用域，禁止给浮层附加 `.gen-panel`（该类含底部绝对定位，会导致浮层二次偏移、留白和裁切）。浮层宽度应由内容类控制，并保留 `max-width: calc(100vw - …)` 的视口兜底。
-- React Flow 节点内的可交互元素加 `nodrag` class，否则拖不了输入框选不了文本。
+- 节点拖动统一由 `core/nodeDrag.ts` + SmartCanvas 捕获阶段判断：真实控件标记 `momo-node-control`，React Flow 的 `noDragClassName` 与之对应；不要再用整块 `nodrag` 容器禁掉内容区拖动。自绘可交互区域添加 `data-node-interactive`，原生按钮/输入框/编辑画面与端口自动识别。
 - 持久化走 `persist.ts` 的 `loadJSON/saveJSON`：Tauri 下是 tauri-plugin-store（AppData JSON），纯浏览器预览退回 localStorage。`isTauri` 判定环境——所有功能需兼容浏览器预览模式（降级即可，不能白屏）。
 - 网络请求用 `services/http.ts` 的 `xfetch`（Tauri plugin-http 绕 CORS，浏览器退回 fetch）。
 - 中转站返回格式五花八门：imageGen 的 `normalizeResults` 做了大量兼容解析，改动时保持宽容。
