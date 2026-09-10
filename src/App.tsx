@@ -412,6 +412,7 @@ export default function App() {
           const { isTauri } = await import("./core/utils");
           if (!isTauri) return;
           const [{ listen }, engine] = await Promise.all([import("@tauri-apps/api/event"), import("./core/eagleSyncEngine")]);
+          engine.restoreEagleQueue();
           await engine.detect();
           engine.scheduleScan();
           // Eagle 插件经本地桥转发的动作（导入选中项 / 发送到画布 / 定位资产）

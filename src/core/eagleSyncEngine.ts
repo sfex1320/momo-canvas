@@ -19,13 +19,13 @@ import { useSettings } from "./stores/settingsStore";
 import { useEagle } from "./stores/eagleStore";
 import { EagleClient, libraryKeyOf, type EagleLibraryInfo } from "./services/eagleApi";
 import { activeEagleAssets, newEagleImports } from "./eagleSyncIdentity";
+import {eagleRetryDecision,eagleConnectionFailure as connectionFailure} from "./eagleQueuePolicy";
 
 /** 队列重试上限（超过进入 error 态等待手动重试） */
 const MAX_ATTEMPT = 3;
 /** 本地写入后的回声豁免窗口（毫秒） */
 const ECHO_WINDOW_MS = 30_000;
-/** 离线报错去重窗口 */
-const OFFLINE_NOTICE_MS = 60_000;
+
 
 type QueueJob = {
   assetId: string;
@@ -40,7 +40,10 @@ const queue = new Map<string, QueueJob>();
 let consuming = false;
 let pollTimer: ReturnType<typeof setTimeout> | null = null;
 let pollBackoffMs = 0;
-let lastOfflineNoticeAt = 0;
+let reconnectAt = 0;
+let wakeTimer: ReturnType<typeof setTimeout> | null = null;
+let recoveredCount = 0;
+let connecting: Promise<{ok:boolean;message:string}> | null = null;
 let scanning = false;
 /** 同一远端项目的导入串行，避免扫描与手动拉回同时创建版本。 */
 const importing = new Map<string, Promise<void>>();
@@ -130,7 +133,11 @@ async function consume() {
   if (consuming) return;
   consuming = true;
   try {
-    while (queue.size) {
+    while (queue.size && cfg().enabled) {
+      if (useEagle.getState().connState !== "ready") {
+        if (Date.now() < reconnectAt) { wakeQueue(reconnectAt - Date.now()); break; }
+        if (!(await detect()).ok) { reconnectAt = Date.now() + 30_000; wakeQueue(30_000); break; }
+      }
       const jobs = takeDueJobs(CONCURRENCY);
       if (!jobs.length) break; // 剩余都在退避期
       await Promise.all(jobs.map((job) => settleJob(job)));
@@ -138,7 +145,25 @@ async function consume() {
   } finally {
     consuming = false;
     recount();
+    if (!queue.size && recoveredCount) { toast(`Eagle 已恢复，待传队列已处理完毕，可在同步中心查看结果`, "ok"); recoveredCount = 0; }
   }
+}
+
+function wakeQueue(delay: number) {
+  if (wakeTimer) clearTimeout(wakeTimer);
+  wakeTimer = setTimeout(() => { wakeTimer = null; void consume(); }, Math.max(200, delay));
+}
+
+/** 从资产账本恢复队列，重启或重新登录后同样续传。 */
+export function restoreEagleQueue() {
+  if (!cfg().enabled) return;
+  for (const item of useAssets.getState().items) {
+    if (item.deletedAt || !item.eagle || queue.has(item.id)) continue;
+    if (["queued", "pushing", "local-dirty"].includes(item.eagle.state) || (item.eagle.state === "offline" && (!item.eagle.itemId || connectionFailure(item.eagle.error ?? ""))))
+      queue.set(item.id, { assetId: item.id, attempt: 0, queuedAt: Date.now() });
+  }
+  recount();
+  if (queue.size) wakeQueue(200);
 }
 
 /** 取出到期任务；一个都不到期时安排晚些的自动唤醒 */
@@ -153,7 +178,7 @@ function takeDueJobs(n: number): QueueJob[] {
   }
   if (!out.length && queue.size) {
     const soonest = Math.min(...[...queue.values()].map((j) => j.queuedAt));
-    setTimeout(() => void consume(), Math.max(200, soonest - Date.now()));
+    wakeQueue(soonest - Date.now());
   }
   return out;
 }
@@ -161,7 +186,14 @@ function takeDueJobs(n: number): QueueJob[] {
 /** 执行一个任务并按结果决定出队 / 退避重试 / 终态 */
 async function settleJob(job: QueueJob) {
   const ok = await pushOne(job.assetId);
-  if (ok || job.attempt + 1 >= MAX_ATTEMPT) {
+  const decision = eagleRetryDecision(ok,useEagle.getState().connState === "ready",job.attempt);
+  if (decision === "wait") {
+    job.queuedAt = Date.now() + 30_000;
+    reconnectAt = job.queuedAt;
+    wakeQueue(30_000);
+    return; // 连接失败不消耗素材重试次数。
+  }
+  if (decision === "done" || decision === "failed") {
     queue.delete(job.assetId);
     if (!ok && job.attempt + 1 >= MAX_ATTEMPT) recount("failed");
   } else {
@@ -276,7 +308,7 @@ async function pushOne(assetId: string): Promise<boolean> {
     return true;
   } catch (e) {
     const msg = errMsg(e);
-    const offline = /连不上|超时|EAGLE_OFFLINE/.test(msg);
+    const offline = connectionFailure(msg);
     transitionLink(assetId, offline ? "offline" : "error", { error: msg });
     noticeFailure(msg, offline);
     // 离线保留在队列里等 Eagle 恢复；其它错误也留一次重试机会（文档：元数据最多自动重试 2 次）
@@ -590,6 +622,11 @@ async function scanActiveAssets(): Promise<void> {
 /* ---------------- 连接管理 ---------------- */
 
 export async function detect(): Promise<{ ok: boolean; message: string }> {
+  if (connecting) return connecting;
+  connecting = detectOnce();
+  try { return await connecting; } finally { connecting = null; }
+}
+async function detectOnce(): Promise<{ok:boolean;message:string}> {
   const c = cfg();
   if (!isTauriSupported()) {
     useEagle.setState({ connState: "disabled" });
@@ -599,6 +636,7 @@ export async function detect(): Promise<{ ok: boolean; message: string }> {
     useEagle.setState({ connState: "disabled" });
     return { ok: false, message: "Eagle 连接未启用" };
   }
+  const recovering = useEagle.getState().connState !== "ready";
   useEagle.setState({ connState: "connecting" });
   const cli = new EagleClient(c.host, c.apiToken);
   try {
@@ -615,6 +653,14 @@ export async function detect(): Promise<{ ok: boolean; message: string }> {
     await startBridgeIfNeeded(lib);
     scheduleScan();
     await ensureRootFolder({ createIfMissing: true });
+    useEagle.setState({ connectError: undefined });
+    reconnectAt = 0;
+    restoreEagleQueue();
+    if (recovering && queue.size) {
+      recoveredCount = queue.size;
+      for (const job of queue.values()) { job.attempt = 0; job.queuedAt = Date.now(); }
+      wakeQueue(200);
+    }
     return { ok: true, message: `Eagle ${app.version} · 库「${lib.name}」(${lib.path})` };
   } catch (e) {
     const msg = errMsg(e);
@@ -748,11 +794,9 @@ async function localFileExists(path: string): Promise<boolean> {
 }
 
 function noticeOffline() {
-  const now = Date.now();
-  if (now - lastOfflineNoticeAt < OFFLINE_NOTICE_MS) return;
-  lastOfflineNoticeAt = now;
-  pushError("Eagle 资产桥", "Eagle 当前离线：任务已保留在同步队列，Eagle 恢复后会自动续传");
-  useEagle.setState({ connState: "offline" });
+  useEagle.setState({ connState: "offline", client: null });
+  reconnectAt = Date.now() + 30_000;
+  wakeQueue(30_000);
 }
 
 function noticeFailure(msg: string, offline: boolean) {

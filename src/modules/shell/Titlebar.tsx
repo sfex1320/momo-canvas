@@ -1,7 +1,7 @@
 /**
  * 自绘标题栏 — 品牌 / 画板切换 / 主题 / 设置 / 窗口控制
  */
-import { lazy, Suspense, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useBoard } from "../../core/stores/boardStore";
 import { resolveModelCard, useSettings } from "../../core/stores/settingsStore";
 import { toast, useUi, type ErrLogItem } from "../../core/stores/uiStore";
@@ -505,11 +505,8 @@ function RunLogCenter() {
   );
 }
 
-const DesignTools = lazy(() => import("../canvas/DesignTools").then(m=>({default:m.DesignTools})));
 
 export function Titlebar() {
-  const [designOpen,setDesignOpen]=useState(false);
-  const boardId=useBoard(s=>s.activeId);
   const theme = useSettings((s) => s.settings.theme);
   const hotkeys = useSettings((s) => s.settings.hotkeys);
   const update = useSettings((s) => s.update);
@@ -542,8 +539,6 @@ export function Titlebar() {
         </span>
       </div>
       <BoardTabs />
-      <button className="icon-btn" title="设计工具：品牌包与尺寸画板" aria-label="设计工具" onClick={()=>setDesignOpen(true)}><IcSparkles size={18}/></button>
-      {designOpen && <Suspense fallback={<span>载入设计工具…</span>}><DesignTools key={boardId} onClose={()=>setDesignOpen(false)}/></Suspense>}
       <div className="spacer" data-tauri-drag-region />
       <button
         className={`icon-btn ${agentOpen ? "on" : ""}`}

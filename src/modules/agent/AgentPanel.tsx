@@ -424,8 +424,8 @@ export function AgentPanel() {
         {codexOpen && <CodexConsole onClose={() => setCodexOpen(false)} />}
         <IcSparkles size={18} />
         <b>创作助手</b>
-        <button className="btn sm" title="使用本机 Codex 会员对话或执行文件任务" onClick={() => setCodexOpen(true)}>Codex</button>
-        <span className="ag-seg">
+        <button className="btn sm" title="用 Codex 对话、分析图片并执行画布创作" onClick={() => { setModelId("codex-membership::codex-chat"); setImageModelId("codex-membership::codex-image"); setMode("agent"); }}>Codex 创作</button>
+        <button className="btn sm" title="在指定文件夹执行 Codex 任务" onClick={() => setCodexOpen(true)}>文件任务</button><span className="ag-seg">
           <button className={mode === "chat" ? "on" : ""} title="多模态聊天：完善想法与提示词，一键在画布生图" onClick={() => setMode("chat")}>
             聊天
           </button>

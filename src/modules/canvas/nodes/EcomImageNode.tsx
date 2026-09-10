@@ -4,7 +4,8 @@
  * 生成设置（模式 / 模型 / 比例 / 切片数 / 风格 / 种子 / 文案 / 参考图上传）全部在画布底部生成栏。
  * 两种模式：product / h5。
  */
-import { memo, useRef, useState } from "react";
+import { memo, useState } from "react";
+import { PromptAiTools } from "../../../ui/PromptAiTools";
 import { createPortal } from "react-dom";
 import type { NodeProps } from "@xyflow/react";
 import { NodeShell, OutModeToggle, PortIn, PortOut } from "../NodeShell";
@@ -18,11 +19,11 @@ import { resolveModelCard, useSettings } from "../../../core/stores/settingsStor
 import { saveImageAs } from "../../../core/services/imageSaver";
 import { errMsg } from "../../../core/utils";
 import { Thumb } from "../../../ui/Thumb";
-import { AtTextArea, useOwnUpstreamImageRefs, type AtTextAreaHandle } from "../../../ui/AtTextArea";
+import { useOwnUpstreamImageRefs } from "../../../ui/AtTextArea";
 import type { EcomImageData } from "../../../core/types";
 
 /** 切片工作台：左栏生成+拼接+最终长图，右栏切片网格（编辑提示词 / 拖拽排序 / 参考图缩略 / 逐片重生成） */
-function EcomWorkshop({ id, d, onClose }: { id: string; d: EcomImageData; onClose: () => void }) {
+export function EcomWorkshop({ id, d, onClose }: { id: string; d: EcomImageData; onClose: () => void }) {
   const setLightbox = useUi((s) => s.setLightbox);
   const upd = useBoard((s) => s.updateData);
   const slides = d.slides ?? [];
@@ -41,11 +42,9 @@ function EcomWorkshop({ id, d, onClose }: { id: string; d: EcomImageData; onClos
 
   // @引用：上游图 chips 点击插入到「最近点过的切片」提示词，作该片风格参考
   const upstreamRefs = useOwnUpstreamImageRefs(id);
-  const editorRefs = useRef<(AtTextAreaHandle | null)[]>([]);
   const [focusedSlide, setFocusedSlide] = useState(0);
   const insertRef = (label: string) => {
-    const ed = editorRefs.current[focusedSlide];
-    if (ed) ed.insertToken(label);
+    setPrompt(focusedSlide, `${slides[focusedSlide]?.prompt ?? ""} @${label}`);
   };
 
   const save = async () => {
@@ -75,7 +74,7 @@ function EcomWorkshop({ id, d, onClose }: { id: string; d: EcomImageData; onClos
         <aside className="ecom-ws-side">
           <div className="gp-sec-title">生成</div>
           <button className="btn primary" disabled={running || !slides.length} onClick={() => void generateEcom(id)}>
-            <IcSparkles size={15} /> 生成长图（按当前提示词）
+            <IcSparkles size={15} /> 生成切片
           </button>
           <button
             className="btn"
@@ -142,7 +141,7 @@ function EcomWorkshop({ id, d, onClose }: { id: string; d: EcomImageData; onClos
           {slides.length === 0 ? (
             <div className="hint">还没有切片：点节点上的「分析并规划」生成切片脚本。</div>
           ) : (
-            <div className={`ecom-grid ${running ? "busy" : ""}`} style={{ gridTemplateColumns: `repeat(${cols}, 1fr)` }}>
+            <div className={`ecom-grid ${running ? "busy" : ""}`} style={{ gridTemplateColumns: `repeat(auto-fit, minmax(min(100%, ${Math.max(180, 850 / cols)}px), 1fr))` }}>
               {view.map(({ s, i }) => (
                 <div
                   key={i}
@@ -190,17 +189,8 @@ function EcomWorkshop({ id, d, onClose }: { id: string; d: EcomImageData; onClos
                   <div className="ecom-card-title" title={s.title}>
                     {s.title}
                   </div>
-                  <AtTextArea
-                    ref={(h) => {
-                      editorRefs.current[i] = h;
-                    }}
-                    rows={3}
-                    placeholder="该切片生图提示词（可编辑；点上方参考图插入 @引用）"
-                    value={s.prompt ?? ""}
-                    onChange={(t) => setPrompt(i, t)}
-                    refs={upstreamRefs}
-                    style={{ fontSize: 12 }}
-                  />
+                  <p className="ecom-card-summary">{s.prompt || "尚未填写提示词"}</p>
+                  <PromptAiTools value={s.prompt ?? ""} image={s.img ?? upstreamRefs[0]?.src} onApply={text => setPrompt(i, text)}/>
                   {s.copy ? (
                     <div className="ecom-card-copy" title={s.copy}>
                       {s.copy}

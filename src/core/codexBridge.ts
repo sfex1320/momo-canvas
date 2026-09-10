@@ -5,9 +5,9 @@ import {isTauri,uid,toDataUrl} from "./utils";
 import type {ImageGenReq} from "./services/imageGen";
 
 export const CODEX_IMAGE_MODEL="codex-image";
-export type CodexTextMessage = { role: "user" | "assistant"; text: string };
+export type CodexTextMessage = { role: "user" | "assistant"; text: string; images?: string[] };
 export type CodexTextEvent = { delta?: string; stage?: string };
-export async function codexText(request: { mode: "chat" | "task"; workspace?: string; messages: CodexTextMessage[] }, signal: AbortSignal, progress: (event: CodexTextEvent) => void) {
+export async function codexText(request: { mode: "chat" | "task"; workspace?: string; system?: string; messages: CodexTextMessage[] }, signal: AbortSignal, progress: (event: CodexTextEvent) => void) {
   if (!isTauri) throw Error("Codex 对话与任务需要 MOMO 桌面端");
   signal.throwIfAborted();
   const taskId = uid(18), executable = await codexExecutable(), onEvent = new Channel<CodexTextEvent>();

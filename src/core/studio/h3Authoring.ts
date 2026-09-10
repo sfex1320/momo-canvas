@@ -1,6 +1,7 @@
 import type {DirectorProject,DirectorSegment} from "../types";
 import {useDirector} from "../stores/directorStore";
 import {useSkills} from "../stores/skillStore";
+import {selectedDefinitions} from "./authoring";
 
 import {routeSkillBindings,routeCtxOfRecipe} from "./skillRoute";
 import {resolveModelCard} from "../stores/settingsStore";
@@ -13,7 +14,7 @@ import {H3_AUTHOR_RULES,validateAuthoredH3,h3AuthoringContract} from "./h3Author
 
 function current(pid:string,sid:string){const project=useDirector.getState().getById(pid),seg=project?.scenes.flatMap(s=>s.segments).find(s=>s.id===sid);if(!project||!seg)throw Error("片段不存在");return{project,seg};}
 export function patchH3Authoring(pid:string,sid:string,patch:Partial<DirectorSegment>){const {project}=current(pid,sid);useDirector.getState().updateProject(pid,{scenes:project.scenes.map(s=>({...s,segments:s.segments.map(x=>x.id===sid?{...x,...patch}:x)}))});}
-function context(p:DirectorProject,s:DirectorSegment){return JSON.stringify([s.durationSec,s.dialogue,s.slots,p.globalSlots,p.skillBindings,p.recipes,p.defaultRecipeId,s.recipeId,s.h3Authoring?.zh,s.h3Authoring?.rules]);}
+function context(p:DirectorProject,s:DirectorSegment){return JSON.stringify([s.durationSec,s.dialogue,s.slots,p.globalSlots,p.skillBindings,p.recipes,p.defaultRecipeId,s.recipeId,s.h3Authoring?.zh,s.h3Authoring?.rules,selectedDefinitions(p,s)]);}
 async function refsFor(p:DirectorProject,s:DirectorSegment){const expected=effectiveSlots(p,s).reduce((n,x)=>n+x.assetIds.length,0);const m=await resolveSlotMedia(p,s);if(expected!==(m?.images.orderedAll.length??0)+(m?.videos.length??0)+(m?.audios.length??0))throw Error("参考素材缺失或无法读取，请先修复素材槽");return{counts:{Picture:m?.images.orderedAll.length??0,Video:m?.videos.length??0,Audio:m?.audios.length??0},note:m?.images.entries.map((e,i)=>`<Picture ${i+1}>: ${e.slot.label??e.slot.semantic}`).join("\n")??""};}
 const jobs=new Set<string>();
 export async function draftEnglishH3(pid:string,sid:string,signal:AbortSignal){
@@ -27,7 +28,7 @@ export async function draftEnglishH3(pid:string,sid:string,signal:AbortSignal){
     const skills=routeSkillBindings(project,routeCtxOfRecipe(project,recipe),undefined,{excludePlanning:true}).filter(s=>s.purpose!=="compile-image-prompt").map(s=>s.system);
     const dialogue=extractDialogue(input.zh).length?extractDialogue(input.zh):seg.dialogue;
     signal.throwIfAborted();
-    const r=await chatStream(resolveModelCard("chat"),[{role:"user",text:JSON.stringify({中文文案:input.zh,补充排版要求:input.rules,对白逐字保留:dialogue,时长秒:seg.durationSec,模式:mode,真实参考数量:refs.counts,图片顺序:refs.note})}],{signal,system:[...skills,H3_AUTHOR_RULES,h3AuthoringContract(mode),'严格输出 JSON {"zh":"按相同小节排版的中文审阅全文","en":"英文执行全文"}。不要 Markdown 围栏。中英正文仅保留模式要求的字段与对齐描述，不额外添加标题/用途/时长元信息前言。每稿时间轴必须使用 [0.00s-3.00s] 格式标记各镜头范围，从 0.00s 开始连续不重叠，精确结束于用户时长。'].join("\n\n")});
+    const r=await chatStream(resolveModelCard("chat"),[{role:"user",text:JSON.stringify({中文文案:input.zh,已绑定人物场景道具:selectedDefinitions(project,seg),补充排版要求:input.rules,对白逐字保留:dialogue,时长秒:seg.durationSec,模式:mode,真实参考数量:refs.counts,图片顺序:refs.note})}],{signal,system:[...skills,H3_AUTHOR_RULES,h3AuthoringContract(mode),'严格输出 JSON {"zh":"按相同小节排版的中文审阅全文","en":"英文执行全文"}。不要 Markdown 围栏。中英正文仅保留模式要求的字段与对齐描述，不额外添加标题/用途/时长元信息前言。每稿时间轴必须使用 [0.000s-3.000s] 格式标记各镜头范围，从 0.000s 开始连续不重叠，精确结束于用户时长。'].join("\n\n")});
     signal.throwIfAborted();const raw=parseJsonLoose(r.text) as {zh?:unknown;en?:unknown}|null;
     if(typeof raw?.zh!=="string"||typeof raw.en!=="string")throw Error("模型未返回完整中英文稿，请重试");
     const problems=validateAuthoredH3(raw.zh,raw.en,mode,dialogue,refs.counts,seg.durationSec);

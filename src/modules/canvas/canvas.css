@@ -5178,3 +5178,15 @@
 :root[data-theme="black"] .pi-icon { color:#f5f6f8; background:linear-gradient(145deg,#444950,#2c3035); border:1px solid #ffffff12; }
 :root[data-theme="black"] .node-icon { color:#f5f6f8; }
 :root[data-theme="black"] .titlebar .brand .grad-text { background:none; color:#f2f3f5; -webkit-text-fill-color:currentColor; }
+
+/* 紧凑切片：完整提示词收进调整弹窗。 */
+.ecom-ws-side { width: 176px; }
+.ecom-ws .ecom-card-img { height: 150px; aspect-ratio: auto; }
+.ecom-ws .ecom-card-img:has(.ecom-card-empty) { height: 72px; }
+.ecom-ws .ecom-card-thumb { width: 100%; height: 100%; object-fit: contain; }
+.ecom-ws .ecom-card-empty { min-height: 0; height: 100%; }
+.ecom-card-summary { margin: 0; font-size: 12px; line-height: 1.6; color: var(--text-2); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; min-height: 38px; }
+.ecom-ws .ecom-card-copy { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.prompt-adjust-toolbar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.gd-prompt .gd-row textarea { max-height: 96px; }
+@media (max-width: 800px) { .ecom-ws { flex-direction: column; } .ecom-ws-side { width: 100%; flex-direction: row; flex-wrap: wrap; max-height: 150px; } .ecom-ws-side .gp-sec-title,.ecom-ws-side .hint { display: none; } .ecom-ws-final-thumb { max-height: 70px; } .ecom-ws-main { width: 100%; } .ecom-ws-toolbar { flex-wrap: wrap; } }

@@ -15,6 +15,8 @@ def png_of(img):
     return 'data:image/png;base64,' + base64.b64encode(stream.getvalue()).decode()
 
 def run(p):
+    if p['op'] == 'jianying':
+        return jianying_export(p)
     if p['op'] in ('video_info', 'lossless'):
         return video_tool(p)
     if p['op'] == 'probe':
@@ -132,6 +134,53 @@ def video_tool(p):
         if abs(actual_duration-expected)>max(.12,len(parts)*.04): raise ValueError('无损片段的实际时长偏移超过容差，未交付；请使用兼容合成')
         os.replace(ready,output)
     return {'path':output,'duration':actual_duration,'requestedDuration':expected,'mode':'stream-copy'}
+
+def jianying_export(p):
+    """只新建草稿文件，不覆盖剪映已有草稿，不调用 UI 自动化。"""
+    import uuid, time
+    import pyJianYingDraft as draft
+    from pyJianYingDraft import assets
+    folder = os.path.realpath(p['directory'])
+    content_path = os.path.join(folder, 'draft_content.json')
+    meta_path = os.path.join(folder, 'draft_meta_info.json')
+    if os.path.exists(content_path) or os.path.exists(meta_path):
+        raise ValueError('该目录已有剪映草稿，请选择新的导出目录')
+    plan = p['plan']
+    script = draft.ScriptFile(int(plan['width']), int(plan['height']), round(plan['fps']), False)
+    script.append_tracks([draft.TrackSpec(draft.TrackType.video, '画面')])
+    us = lambda sec: round(float(sec) * 1_000_000)
+    cursor = 0
+    for i, clip in enumerate(plan['clips']):
+        path = os.path.realpath(clip['path'])
+        if os.path.commonpath([folder, path]) != folder: raise ValueError('素材不在交付目录内')
+        duration = us(clip['durSec'])
+        segment = draft.VideoSegment(path, draft.Timerange(cursor, duration), source_timerange=draft.Timerange(us(clip['inSec']), duration), volume=0 if clip.get('muted') else clip.get('volume', 1), clip_settings=draft.ClipSettings(flip_horizontal=clip.get('flipH', False), flip_vertical=clip.get('flipV', False), rotation=clip.get('rotate', 0)))
+        if clip.get('transition') == 'fade' and i < len(plan['clips']) - 1:
+            segment.add_transition(draft.TransitionType.叠化, duration=us(min(clip.get('transitionDur') or .5, clip['durSec']/2, plan['clips'][i+1]['durSec']/2)))
+        if clip.get('fadeIn', 0) > 0: segment.add_animation(draft.IntroType.渐显, duration=us(min(clip['fadeIn'], clip['durSec']/2)))
+        if clip.get('fadeOut', 0) > 0: segment.add_animation(draft.OutroType.渐隐, duration=us(min(clip['fadeOut'], clip['durSec']/2)))
+        script.add_segment(segment, '画面')
+        cursor += duration
+    for i, audio in enumerate(plan['audio']):
+        if audio.get('muted'): continue
+        path = os.path.realpath(audio['path'])
+        if os.path.commonpath([folder, path]) != folder: raise ValueError('音频不在交付目录内')
+        material = draft.AudioMaterial(path)
+        duration = min(material.duration, cursor-us(audio['atSec']))
+        if duration <= 0: continue
+        name = f'音频 {i+1}'
+        script.append_tracks([draft.TrackSpec(draft.TrackType.audio, name)])
+        segment = draft.AudioSegment(material, draft.Timerange(us(audio['atSec']), duration), volume=audio.get('volume', 1))
+        segment.add_fade(min(us(audio.get('fadeIn') or 0),duration//2), min(us(audio.get('fadeOut') or 0),duration//2))
+        script.add_segment(segment, name)
+    subtitle = os.path.join(folder, '字幕.srt')
+    if os.path.isfile(subtitle): script.import_srt(subtitle, '字幕')
+    script.content['name'] = p['name']
+    script.dump(content_path)
+    with open(assets.get_asset_path('DRAFT_META_TEMPLATE'), encoding='utf8') as f: meta = json.load(f)
+    meta.update(draft_name=p['name'], draft_fold_path=folder, draft_id=str(uuid.uuid4()).upper(), tm_duration=cursor, tm_draft_create=us(time.time()), tm_draft_modified=us(time.time()))
+    with open(meta_path, 'x', encoding='utf8') as f: json.dump(meta, f, ensure_ascii=False)
+    return {'path':folder, 'durationUs':cursor, 'clips':len(plan['clips'])}
 
 if __name__ == '__main__':
     try:

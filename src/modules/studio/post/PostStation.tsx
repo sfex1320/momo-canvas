@@ -9,6 +9,8 @@
  */
 import { useMemo, useRef, useState } from "react";
 import { useAssets } from "../../../core/stores/assetStore";
+import { AudioSetup } from "./AudioSetup";
+import {exportEditingProject,chooseEditingPython} from "../../../core/studio/editingExport";
 import { SI, opt } from "../shared/selectIcons";
 import { useDirector } from "../../../core/stores/directorStore";
 import { useUi, toast } from "../../../core/stores/uiStore";
@@ -35,6 +37,8 @@ export function PostStation({ project }: { project: DirectorProject }) {
   const setSeg = useDirectorCtx((s) => s.setSeg);
   const [preset, setPreset] = useState("1080h");
   const [rendering, setRendering] = useState(false);
+  const [exportBusy,setExportBusy] = useState(false);
+  const exportEditor = async (target:"premiere"|"jianying") => {setExportBusy(true);try{const path=await exportEditingProject(project,preset,target);if(path)toast(`剪辑工程已导出：${path}`,"ok");}catch(e){toast(errMsg(e),"err");}finally{setExportBusy(false);}};
   const [prog, setProg] = useState<RenderProgress | null>(null);
   const [ask, setAsk] = useState<{ text: React.ReactNode; run: () => void } | null>(null);
   const [ffOk, setFfOk] = useState<boolean | null>(null);
@@ -240,6 +244,7 @@ export function PostStation({ project }: { project: DirectorProject }) {
         {/* 多轨时间线（V1/T1/D1/N1/S1/A1/M1/SUB） */}
         <div style={{ flex: 1, minHeight: 0, overflow: "auto", background: "var(--studio-panel)" }}>
           <PostTimeline project={project} />
+          <AudioSetup project={project}/>
           <div style={{ display: "flex", gap: 0, borderTop: "1px solid var(--studio-border)" }}>
             <div style={{ flex: 1, minWidth: 0 }}>{tab !== "props" ? <AudioMixer project={project} /> : null}</div>
             <div style={{ flex: 1, minWidth: 0 }}>{tab !== "props" ? <SubtitleEditor project={project} /> : null}</div>
@@ -363,6 +368,7 @@ export function PostStation({ project }: { project: DirectorProject }) {
                 <IcFolder size={12} /> 项目包
               </button>
             ) : null}
+            {isTauri && <div className="st-row" style={{flexWrap:"wrap"}}><button className="st-btn sm" disabled={exportBusy} onClick={()=>void exportEditor("premiere")}>{exportBusy?"导出中…":"PR 工程"}</button><button className="st-btn sm" disabled={exportBusy} onClick={()=>void exportEditor("jianying")}>剪映草稿</button><button className="st-btn sm" disabled={exportBusy} onClick={()=>void chooseEditingPython().catch(e=>toast(errMsg(e),"err"))}>剪映环境</button></div>}
           </div>
         </div>
         <div className="st-group">

@@ -37,10 +37,10 @@ import type { DirectorProject, StudioStation, StudioToolKey } from "../../core/t
 
 /** 工位键：七个主工位 + 3D 预演（导航底部共享工具，全屏工位呈现） */
 type StationKey = StudioStation | "previz";
-import { AIDirectorStation } from "./director/AIDirectorStation";
+import { SegmentWriter } from "./scripts/SegmentWriter";
 import { ScriptLibraryStation } from "./scripts/ScriptLibraryStation";
 // 3.4 主包拆分：重工位全部按需加载（3D three.js / 成片时间线 / MV 波形逻辑都在页面内部）
-const CharacterLibraryStation = lazy(() => import("./characters/CharacterLibraryStation").then((m) => ({ default: m.CharacterLibraryStation })));
+const CharacterLibraryStation = lazy(() => import("./characters/MaterialStation").then((m) => ({ default: m.MaterialStation })));
 const ImageStudioStation = lazy(() => import("./image/ImageStudioStation").then((m) => ({ default: m.ImageStudioStation })));
 const H3Station = lazy(() => import("./h3/H3Station").then((m) => ({ default: m.H3Station })));
 const MVStation = lazy(() => import("./mv/MVStation").then((m) => ({ default: m.MVStation })));
@@ -48,13 +48,13 @@ const PostStation = lazy(() => import("./post/PostStation").then((m) => ({ defau
 const PrevizStation = lazy(() => import("./previz/PrevizStation").then((m) => ({ default: m.PrevizStation })));
 
 const STATIONS: Array<{ key: StudioStation; label: string; icon: React.ReactNode; desc: string }> = [
-  { key: "director", label: "AI 导演", icon: <IcBrain size={20} />, desc: "故事共创 · 方案拆解 · 外部 Agent 协作" },
+  { key: "director", label: "分段编写", icon: <IcBrain size={20} />, desc: "时间轴写作 · 素材复用 · 衔接与声音" },
   { key: "scripts", label: "剧本库", icon: <IcLibrary size={20} />, desc: "草稿 · 正式剧本 · 版本 · 送入项目" },
-  { key: "characters", label: "角色库", icon: <IcUsers size={20} />, desc: "角色档案 · 外观 · 声音 · 受影响片段" },
+  { key: "characters", label: "素材定义", icon: <IcUsers size={20} />, desc: "人物 · 场景 · 道具 · 参考与音色" },
   { key: "image", label: "AI 制图", icon: <IcBrush size={20} />, desc: "文生图 · 图生图 · 编辑 · 结果入库" },
-  { key: "h3", label: "H3 导演台", icon: <IcClapper size={20} />, desc: "整理分镜 · 生成画面 · 对比选片" },
+  { key: "h3", label: "生成选片", icon: <IcClapper size={20} />, desc: "整理分镜 · 生成画面 · 对比选片" },
   { key: "mv", label: "AI MV", icon: <IcMusic size={20} />, desc: "音乐 · 节拍 · 图像映射 · 口型" },
-  { key: "post", label: "成片交付", icon: <IcFilmCut size={20} />, desc: "多轨时间线 · 质检 · 预演 · 导出" },
+  { key: "post", label: "初剪交付", icon: <IcFilmCut size={20} />, desc: "多轨时间线 · 质检 · 预演 · 导出" },
 ];
 
 const TOOLS: Array<{ key: StudioToolKey; label: string; icon: React.ReactNode; desc: string }> = [
@@ -71,8 +71,8 @@ export function StudioShell({ project }: { project: DirectorProject }) {
   const setSeg = useDirectorCtx((s) => s.setSeg);
   const comfyHost = useSettings((s) => s.settings.comfy.host);
   const templates=useComfy(s=>s.templates);
-  const remoteConfigured=useSettings(s=>s.settings.models.providers.some(p=>(p.models.image?.models.length??0)>0||(p.models.video?.models.length??0)>0));
-  const chatReady = useSettings((s) => s.settings.models.providers.some(p => (p.models.chat?.models.length ?? 0) > 0));
+  const remoteConfigured=useSettings(s=>s.settings.models.defaults.image?.startsWith("codex-membership")||s.settings.models.providers.some(p=>(p.models.image?.models.length??0)>0||(p.models.video?.models.length??0)>0));
+  const chatReady = useSettings((s) => s.settings.models.defaults.chat?.startsWith("codex-membership")||s.settings.models.providers.some(p => (p.models.chat?.models.length ?? 0) > 0));
   const pendingProposals = useAgentProposals((s) => s.proposals.filter((p) => p.projectId === project.id && p.status === "pending").length);
 
   const ui = project.studioUi ?? studioUiOf(project.id);
@@ -207,14 +207,14 @@ export function StudioShell({ project }: { project: DirectorProject }) {
 
       <div className="st-guide" aria-label="制作流程">
         <div className="st-station-heading"><h1>{stationInfo.label}</h1><span>{stationInfo.desc}</span></div>
-        <div className="st-guide-steps">{["剧本", "分镜", "选片", "交付"].map((label, i) => <span key={label} aria-current={nextStep.stage === i ? "step" : undefined} className={nextStep.stage === i ? "on" : nextStep.stage > i ? "done" : ""}><i>{i + 1}</i>{label}</span>)}</div>
+        <div className="st-guide-steps">{["剧本", "编写", "选片", "交付"].map((label, i) => <span key={label} aria-current={nextStep.stage === i ? "step" : undefined} className={nextStep.stage === i ? "on" : nextStep.stage > i ? "done" : ""}><i>{i + 1}</i>{label}</span>)}</div>
         <button className="st-btn primary" title={nextStep.hint} onClick={() => { if (nextStep.segmentId) setSeg(nextStep.segmentId); go(nextStep.station); }}>{nextStep.label} →</button>
       </div>
       <div className="st-body">
         {/* 一级导航：七工位（不编号）+ 底部共享工具 */}
         <nav className="st-nav" aria-label="工位导航">
           <span className="st-nav-heading">创作工位</span>
-          {STATIONS.map((s) => (
+          {["scripts","characters","director","h3","post","image","mv"].map(key=>STATIONS.find(s=>s.key===key)!).map((s) => (
             <button
               key={s.key}
               className={`st-nav-item${station === s.key ? " on" : ""}`}
@@ -252,7 +252,7 @@ export function StudioShell({ project }: { project: DirectorProject }) {
         {/* 工位内容：单一入口（§3.2）；ErrorBoundary 兜底——任何工位渲染异常只坏本区，不再整窗白屏 */}
         <main className="st-content" onDragOver={onContentDragOver} onDragLeave={onContentDragLeave} onDrop={onContentDrop}>
           <ErrorBoundary key={`${project.id}:${station}`} name="工位">
-            {station === "director" ? <AIDirectorStation project={project} /> : null}
+            {station === "director" ? <SegmentWriter project={project} /> : null}
             {station === "scripts" ? <ScriptLibraryStation project={project} /> : null}
             <Suspense fallback={<div className="st-loading">正在加载工位…</div>}>
               {station === "characters" ? <CharacterLibraryStation project={project} /> : null}

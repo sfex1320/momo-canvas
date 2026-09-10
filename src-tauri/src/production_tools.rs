@@ -7,13 +7,13 @@ pub fn production_cancel(task_id:String) { if let Some(flag)=tasks().lock().unwr
 #[tauri::command]
 pub fn production_detect(roots:Vec<String>)->Vec<String> {
     let mut found=Vec::new();
-    for root in roots { let p=PathBuf::from(root);for ancestor in p.ancestors().take(7) {for rel in ["python/python.exe","python_embeded/python.exe",".venv/Scripts/python.exe"]{let exe=ancestor.join(rel);if exe.is_file(){let path=exe.to_string_lossy().into_owned();if !found.contains(&path){found.push(path);}}}}}
+    for root in roots { let p=PathBuf::from(root);for ancestor in p.ancestors().take(7) {for rel in ["tools/jianying/Scripts/python.exe","python/python.exe","python_embeded/python.exe",".venv/Scripts/python.exe"]{let exe=ancestor.join(rel);if exe.is_file(){let path=exe.to_string_lossy().into_owned();if !found.contains(&path){found.push(path);}}}}}
     found
 }
 #[tauri::command]
 pub async fn production_run(task_id:String,python_path:String,request:Value)->Result<Value,String> {
     if !PathBuf::from(&python_path).is_absolute()||!PathBuf::from(&python_path).is_file(){return Err("请在设计工具中选择有效的 Python 环境（需要 Pillow 与 OpenCV）".into());}
-    if !matches!(request.get("op").and_then(Value::as_str),Some("probe"|"segment"|"semantic"|"cmyk"|"video_info"|"lossless")){return Err("未知生产操作".into());}
+    if !matches!(request.get("op").and_then(Value::as_str),Some("probe"|"segment"|"semantic"|"cmyk"|"video_info"|"lossless"|"jianying")){return Err("未知生产操作".into());}
     let flag=Arc::new(AtomicBool::new(false));
     {let mut map=tasks().lock().unwrap();if map.contains_key(&task_id){return Err("此任务正在执行".into());}map.insert(task_id.clone(),flag.clone());}
     let result=tauri::async_runtime::spawn_blocking(move||run_python(&python_path,request,&flag)).await.map_err(|e|format!("生产任务异常：{e}"));

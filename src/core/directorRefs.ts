@@ -14,6 +14,7 @@ import { useAssets } from "./stores/assetStore";
 import { useDirector } from "./stores/directorStore";
 import { assetToDataUrl } from "./services/assetFiles";
 import { hashDataUrl } from "./utils";
+import { definitionSlots, shouldRelay } from "./studio/authoring";
 import type { AssetKind, ComfySemantic, DirectorProject, DirectorSegment, DirectorSlotValue } from "./types";
 
 // hashDataUrl 已从 utils 导入（头/中/尾三段指纹，同尺寸图片不会撞签名）
@@ -240,7 +241,7 @@ export function effectiveSlots(project: DirectorProject, segment: DirectorSegmen
     || /衔接模式[：:]\s*(?:开篇|硬切)/.test(continuityText);
   // 接力关闭或本段为开篇/硬切时保留已截取资产，方便人工检查，但绝不把它们投喂给模型。
   const active = (slots: DirectorSlotValue[]) =>
-    project.tailFrameRelay && !relayForbidden
+    shouldRelay(project, segment) && !relayForbidden
       ? slots
       : slots.filter((s) => !s.relayKind && !/自动接力/.test(s.label ?? ""));
   const segSlots = active(segment.slots ?? []);
@@ -250,6 +251,7 @@ export function effectiveSlots(project: DirectorProject, segment: DirectorSegmen
       (g) => !(SINGLETON_SEMANTICS.has(g.semantic) && segSingletons.has(g.semantic)),
     ),
     ...segSlots,
+    ...definitionSlots(project, segment).map(slot => ({...slot, assetIds: slot.assetIds.filter(id => ![...(project.globalSlots ?? []), ...segSlots].some(existing => existing.assetIds.includes(id)))})).filter(slot => slot.assetIds.length),
   ];
 }
 

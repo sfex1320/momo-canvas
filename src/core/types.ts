@@ -709,7 +709,7 @@ export type PortType = "text" | "image" | "video" | "audio";
 /** asr = 语音识别（语音输入/通话模式用）；纯新增角色，旧配置里没有该键，加载时按未配置处理 */
 export type ModelRole = "chat" | "image" | "video" | "audio" | "asr";
 
-export type ChatProtocol = "openai" | "anthropic" | "gemini" | "ollama" | "llamacpp";
+export type ChatProtocol = "codex" | "openai" | "anthropic" | "gemini" | "ollama" | "llamacpp";
 export type ImageProtocol = "openai" | "gemini";
 export type VideoProtocol = "zhipu" | "siliconflow" | "openai" | "ark" | "dashscope" | "google";
 export type AudioProtocol = "openai";
@@ -1832,6 +1832,11 @@ export type DirectorShot = {
 /** 生成片段（一次视频模型任务，方案 §5） */
 export type DirectorSegment = {
   id: string;
+  /** 手动选定的出场角色；空数组表示明确无人，旧项目缺省仍按文本识别。 */
+  characterIds?: string[];
+  definitionIds?: string[];
+  musicIntent?: "none" | "ambient" | "music";
+  relayMode?: "auto" | "continue" | "cut";
   sceneId: string;
   durationSec: number;
   summary: string;
@@ -2158,6 +2163,8 @@ export type DirectorAudioTrack = {
 /** 导演项目（保存在 directorStore，不进画布 node.data） */
 export type DirectorProject = {
   id: string;
+  /** 在素材页统一定义的场景与道具，不自动投喂未选中的片段。 */
+  assetDefinitions?: Array<{ id: string; kind: "scene" | "prop"; name: string; description: string; assetIds: string[] }>;
   /** 关联的画布节点 id（删除节点时用于定位项目） */
   nodeId: string;
   /** 关联的画布 id（切换画布后结果仍写回正确位置） */

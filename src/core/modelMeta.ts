@@ -248,6 +248,7 @@ export type ChatCaps = {
 
 /** 按模型名/协议推断对话模型能力——名字会不断出新，规则按家族特征匹配，宁可漏判不误判 */
 export function chatCaps(card: Pick<ModelCard, "id" | "protocol" | "model">): ChatCaps {
+  if (card.protocol === "codex") return { vision: true, builtinSearch: false, note: "Codex 会员 · 视觉与创作" };
   // 本地 GGUF 模型：能力来自注册表（capabilities.vision 由 mmproj 是否存在决定），不靠名字猜
   if (card.protocol === "llamacpp" || (card.id && card.id.startsWith("local-gguf"))) {
     // 动态查 localGgufStore（避免顶层 import 造成循环依赖）

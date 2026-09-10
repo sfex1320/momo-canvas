@@ -4,6 +4,8 @@
  * 整合了原「文本处理」节点的全部操作与提示词节点的「AI 扩写优化」（优化扩写 = 原两者合并）。
  */
 import { useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import { Modal } from "./kit";
 import { PopLayer } from "./PopSelect";
 import { IcLoading, IcSparkles, IcWand } from "./icons";
 import { isCaptionOp, llmTextTransform } from "../core/runner";
@@ -46,12 +48,14 @@ export async function runPromptAiOp(op: LlmTextOp, custom: string, value: string
   }
 }
 
-export function PromptAiTools({
+function PromptAiMenu({
   value,
   image,
   onApply,
   className,
   up,
+  disabled,
+  onBusyChange,
 }: {
   /** 当前文本（文本类操作的输入） */
   value: string;
@@ -62,6 +66,8 @@ export function PromptAiTools({
   className?: string;
   /** 强制向上弹出（底部生成面板用）；不传则按视口空间自动翻转（节点内用） */
   up?: boolean;
+  disabled?: boolean;
+  onBusyChange?: (busy: boolean) => void;
 }) {
   const [open, setOpen] = useState(false);
   const [view, setView] = useState<"menu" | "custom" | "skill">("menu");
@@ -82,6 +88,8 @@ export function PromptAiTools({
   };
 
   const run = async (op: LlmTextOp) => {
+    if (busy || disabled) return;
+    onBusyChange?.(true);
     setBusy(op);
     try {
       const out = await runPromptAiOp(op, custom, value, image);
@@ -91,11 +99,13 @@ export function PromptAiTools({
       }
     } finally {
       setBusy(null);
+      onBusyChange?.(false);
     }
   };
 
   const runActiveSkill = async () => {
-    if (!activeSkill) return;
+    if (!activeSkill || busy || disabled) return;
+    onBusyChange?.(true);
     setBusy("skill:" + activeSkill.id);
     try {
       if (!value.trim() && !image) {
@@ -113,6 +123,7 @@ export function PromptAiTools({
       toast(errMsg(e), "err");
     } finally {
       setBusy(null);
+      onBusyChange?.(false);
     }
   };
 
@@ -126,7 +137,7 @@ export function PromptAiTools({
     <div ref={wrapRef} className={`pop-wrap ${className ?? ""}`}>
       <button
         className={`btn sm nodrag ${open ? "on" : ""}`}
-        disabled={!!busy}
+        disabled={!!busy || disabled}
         title="AI 文本工具：优化 / 扩写 / 精简 / 译英 / 图片反推 —— 结果就地替换当前文本"
         onClick={() => setOpen((v) => !v)}
       >
@@ -143,7 +154,7 @@ export function PromptAiTools({
                   <button
                     key={o.op}
                     className="pop-item"
-                    disabled={!!busy || noImg}
+                    disabled={!!busy || disabled || noImg}
                     onClick={() => (o.op === "custom" ? setView("custom") : void run(o.op))}
                   >
                     <span className="pi-text">
@@ -275,4 +286,27 @@ export function PromptAiTools({
       ) : null}
     </div>
   );
+}
+
+/** 所有操作先修改草稿，保存时才替换原文。 */
+export function PromptAiTools(props: { value: string; image?: string; onApply: (text: string) => void; className?: string; up?: boolean }) {
+  const [open, setOpen] = useState(false), [draft, setDraft] = useState("");
+  const [instruction,setInstruction] = useState(""), [busy,setBusy] = useState(false);
+  const session = useRef(0), activeSession = session.current;
+  const close = () => { session.current++; setOpen(false); setBusy(false); };
+  const transform = async (op:LlmTextOp) => {
+    if(busy)return;
+    const version=session.current;setBusy(true);
+    try{const result=await runPromptAiOp(op,instruction,draft,props.image);if(result&&version===session.current)setDraft(result);}
+    finally{if(version===session.current)setBusy(false);}
+  };
+  return <><button className={`btn sm nodrag ${props.className ?? ""}`} onClick={() => { session.current++; setDraft(props.value); setBusy(false); setOpen(true); }}><IcSparkles size={14}/>调整</button>
+    {open && createPortal(<Modal title="调整提示词" width={800} onClose={close} footer={<><button className="btn" disabled={busy} onClick={() => setDraft(props.value)}>还原原文</button><button className="btn primary" disabled={busy} onClick={() => { props.onApply(draft); close(); }}>保存调整</button></>}>
+      <div className="prompt-adjust-toolbar" style={{marginBottom:12}}>{OPS.slice(0,4).map(o=><button className="btn sm" key={o.op} disabled={busy} onClick={()=>void transform(o.op)}>{o.label}</button>)}</div>
+      <div className="prompt-adjust-toolbar" style={{marginBottom:12}}><input className="input" style={{flex:1}} value={instruction} disabled={busy} onChange={e=>setInstruction(e.target.value)} placeholder="自定义调整，例如：改为暖色，保留人物和构图"/><button className="btn sm" disabled={busy||!instruction.trim()} onClick={()=>void transform("custom")}>{busy?"处理中…":"按指令调整"}</button></div>
+      <div className="prompt-adjust-toolbar"><PromptAiMenu value={draft} image={props.image} disabled={busy} onApply={text=>{if(activeSession===session.current)setDraft(text);}} onBusyChange={value=>{if(activeSession===session.current)setBusy(value);}}/><span className="hint">图片反推与 Skill 在 AI 工具中；也可直接修改下方文字。</span></div>
+      <textarea className="textarea nodrag nowheel" aria-label="提示词草稿" rows={12} disabled={busy} value={draft} onChange={e => setDraft(e.target.value)} style={{width:"100%", marginTop:12, maxHeight:"48vh"}}/>
+      <small className="hint">{draft.length} 字 · 保存后用于后续生成</small>
+    </Modal>, document.body)}
+  </>;
 }

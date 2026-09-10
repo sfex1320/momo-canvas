@@ -32,6 +32,7 @@ function collectAssetIds(project: DirectorProject): string[] {
     if (id && !id.startsWith("__")) ids.add(id);
   };
   for (const s of project.globalSlots ?? []) for (const a of s.assetIds) push(a);
+  for (const d of project.assetDefinitions ?? []) for (const a of d.assetIds) push(a);
   for (const sc of project.scenes) {
     for (const seg of sc.segments) {
       for (const s of seg.slots ?? []) for (const a of s.assetIds) push(a);
@@ -171,6 +172,7 @@ export async function importProjectPackage(): Promise<PackReport> {
   proj.name = `${proj.name}（导入）`;
   proj.uiState = { ...(proj.uiState ?? { workspace: "planning", inspectorTab: "content", cockpitView: "cockpit" }), segId: null };
   proj.globalSlots = (proj.globalSlots ?? []).map((s) => ({ ...s, assetIds: s.assetIds.map(remapId).filter(Boolean) as string[] }));
+  proj.assetDefinitions = proj.assetDefinitions?.map(d => ({...d,assetIds:d.assetIds.map(remapId).filter(Boolean) as string[]}));
   proj.scenes = proj.scenes.map((sc) => ({
     ...sc,
     segments: sc.segments.map((seg) => ({

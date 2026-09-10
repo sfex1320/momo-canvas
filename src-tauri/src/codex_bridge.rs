@@ -464,14 +464,28 @@ mod tests {
         assert_eq!(task["writableRoots"].as_array().unwrap().len(), 1);
     }
     #[test]
+    #[ignore = "使用会员额度验证视觉输入与应用结构化指令"]
+    fn real_visual_application_chat() {
+        use base64::Engine;
+        let path = PathBuf::from(std::env::var("MOMO_CODEX_VISION_QA").expect("指定人工测试图片"));
+        let image = format!("data:image/png;base64,{}", base64::engine::general_purpose::STANDARD.encode(std::fs::read(&path).unwrap()));
+        let r = run_text(path.parent().unwrap(), "", TextRequest {mode:"chat".into(), workspace:None, system:Some("这是 MOMO 应用的结构化输出验收。仅输出 JSON 对象，不使用 Markdown：{\"action\":\"image\",\"left\":\"左半图的颜色中文名\",\"right\":\"右半图的颜色中文名\",\"prompt\":\"根据这张图扩写的一句中文绘画提示词\"}。由 MOMO 执行 image 动作，本轮你只输出 JSON。".into()), messages:vec![TextMessage {role:"user".into(), text:"分析参考图，并给出绘画动作。".into(), images:vec![image]}]}, Arc::new(AtomicBool::new(false)), |_| {}).unwrap();
+        let parsed:Value=serde_json::from_str(r["text"].as_str().unwrap()).expect("应用指令应得到 JSON");
+        assert_eq!(parsed["action"],"image");
+        assert!(parsed["left"].as_str().unwrap().contains("红"));
+        assert!(parsed["right"].as_str().unwrap().contains("蓝"));
+        assert!(!parsed["prompt"].as_str().unwrap().is_empty());
+        println!("Codex 视觉、应用 system、绘画动作 JSON 验收通过");
+    }
+    #[test]
     #[ignore = "消耗少量会员额度，显式运行对话与隔离文件任务验收"]
     fn real_chat_and_file_task() {
         let dir = PathBuf::from(std::env::var("MOMO_CODEX_TEXT_QA_DIR").expect("需指定隔离文件夹"));
         std::fs::create_dir_all(&dir).unwrap();
-        let chat = run_text(&dir, "", TextRequest { mode:"chat".into(), workspace:None, messages:vec![TextMessage { role:"user".into(), text:"请只回复：对话连通。不要使用任何工具。".into() }] }, Arc::new(AtomicBool::new(false)), |_| {}).unwrap();
+        let chat = run_text(&dir, "", TextRequest { mode:"chat".into(), workspace:None, system:None, messages:vec![TextMessage { role:"user".into(), images:vec![], text:"请只回复：对话连通。不要使用任何工具。".into() }] }, Arc::new(AtomicBool::new(false)), |_| {}).unwrap();
         assert!(chat["text"].as_str().unwrap().contains("对话连通"));
         println!("只读对话已通过");
-        let task = run_text(&dir, "", TextRequest { mode:"task".into(), workspace:Some(dir.to_string_lossy().into()), messages:vec![TextMessage { role:"user".into(), text:"这是已授权的隔离功能验收。只在当前目录新建 codex-task-result.md，内容为：文件任务通过。不要删除或读取其他文件，完成后只报告文件名。".into() }] }, Arc::new(AtomicBool::new(false)), |_| {}).unwrap();
+        let task = run_text(&dir, "", TextRequest { mode:"task".into(), workspace:Some(dir.to_string_lossy().into()), system:None, messages:vec![TextMessage { role:"user".into(), images:vec![], text:"这是已授权的隔离功能验收。只在当前目录新建 codex-task-result.md，内容为：文件任务通过。不要删除或读取其他文件，完成后只报告文件名。".into() }] }, Arc::new(AtomicBool::new(false)), |_| {}).unwrap();
         assert!(!task["text"].as_str().unwrap().is_empty());
         assert!(std::fs::read_to_string(dir.join("codex-task-result.md")).unwrap().contains("文件任务通过"));
         println!("指定文件夹任务已通过");
@@ -567,9 +581,11 @@ pub struct TextRequest {
     mode: String,
     workspace: Option<String>,
     messages: Vec<TextMessage>,
+    #[serde(default)]
+    system: Option<String>,
 }
 #[derive(Deserialize)]
-struct TextMessage { role: String, text: String }
+struct TextMessage { role: String, text: String, #[serde(default)] images: Vec<String> }
 #[derive(Serialize, Clone)]
 pub struct TextEvent { stage: Option<String>, delta: Option<String> }
 
@@ -582,7 +598,7 @@ fn text_sandbox(task: bool, dir: &Path) -> Value {
 fn run_text(dir: &Path, exe: &str, request: TextRequest, flag: Arc<AtomicBool>, event: impl Fn(TextEvent)) -> R<Value> {
     let task = request.mode == "task";
     if !task && request.mode != "chat" { return Err("不支持的 Codex 模式".into()); }
-    if request.messages.is_empty() || request.messages.len() > 12 || request.messages.iter().any(|m| !["user", "assistant"].contains(&m.role.as_str()) || m.text.len() > 100_000) {
+    if request.messages.is_empty() || request.messages.len() > 128 || request.messages.iter().any(|m| !["user", "assistant"].contains(&m.role.as_str()) || m.text.len() > 100_000) {
         return Err("对话内容过长或格式不正确，请新建对话".into());
     }
     if flag.load(Ordering::SeqCst) { return Err("已取消 Codex 请求".into()); }
@@ -591,15 +607,25 @@ fn run_text(dir: &Path, exe: &str, request: TextRequest, flag: Arc<AtomicBool>, 
     let base = if task {
         "你是 MOMO 的本地项目助手。仅执行用户本次明确要求的任务，在指定工作目录处理文件。未获得明确要求不得删除原素材、提交远程仓库、发布内容或向他人发送消息。不要绕过沙盒、获取凭据或改写工作目录之外的文件。不调用外部应用连接器。遇到需要额外交互授权的操作请说明并停止。用中文报告完成的文件与验证结果。"
     } else {
-        "你是 MOMO 的创作对话助手。帮助用户讨论、分析文字与整理提示词；仅返回文字，不运行命令、不编辑文件、不执行任务、不调用外部应用。用户想生成图片时说明可在画布选择 Codex 会员生图。使用中文清晰回答。"
+        "你是 MOMO 的创作对话助手。帮助用户讨论、分析文字与整理提示词；按应用指令输出文字或结构化动作，分析用户提供的图片。应用会执行你输出的创作动作；你自身不运行命令、不编辑文件、不调用外部应用。未指定格式时使用中文回答。"
     };
+    let base = format!("{}\n{}", base, request.system.as_deref().unwrap_or(""));
     let started = server.call("thread/start", json!({"cwd":dir,"modelProvider":"openai","sandbox":if task {"workspace-write"} else {"read-only"},"approvalPolicy":"never","baseInstructions":base,"config":{"features.shell_tool":task,"features.unified_exec":task,"features.image_generation":false}}))?;
     let thread = started["thread"]["id"].as_str().ok_or("Codex 未返回会话编号")?.to_owned();
     // 每次构造独立会话，权限不随历史对话或用户切换文件夹继承。
-    let transcript = request.messages.iter().map(|m| format!("{}：\n{}", if m.role == "user" {"用户"} else {"助手"}, m.text)).collect::<Vec<_>>().join("\n\n");
+    let mut input = Vec::new();
+    let mut image_count = 0;
+    for m in &request.messages {
+        input.push(json!({"type":"text","text":format!("{}：\n{}", if m.role == "user" {"用户"} else {"助手"}, m.text)}));
+        for image in &m.images {
+            image_count += 1;
+            if image_count > 32 || image.len() > 15_000_000 || !image.starts_with("data:image/") { return Err("对话图片过多或格式不正确，请缩减参考图".into()); }
+            input.push(json!({"type":"image","url":image}));
+        }
+    }
     server.seq += 1;
     let start_id = server.seq;
-    server.write(json!({"id":start_id,"method":"turn/start","params":{"threadId":thread,"cwd":dir,"approvalPolicy":"never","sandboxPolicy":text_sandbox(task,dir),"input":[{"type":"text","text":transcript}]}}))?;
+    server.write(json!({"id":start_id,"method":"turn/start","params":{"threadId":thread,"cwd":dir,"approvalPolicy":"never","sandboxPolicy":text_sandbox(task,dir),"input":input}}))?;
     event(TextEvent { stage:Some(if task {"正在执行项目任务"} else {"正在回复"}.into()), delta:None });
     let mut finals = Vec::new();
     let mut streamed = String::new();

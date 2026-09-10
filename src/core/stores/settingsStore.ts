@@ -86,7 +86,7 @@ async function decryptKeysFromDisk(s: Settings): Promise<Settings> {
 const LOCAL_GGUF_PROVIDER_ID = "local-gguf";
 
 function injectLocalGgufProviders(providers: ProviderCard[]): ProviderCard[] {
-  providers = [...providers.filter(p => p.id !== "codex-membership"), {id:"codex-membership",name:"Codex 会员 · 本机桥接",baseUrl:"",apiKey:"",models:{image:{protocol:"codex",models:["codex-image"]}}}];
+  providers = [...providers.filter(p => p.id !== "codex-membership"), {id:"codex-membership",name:"Codex 会员 · 本机桥接",baseUrl:"",apiKey:"",models:{chat:{protocol:"codex",models:["codex-chat"]},image:{protocol:"codex",models:["codex-image"]}}}];
   const localModels = useLocalGguf.getState().models;
   if (!localModels.length) return providers;
   const chatModels = localModels.map((m) => m.name);
@@ -289,6 +289,7 @@ function fixDefaults(cfg: ModelsCfg): ModelsCfg {
   const defaults = { ...cfg.defaults };
   for (const role of ROLES) {
     const { pid, model } = splitModelKey(defaults[role]);
+    if (role === "chat" && pid === "codex-membership") { defaults[role] = "codex-membership::codex-chat"; continue; }
     if (role === "image" && pid === "codex-membership") { defaults[role] = "codex-membership::codex-image"; continue; }
     const p = cfg.providers.find((x) => x.id === pid && x.models[role]?.models.length);
     if (p) {

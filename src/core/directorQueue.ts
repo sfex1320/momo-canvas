@@ -33,6 +33,7 @@ import { generateImage } from "./services/imageGen";
 import { generateVideo } from "./services/videoGen";
 import { runComfyTemplate, analyzeCapsV3, isImageLoaderClass, isVideoLoaderClass, freeComfyMemory, freeResultText, interruptComfy, defaultParamValues } from "./services/comfy";
 import { compilePrompt, compileNegative, segmentShotContexts } from "./directorPrompt";
+import { authoredText, shouldRelay } from "./studio/authoring";
 import { directorError, createTake, isH3ReadyPrompt, isOfficialH3Prompt, mpToSize } from "./directorEngine";
 import {isOfficialH3BasePrompt} from "./studio/h3AuthoringCore";
 import { constrainPictureCapacity, refsNoteFromSnapshot, resolveSlotMedia, rewriteOmittedSpatialPictureRefs, type ResolvedMedia } from "./directorRefs";
@@ -364,10 +365,10 @@ export function compileSegmentPrompt(
   }
   const ctxs = segmentShotContexts(project, segment);
   // 导演台 2.0（§13.1）：编译片段内全部 Shot（多镜头逐时段），角色按本段出场过滤（segmentShotContexts 内完成）
-  let prompt = segment.promptOverride ?? (ctxs.length ? compilePrompt(ctxs, target) : segment.summary);
+  let prompt = segment.promptOverride ?? (segment.characterIds !== undefined ? authoredText(project, segment) : ctxs.length ? compilePrompt(ctxs, target) : segment.summary);
   // 全局风格锚定：编译路径的 compilePrompt 已消费 ruleSet.positive.style；promptOverride（H3 成品/直录）路径这里补拼
   const gStyle = project.ruleSet?.positive.style?.trim();
-  if (segment.promptOverride && gStyle) prompt = `${gStyle}\n\n${prompt}`;
+  if ((segment.promptOverride || segment.characterIds !== undefined) && gStyle) prompt = `${gStyle}\n\n${prompt}`;
   const snapshots: SkillRunSnapshot[] = [];
   const recipe = resolveRecipe(project, segment);
   // 3.3 §7（阶段化硬规则）：**Skill instructions 原文一律不进最终提示词**——
@@ -946,7 +947,6 @@ export async function runBatch(
   if(signal?.aborted)stopOwnedBatch();
   let aborted = false;
   // 空间接力：每个任务只读取故事顺序中紧邻的上一段，绝不把「所选/缺失」列表中非相邻任务串接。
-  const relayOn = !!project.tailFrameRelay;
   const storyOrder = project.scenes.flatMap((s) => s.segments).map((s) => s.id);
   for (let i = 0; i < tasks.length; i++) {
     if (batchAbort?.signal.aborted) { aborted = true; break; }
@@ -974,7 +974,7 @@ export async function runBatch(
     if (!curSeg) continue;
     let relayFrame: string | undefined;
     const continuityMode = segmentContinuityMode(curSeg);
-    const relayAllowed = relayOn && continuityMode === "continuity_relay";
+    const relayAllowed = shouldRelay(curProj, curSeg) && (curSeg.relayMode !== undefined || continuityMode === "continuity_relay");
     if (!relayAllowed && (curSeg.slots ?? []).some((s) => s.relayKind || /自动接力/.test(s.label ?? ""))) {
       // 开篇和硬切换场必须清掉历史接力槽，防止上一次运行留下的图片/视频继续污染新空间。
       clearRelaySlots(projectId, curSeg.id);

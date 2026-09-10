@@ -54,6 +54,7 @@ export type ObjectIndex = {
 
 /** 片段出场角色：摘要/对白/镜头文案里按名字命中（编译链同源；名字太短防误报） */
 export function charactersInSegment(project: DirectorProject, seg: DirectorSegment): DirectorCharacter[] {
+  if (seg.characterIds) return project.characters.filter(c => seg.characterIds!.includes(c.id));
   const hay = [seg.summary, ...seg.dialogue, seg.continuityIn ?? "", seg.continuityOut ?? "", seg.promptOverride ?? "", seg.promptFinalOverride ?? ""]
     .join("\n");
   return (project.characters ?? []).filter((c) => c.name.trim().length >= 2 && hay.includes(c.name));

@@ -9,7 +9,7 @@ export function projectDisplayName(p: DirectorProject): string {
 }
 export function projectHasContent(p: DirectorProject): boolean {
   return Boolean(
-    p.script.trim() || p.scenes.length || p.characters.length || p.scripts?.length || p.mvProjects?.length ||
+    p.script.trim() || p.scenes.length || p.characters.length || p.assetDefinitions?.length || p.scripts?.length || p.mvProjects?.length ||
     p.timeline.length || p.globalSlots.length || p.workspace || p.recipes.length ||
     Object.keys(p.imageStudio ?? {}).length || p.audioTracks?.length || p.postTimeline?.titleCards.length ||
     p.postTimeline?.subtitles.length || Object.keys(p.postTimeline?.clipOverrides ?? {}).length ||

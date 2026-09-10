@@ -252,6 +252,16 @@ async function streamGemini(card: ModelCard, msgs: ChatMsg[], opts: StreamOpts):
 
 /* ---------------- 统一入口 ---------------- */
 export async function chatStream(card: ModelCard, msgs: ChatMsg[], opts: StreamOpts = {}): Promise<StreamResult> {
+  if (card.protocol === "codex") {
+    const { codexText } = await import("../codexBridge");
+    const messages = await Promise.all(msgs.map(async m => ({ ...m, images: m.images?.length ? await Promise.all(m.images.map(shrinkForVision)) : undefined })));
+    let full = "";
+    const result = await codexText({ mode: "chat", system: opts.system, messages }, opts.signal ?? new AbortController().signal, event => {
+      if (event.delta) { full += event.delta; opts.onText?.(full, event.delta); }
+    });
+    if (result.text !== full) opts.onText?.(result.text, "");
+    return { text: result.text, reasoning: "" };
+  }
   // 本地 GGUF：对话前确保 llama-server 已运行，动态注入 baseUrl（OpenAI 兼容协议走 streamOpenAI）
   if (isLocalGgufCard(card) || card.protocol === "llamacpp") {
     const baseUrl = await ensureRunningFromCard(card);

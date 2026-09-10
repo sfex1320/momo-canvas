@@ -280,6 +280,7 @@ export function appearingCharacters(
   segment: DirectorSegment,
 ): DirectorCharacter[] {
   const all = project.characters ?? [];
+  if (segment.characterIds) return all.filter(c => segment.characterIds!.includes(c.id));
   if (!all.length) return [];
   const text = [
     segment.summary,
