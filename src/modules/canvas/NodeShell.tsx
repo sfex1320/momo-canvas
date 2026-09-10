@@ -1,3 +1,4 @@
+import { compactError } from "../../core/errorText";
 /**
  * 节点外壳：统一卡片、端口、上游传入提示。
  * 节点本体保持干净：头部只有「图标 + 名称」；所有操作按钮（含各节点 headExtra 注入的动作）
@@ -238,7 +239,7 @@ export function NodeShell({  id,
         )}
       </div>
       {children}
-      {status === "error" && error ? <div className="mnode-err nodrag nowheel">{error}</div> : null}
+      {status === "error" && error ? <div className="mnode-err nodrag nowheel">{compactError(error)}</div> : null}
     </div>
   );
 }

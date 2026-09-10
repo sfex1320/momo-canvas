@@ -1,0 +1,45 @@
+import {normalizeImageResult} from "../../src/core/services/imageResult";
+import {compactError} from "../../src/core/errorText";
+import {generateImage} from "../../src/core/services/imageGen";
+import {useSettings,resolveModelCard} from "../../src/core/stores/settingsStore";
+import {useGenPref} from "../../src/core/stores/genPrefStore";
+import {useBoard} from "../../src/core/stores/boardStore";
+import {useAgent} from "../../src/core/stores/agentStore";
+import {genImageOnCanvas} from "../../src/core/agentEngine";
+if(location.hostname!=="[::1]"||location.port!=="1441")throw Error("仅限独立验收来源");
+const result=document.getElementById("result")!;
+const checks:string[]=[];
+function check(name:string,pass:boolean){if(!pass)throw Error(name);checks.push(name);result.textContent=checks.join("\n");}
+const png="iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl6lQAAAABJRU5ErkJggg==";
+const data=`data:image/png;base64,${png}`;
+const base="https://qa.invalid";
+const realFetch=window.fetch;
+const calls:string[]=[];
+window.fetch=async(input,init)=>{const url=String(input);calls.push(url);if(url===`${base}/generate`)return new Response(JSON.stringify({result_b64:[png]}),{status:200,headers:{"Content-Type":"application/json"}});throw Error("验收拦截了错误路由或多余下载");};
+try{
+  check("裸 PNG 不拼成下载网址",normalizeImageResult(png,base)===data);
+  check("JPEG、Data URL 与相对地址分别处理",normalizeImageResult("/9j/"+"A".repeat(240),base).startsWith("data:image/jpeg;")&&normalizeImageResult(data,base)===data&&normalizeImageResult("/files/a.png",base)===base+"/files/a.png"&&normalizeImageResult("//cdn.example/a.png",base)==="https://cdn.example/a.png");
+  const huge=`builder error for url (${base}/${"iVBORw0KGgo"+"A".repeat(6_500_000)})`;
+  const short=compactError(huge);
+  check("650 万字错误压缩且幂等",short.length<1100&&compactError(short)===short&&short.includes("已省略超长编码"));
+  const s=useSettings.getState().settings;
+  useSettings.setState({settings:{...s,models:{providers:[],defaults:{image:"codex-membership::codex-image"}}}});
+  check("Codex 默认解析走本机桥接",resolveModelCard("image").protocol==="codex");
+  const provider={id:"qa-default",name:"验收模型",baseUrl:base,apiKey:"",models:{image:{protocol:"custom:qa",models:["image-qa"]}}};
+  useSettings.setState({settings:{...s,models:{providers:[provider],defaults:{image:"qa-default::image-qa"}},customProtocols:[{id:"qa",name:"验收协议",role:"image",submit:{url:"{{baseUrl}}/generate",method:"POST",body:'{"prompt":"{{prompt}}"}'},resultPath:"result_urls[]"}]}});
+  check("自定义协议裸编码直接返回图片",(await generateImage(resolveModelCard("image"),{prompt:"人工验收纯色块"}))[0]===data&&calls.length===1);
+  useGenPref.setState({loaded:true,prefs:{imageGen:{modelId:"qa-old::old-image"}},activeId:{}});
+  useAgent.setState({imageModelId:undefined});
+  genImageOnCanvas("人工验收纯色块");
+  const node=useBoard.getState().nodes.find(n=>n.type==="imageGen")!;
+  check("助手默认覆盖旧节点模型记忆",node.data.modelId===undefined);
+  for(let i=0;i<100&&useBoard.getState().nodes.find(n=>n.id===node.id)?.data.status!=="done";i++)await new Promise(r=>setTimeout(r,50));
+  const completed=useBoard.getState().nodes.find(n=>n.id===node.id)!;
+  check("助手到画布生成成功且无多余网络请求",completed.data.status==="done"&&calls.length===2);
+  useBoard.getState().updateData(node.id,{error:huge,status:"error"},{result:true});
+  check("运行错误写入时受限",String(useBoard.getState().nodes.find(n=>n.id===node.id)!.data.error).length<1100);
+  useBoard.setState(st=>({nodes:st.nodes.map(n=>({...n,data:{...n.data,error:huge}}))}));
+  useBoard.getState().compactErrors();
+  check("历史错误清理保留图像与节点",useBoard.getState().nodes.length===1&&String(useBoard.getState().nodes[0].data.error).length<1100&&!!useBoard.getState().nodes[0].data.results);
+  result.textContent=`${checks.length} 项通过\n`+checks.join("\n");
+}catch(e){result.textContent=`验收失败：${String(e)}\n`+checks.join("\n");throw e;}finally{window.fetch=realFetch;}

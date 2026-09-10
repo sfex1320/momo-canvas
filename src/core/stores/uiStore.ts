@@ -1,3 +1,4 @@
+import { compactError } from "../errorText";
 import { create } from "zustand";
 import { uid } from "../utils";
 import { humanizeError } from "../errorHelp";
@@ -298,6 +299,7 @@ export const useUi = create<UiState>((set) => ({
     set((s) => ({ gallery: [{ ...item, id: uid(), time: Date.now() }, ...s.gallery].slice(0, 200) })),
 
   toast: (msg, type = "info") => {
+    msg = compactError(msg);
     const id = uid(6);
     set((s) => ({ toasts: [...s.toasts, { id, msg, type }] }));
     setTimeout(() => {
@@ -307,6 +309,7 @@ export const useUi = create<UiState>((set) => ({
   },
 
   pushError: (source, message) => {
+    message = compactError(message);
     // 常见英文/网络报错先翻译成中文；原文保留在报错中心供排查
     const tip = humanizeError(message);
     const full = tip ? `${tip}\n—— 原始报错：${message}` : message;

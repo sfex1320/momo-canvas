@@ -1,3 +1,4 @@
+import { compactError } from "./errorText";
 import { nanoid } from "nanoid";
 
 export const uid = (n = 10) => nanoid(n);
@@ -191,8 +192,7 @@ export function matchHotkey(e: KeyboardEvent, combo: string): boolean {
 }
 
 export function errMsg(e: unknown): string {
-  if (e instanceof Error) return e.message;
-  return String(e);
+  return compactError(e instanceof Error ? e.message : String(e));
 }
 
 /**

@@ -54,7 +54,7 @@ export function ModelPicker({
   const options: PopOption[] = [
     {
       value: "",
-      label: "默认",
+      label: defEntry ? `默认 · ${defEntry.model}` : "默认",
       desc: defEntry ? `跟随角色默认 · ${defEntry.provider} ${defEntry.model}` : "尚未配置模型",
       icon: <IcSparkles size={16} />,
     },

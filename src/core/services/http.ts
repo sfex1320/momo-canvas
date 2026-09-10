@@ -8,7 +8,7 @@
  * 挂一个"永不命中"的显式代理并把目标主机放进 noProxy：reqwest 见到显式代理就
  * 禁用系统代理，noProxy 又命中目标主机，实际效果 = 直连。
  */
-import { isTauri } from "../utils.ts";
+import { isTauri, errMsg } from "../utils.ts";
 import { redactSecrets, sanitizeBody, shouldSkipLog, useRunLog } from "../stores/logStore.ts";
 
 let tauriFetch: typeof fetch | null = null;
@@ -51,7 +51,7 @@ function report(
     const rawUrl = String(input);
     if (shouldSkipLog(rawUrl)) return;
     // Gemini 等协议把 key 放 query：日志里的 url 必须先脱敏
-    const url = redactSecrets(rawUrl);
+    const url = redactSecrets(rawUrl.slice(0,8192));
     const entry = {
       ts: Date.now(),
       method: (init?.method ?? "GET").toUpperCase(),
@@ -60,7 +60,7 @@ function report(
       ok: resp?.ok,
       durMs: Math.round(performance.now() - started),
       reqBody: bodyForLog(init?.body),
-      error: err ? (err instanceof Error ? err.message : String(err)) : undefined,
+      error: err ? errMsg(err) : undefined,
     };
     if (resp) {
       void respForLog(resp).then((respBody) => useRunLog.getState().push({ ...entry, respBody }));

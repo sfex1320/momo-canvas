@@ -4,6 +4,7 @@
  */
 import type { CustomProtocol } from "../types";
 import { xfetch } from "./http";
+import { normalizeImageResult } from "./imageResult";
 
 const sleep = (ms: number, signal?: AbortSignal) =>
   new Promise<void>((res, rej) => {
@@ -190,7 +191,15 @@ export function extractResultStrings(final: any, primary: string, kind: "image" 
   if (final && typeof final === "object" && typeof final.__binary === "string") return [final.__binary];
   const tryPath = (p: string) =>
     jsonPath(final, p)
-      .map((v) => (typeof v === "string" ? v : ""))
+      .map((v) => {
+        if (typeof v !== "string") return "";
+        // 字段已明确声明为编码，不把未知图片格式的 Base64 当成相对路径。
+        if (kind === "image" && /b64|base64/i.test(p) && !/^(data:|https?:|blob:)/i.test(v.trim())) {
+          const image = normalizeImageResult(v, "");
+          return image.startsWith("data:") ? image : `data:image/png;base64,${v.replace(/\s/g, "")}`;
+        }
+        return v;
+      })
       .filter((s) => s.length > 4);
   const hit = tryPath(primary);
   if (hit.length) return hit;

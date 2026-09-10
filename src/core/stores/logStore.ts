@@ -1,3 +1,4 @@
+import { compactError } from "../errorText";
 /**
  * 运行日志：每一次对外网络请求的请求体/响应体/耗时/状态。
  *  - http.ts 的 xfetch 自动上报（脱敏：不存鉴权头；请求/响应体截断，base64 折叠）
@@ -33,6 +34,7 @@ type LogState = {
   init: () => Promise<void>;
   push: (e: Omit<RunLogEntry, "id" | "count">) => void;
   clear: () => void;
+  compactErrors: () => void;
 };
 
 let initOnce: Promise<void> | null = null;
@@ -54,7 +56,8 @@ export const useRunLog = create<LogState>((set, get) => ({
       // 历史日志补洗一遍：老版本的 url/请求体没做密钥脱敏，磁盘上可能已有明文
       const washed = (saved ?? []).map((x) => ({
         ...x,
-        url: redactSecrets(x.url),
+        url: compactError(redactSecrets(x.url.slice(0,8192))),
+        error: x.error ? compactError(x.error) : x.error,
         reqBody: x.reqBody ? redactSecrets(x.reqBody) : x.reqBody,
         respBody: x.respBody ? redactSecrets(x.respBody) : x.respBody,
       }));
@@ -63,6 +66,7 @@ export const useRunLog = create<LogState>((set, get) => ({
     })()),
 
   push: (e) => {
+    e = { ...e, url: compactError(e.url), error: e.error ? compactError(e.error) : e.error };
     const list = get().entries;
     const head = list[0];
     // 轮询合并：紧邻的同方法同 URL 同状态 → 累计次数、刷新时间与响应
@@ -78,6 +82,10 @@ export const useRunLog = create<LogState>((set, get) => ({
     scheduleSave(next);
   },
 
+  compactErrors: () => {
+    const entries = get().entries.map(e => ({...e,url:compactError(e.url),error:e.error?compactError(e.error):e.error}));
+    if (entries.some((e,i) => e.url!==get().entries[i].url || e.error!==get().entries[i].error)) {set({entries});scheduleSave(entries);}
+  },
   clear: () => {
     set({ entries: [] });
     void saveJSON("runlogs.json", "v1", []);

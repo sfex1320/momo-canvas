@@ -1,3 +1,4 @@
+import { normalizeImageResult } from "./imageResult";
 /**
  * 绘画模型服务 — 多协议适配，返回统一为 dataURL 列表
  *  - openai  文生图 /images/generations；带参考图 /images/edits（multipart）
@@ -5,7 +6,7 @@
  */
 import type { CustomProtocol, ModelCard } from "../types";
 import { xfetch, trimBase, readErrorBody } from "./http";
-import { absolutize, extractResultStrings, resolveCustomProto, runCustomFlow, render } from "./customProto";
+import { extractResultStrings, resolveCustomProto, runCustomFlow, render } from "./customProto";
 import { dataUrlToBlob, toDataUrl } from "../utils";
 import { gptSize, grsaiGptRoute } from "../modelMeta";
 
@@ -245,7 +246,7 @@ async function genCustom(card: ModelCard, req: ImageGenReq): Promise<string[]> {
     const base = trimBase(card.baseUrl);
     // 相对地址（/files/xx.png）与协议相对地址（//cdn.xx/xx.png）先补成绝对地址，
     // 否则明明取到了结果却被逐条丢弃，报错还会把排查方向引到"resultPath 写错了"
-    const raw = extractResultStrings(final, p.resultPath, "image").map((s) => absolutize(s, base));
+    const raw = extractResultStrings(final, p.resultPath, "image").map((s) => normalizeImageResult(s, base));
     const out: string[] = [];
     const skipped: string[] = [];
     for (const r of raw) {

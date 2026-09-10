@@ -1,3 +1,4 @@
+import { compactError } from "../errorText";
 import { create } from "zustand";
 import {
   applyNodeChanges,
@@ -231,6 +232,7 @@ type PersistShape = {
 type Snapshot = { nodes: AppNode[]; edges: Edge[] };
 
 type BoardState = {
+  compactErrors: () => void;
   loaded: boolean;
   boards: Record<string, BoardRecord>;
   order: string[];
@@ -345,6 +347,7 @@ function sanitizeNodes(nodes: AppNode[], markInterrupted = true): { nodes: AppNo
     if (REMOVED_KINDS.has(n.type as string)) continue;
     let type = n.type;
     let d = { ...(n.data as Record<string, unknown>) };
+    if (typeof d.error === "string") d.error = compactError(d.error);
     // 反推描述已并入文本处理：mode → op（节点 id 不变，连线保留）
     if (type === ("caption" as string)) {
       type = "llmText" as typeof type;
@@ -696,6 +699,24 @@ export const useBoard = create<BoardState>((set, get) => {
     edges: [],
     canUndo: false,
     canRedo: false,
+
+    compactErrors: () => {
+      let changed = false;
+      const clean = (nodes: AppNode[]) => nodes.map(n => {
+        if (typeof n.data.error !== "string") return n;
+        const error = compactError(n.data.error);
+        if (error === n.data.error) return n;
+        changed = true;
+        return { ...n, data: { ...n.data, error } };
+      });
+      const state = get();
+      const nodes = clean(state.nodes);
+      const boards = Object.fromEntries(Object.entries(state.boards).map(([id,b]) => [id,{...b,nodes:clean(b.nodes)}]));
+      const archived = Object.fromEntries(Object.entries(state.archived).map(([id,b]) => [id,{...b,nodes:clean(b.nodes)}]));
+      past = past.map(s => ({...s,nodes:clean(s.nodes)}));
+      future = future.map(s => ({...s,nodes:clean(s.nodes)}));
+      if (changed) { set({nodes,boards,archived}); persist(); }
+    },
 
     // StrictMode 下 App 会挂载两次：init 必须单例，否则并发创建两个画布互相覆盖
     init: () =>
@@ -1275,6 +1296,7 @@ export const useBoard = create<BoardState>((set, get) => {
     },
 
     updateData: (id, patch, opts) => {
+      if (typeof patch.error === "string") patch = { ...patch, error: compactError(patch.error) };
       // commit:true = 用户主动编辑（提示词文本等），入历史栈可撤销；运行结果等程序化写入默认不入
       if (opts?.commit) snapshotSoft();
       // rev：脏标记计数器。result=true（runner 写回 status/results/progress/inputSig 等）不增；

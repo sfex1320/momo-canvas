@@ -53,6 +53,8 @@ src-tauri/              Rust 壳：插件配置（dialog/fs/http/store/opener + 
 
 ### 模型配置（改动设置结构必看）
 
+- 创作助手创建生成节点时，`modelId` 必须显式写入（包括 `undefined` 跟随默认），覆盖 `genPrefFor` 的旧模型记忆。不能用条件展开省略该字段，否则“默认 Codex”会意外请求旧中转站。自定义生图结果先用 `normalizeImageResult` 识别裸 Base64，再解析相对 URL；错误统一经 `compactError` 限长，禁止把图像编码写进错误状态或日志。
+
 - `ProviderCard`（服务商卡片）：一个 Base URL + API Key，含 **chat / image / video / audio / asr 五个** `RoleSlot`，每槽 `models: string[]` 多模型。
 - 节点/默认选模用复合键 **`providerId::model`**（`modelKey` / `splitModelKey`），旧数据可能只有 providerId。
 - 服务层只消费扁平化的 `ModelCard`，入口是 `resolveModelCard(role, key?)`：节点指定 > 角色默认 > 第一家可用，无可用时抛中文提示。

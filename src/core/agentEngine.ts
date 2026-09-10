@@ -980,7 +980,8 @@ export function genImageOnCanvas(prompt: string) {
   }
   const id = b.addNode("imageGen", canvasCenterPos(-165, -120), {
     prompt: p,
-    ...(imageModelId ? { modelId: imageModelId } : {}),
+    // 显式覆盖节点参数记忆；undefined 表示跟随角色默认，不能继承旧中转站。
+    modelId: imageModelId,
     ...sizing,
   });
   // 生成完面板会跟着新节点选中弹出，符合「直接去画布看结果」的动线
