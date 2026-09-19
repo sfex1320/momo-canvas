@@ -2,7 +2,7 @@
 // 包含：① 安装包（msi/nsis，连带 .sig）  ② 便携版目录（release 主 exe + models/ 内嵌模型 + portable.txt 标记）
 //       ③ 便携版 zip（内部扁平：exe/models 在压缩包根，解压即用；应用内便携更新 Expand-Archive
 //          直接解到程序目录覆盖，套外层文件夹会把更新解成双层目录导致替换失败，务必保持扁平）
-//       ④ latest.json（读 .sig 组装应用内更新清单）  ⑤ 构建说明.md（逐文件中文备注，变更摘自 CHANGELOG）
+//       ④ latest.json（读 .sig 组装应用内更新清单）  ⑤ BUILD-NOTES.md（逐文件中文备注，变更摘自 CHANGELOG）
 // 背景：Tauri 2 不支持自定义 bundle 输出目录，也不提供官方 portable target；
 //       便携版 = 内嵌前端资源的 release 主 exe，依赖系统 WebView2，拷走即用。
 //       超清模型经 tauri.conf.json bundle.resources 内嵌（NSIS 释放到 exe 同级 models/）；
@@ -79,9 +79,9 @@ const portableExes = readdirSync(releaseDir)
 
 // 便携版目录名带版本号，与 zip 名对齐（APP/ 内一眼可辨）
 const portableDir = join(appDir, `${productName}_${version}_portable`)
-// 生产模型清单（顶层声明：便携段拷贝与构建说明.md 的逐文件备注都要用）
+// 生产模型清单（顶层声明：便携段拷贝与BUILD-NOTES.md 的逐文件备注都要用）
 const modelManifest = JSON.parse(readFileSync(join(rootDir, 'scripts', 'production-models.json'), 'utf8'))
-// 超清模型逐个的中文备注（构建说明.md 用；按文件名前缀匹配）
+// 超清模型逐个的中文备注（BUILD-NOTES.md 用；按文件名前缀匹配）
 const MODEL_NOTES = [
   ['4xNomosWebPhoto_esrgan', '超清放大·照片模型（ESRGAN 架构 4 倍，质量取向，速度较慢）'],
   ['4xNomosWebPhoto_RealPLKSR', '超清放大·照片模型（RealPLKSR 架构 4 倍，质量速度均衡，默认首选）'],
@@ -191,9 +191,9 @@ if (msiSig && nsisSig && msiEntry && nsisEntry) {
   console.warn('[收集] 警告：缺少 .sig 签名（tauri.conf.json createUpdaterArtifacts 未生效？），跳过 latest.json')
 }
 
-// ⑤ 构建说明.md：逐文件中文备注 + 本版变更（摘自 CHANGELOG，避免两处手工同步）
-writeFileSync(join(appDir, '构建说明.md'), buildReadme(), 'utf8')
-console.log('[收集] 构建说明.md（含逐文件中文备注）')
+// ⑤ BUILD-NOTES.md：逐文件中文备注 + 本版变更（摘自 CHANGELOG，避免两处手工同步）
+writeFileSync(join(appDir, 'BUILD-NOTES.md'), buildReadme(), 'utf8')
+console.log('[收集] BUILD-NOTES.md（含逐文件中文备注）')
 const checksumFiles = listFiles(appDir).filter(({ rel }) => !rel.startsWith(`${productName}_${version}_portable`))
 writeFileSync(join(appDir, 'SHA256SUMS.txt'), checksumFiles.map(({ src, rel }) =>
   `${createHash('sha256').update(readFileSync(src)).digest('hex')}  ${rel.split(/[\\/]/).pop()}`
@@ -208,7 +208,7 @@ function changelogSection(ver) {
   return ''
 }
 
-/** 组装构建说明.md */
+/** 组装BUILD-NOTES.md */
 function buildReadme() {
   const now = new Date()
   const pad = n => String(n).padStart(2, '0')
