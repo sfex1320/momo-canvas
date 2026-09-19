@@ -34,11 +34,11 @@ export function AppearanceTab() {
             <div className="tc-name"><IcMoon size={16} /> 深空蓝 · 深色主题</div>
           </div>
           <div className={`theme-card ${theme === "black" ? "on" : ""}`} onClick={() => update("theme", "black")}>
-            <div className="tc-preview" style={{ background: "#0d0e15" }}>
-              <div style={{ position: "absolute", inset: "12px auto auto 12px", width: 90, height: 28, borderRadius: 8, background: "#1a1c26", border: "1px solid rgba(255,255,255,.08)" }} />
-              <div style={{ position: "absolute", inset: "50px auto auto 34px", width: 110, height: 30, borderRadius: 8, background: "linear-gradient(135deg,#ff7a45,#ffc857)" }} />
+            <div className="tc-preview" data-theme="black" style={{ background: "var(--bg-app)" }}>
+              <div style={{ position: "absolute", inset: "12px auto auto 12px", width: 90, height: 28, borderRadius: 8, background: "var(--panel)", border: "1px solid var(--border)" }} />
+              <div style={{ position: "absolute", inset: "50px auto auto 34px", width: 110, height: 30, borderRadius: 8, background: "var(--grad-brand)" }} />
             </div>
-            <div className="tc-name"><IcBlack size={16} /> 深邃黑 · 暖橙强调</div>
+            <div className="tc-name"><IcBlack size={16} /> 深邃黑 · 石墨灰白</div>
           </div>
         </div>
       </div>
@@ -55,6 +55,7 @@ export function AppearanceTab() {
           </div>
         </Row>
       </div>
+
     </div>
   );
 }

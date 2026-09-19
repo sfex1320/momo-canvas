@@ -6,7 +6,7 @@ import { CodexBridgeCard } from "../CodexBridgeCard";
 import { ModelCatalogTools } from "../ModelCatalogTools";
 import { fetchProviderCatalog } from "../../../core/modelCatalog";
 import { createPortal } from "react-dom";
-import { Field, Row } from "../../../ui/kit";
+import { Field, Row, Switch } from "../../../ui/kit";
 import { PopSelect } from "../../../ui/PopSelect";
 import { ModelPicker } from "../../../ui/ModelPicker";
 import { flattenCard, modelKey, splitModelKey, useSettings } from "../../../core/stores/settingsStore";
@@ -92,6 +92,7 @@ function PresetCard({ p, onPick }: { p: ProviderPreset; onPick: (p: ProviderPres
 }
 
 export function ModelsTab() {
+  const grouped=useSettings(s=>s.settings.modelPickerMode==="provider");
   const models = useSettings((s) => s.settings.models);
   const upsertProvider = useSettings((s) => s.upsertProvider);
   const removeProvider = useSettings((s) => s.removeProvider);
@@ -207,6 +208,11 @@ export function ModelsTab() {
       <CodexBridgeCard />
       <ModelCatalogTools />
       {testPrice && <p className="set-card" style={{ whiteSpace: "pre-wrap" }} role="status">{testPrice}</p>}
+      <div className="set-card">
+        <div className="set-card-h">模型列表切换模式</div>
+        <Row><Switch on={grouped} onChange={v=>useSettings.getState().update("modelPickerMode",v?"provider":"flat")}/><span>按中转站合并模型</span></Row>
+        <div className="set-hint" style={{marginTop:8}}>关闭时平铺全部模型；开启后先显示中转站，悬停或点击展开侧边模型列表。所有模型选择器同步切换。</div>
+      </div>
       <div className="set-card">
         <div className="set-card-h">
           默认模型

@@ -39,6 +39,9 @@ import { EnhanceConfigPanel, VectorizeConfigPanel } from "./EditPanels";
 import { isVoiceCallActive, startVoiceCall, stopVoiceCall } from "../../core/voiceChat";
 import type { AppNode, BoardTemplate, GroupData, NodeKind } from "../../core/types";
 import { errMsg, fileToDataUrl, matchHotkey } from "../../core/utils";
+import { shouldIgnoreCanvasHotkey } from "../../core/hotkeys";
+import { launchComfy, useComfyRuntime } from "../../core/comfyRuntime";
+import { useComfy } from "../../core/stores/comfyStore";
 import { NODE_CATALOG } from "./nodeCatalog";
 import { FlowEdge } from "./FlowEdge";
 import { AddNodeMenu } from "./AddNodeMenu";
@@ -46,7 +49,8 @@ import { CanvasSearch, Spotlight } from "./CanvasPalette";
 import { AiWirePanel } from "./AiWirePanel";
 import { SysMonitor } from "./SysMonitor";
 import { RUNNABLE_KINDS, runAllFlows, runFlow, runTailSequence } from "../../core/runner";
-import { nodeMainImage } from "../../core/nodeEdit";
+import { nodeMainImage, canvasReferenceImages } from "../../core/nodeImages";
+import { useAgent } from "../../core/stores/agentStore";
 import { layerGroupForExport } from "../../core/elementSplit";
 import { exportLayeredPsd, exportLayeredTiff } from "../../core/layering";
 import { elementComposePrompt } from "../../core/editPrompts";
@@ -78,6 +82,21 @@ import { EnhanceLocalNode } from "./nodes/EnhanceLocalNode";
 import { VectorizeNode } from "./nodes/VectorizeNode";
 import { EcomImageNode } from "./nodes/EcomImageNode";
 import { DirectorNode } from "./nodes/DirectorNode";
+
+/** 拖入、右键和快捷键共用附件入口，组选图与生成结果的解析顺序由 nodeImages 决定。 */
+function sendImagesToAgent(images: string[]) {
+  if (!images.length) {
+    toast("请先选择图片、已有图片结果的节点或图片组", "err");
+    return;
+  }
+  useAgent.getState().addAttachments(images);
+  useUi.getState().setAgentOpen(true);
+  toast("已加入助手参考图，请输入修改要求或问题", "ok");
+}
+
+const hasBlockingPanel = (ui: ReturnType<typeof useUi.getState>) => ui.settingsOpen || ui.templateMgrOpen ||
+  ui.comfySyncOpen || ui.skillMgrOpen || ui.ggufImportOpen || ui.localLlmSetupOpen || !!ui.lightbox ||
+  !!ui.seqPreview || !!ui.layerEditorNodeId || !!ui.planarSheetNodeId || !!ui.mediaEdit || ui.spotlightOpen || ui.searchOpen;
 
 /** 一键清空画布：首次点击进入确认态（2.5 秒内再点执行），入撤销历史可 Ctrl+Z 恢复 */
 function ClearAllBtn() {
@@ -308,7 +327,7 @@ export function SmartCanvas() {
   const hotkeys = useSettings((s) => s.settings.hotkeys);
   const dockShift = galleryOpen && !zen ? 304 : 0;
 
-  const { screenToFlowPosition, getIntersectingNodes, zoomIn, zoomOut, fitView, setViewport: applyViewport } = useReactFlow();
+  const { screenToFlowPosition, getIntersectingNodes, zoomIn, zoomOut, fitView, deleteElements, setViewport: applyViewport } = useReactFlow();
   const activeId = useBoard((s) => s.activeId);
   const [zoomPct, setZoomPct] = useState(100);
   const [largeMinimap,setLargeMinimap]=useState(false);
@@ -500,6 +519,8 @@ export function SmartCanvas() {
       const isIgnored = !!d.ignored;
 
       const items: CmItem[] = [];
+      const assistantImages = canvasReferenceImages(b.nodes, targets);
+      if (assistantImages.length) items.push({ group: "图片", label: "加入创作助手", onClick: () => sendImagesToAgent(assistantImages) });
       if (RUNNABLE.has(kind)) {
         if (isRunning)
           items.push({ group: "运行", label: "停止生成", danger: true, onClick: () => abortNode(node.id) });
@@ -756,7 +777,7 @@ export function SmartCanvas() {
       const el = document.activeElement as HTMLElement | null;
       if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable)) return;
       // 资产库/角色库等弹层打开时不劫持粘贴
-      if (useUi.getState().settingsOpen || useUi.getState().templateMgrOpen || useUi.getState().charLibOpen) return;
+      if (useUi.getState().settingsOpen || useUi.getState().templateMgrOpen) return;
       const center = screenToFlowPosition({ x: window.innerWidth / 2, y: window.innerHeight / 2 });
       const items = Array.from(e.clipboardData?.items ?? []);
       for (const it of items) {
@@ -898,8 +919,10 @@ export function SmartCanvas() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const el = document.activeElement as HTMLElement | null;
-      if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT" || el.isContentEditable))
-        return;
+      const ui = useUi.getState();
+      const overlayOpen = hasBlockingPanel(ui) ||
+        !!document.querySelector('.modal-mask, [role="dialog"], [aria-modal="true"]');
+      if (shouldIgnoreCanvasHotkey(e, el, overlayOpen)) return;
       const hk = useSettings.getState().settings.hotkeys;
       const hit = (a: keyof typeof hk) => matchHotkey(e, hk[a]);
       // 导演台全屏打开时画布快捷键全部让位（监看器有自己的 J/K/L、←→、Space 等，方案 §7.3），
@@ -928,6 +951,10 @@ export function SmartCanvas() {
       } else if (hit("duplicate")) {
         e.preventDefault();
         for (const n of useBoard.getState().nodes.filter((n) => n.selected)) duplicateNode(n.id);
+      } else if (hit("delete")) {
+        e.preventDefault();
+        const board = useBoard.getState();
+        void deleteElements({ nodes: board.nodes.filter(n => n.selected), edges: board.edges.filter(edge => edge.selected) });
       } else if (hit("runAll")) {
         e.preventDefault();
         void runAllFlows();
@@ -972,13 +999,30 @@ export function SmartCanvas() {
         e.preventDefault();
         const u = useUi.getState();
         u.setAgentOpen(!u.agentOpen);
-      } else if (hit("charLib")) {
-        e.preventDefault();
-        const u = useUi.getState();
-        u.setCharLibOpen(!u.charLibOpen);
       } else if (hit("settings")) {
         e.preventDefault();
         useUi.getState().openSettings();
+      } else if (hit("modelSettings")) {
+        e.preventDefault();
+        useUi.getState().openSettings("models");
+      } else if (hit("comfyLaunch")) {
+        e.preventDefault();
+        const runtime = useComfyRuntime.getState();
+        if (!runtime.launching && !runtime.selecting && useComfy.getState().online !== "ok")
+          void launchComfy().catch(error => toast(errMsg(error), "err"));
+      } else if (hit("comfySync")) {
+        e.preventDefault();
+        useUi.getState().setComfySyncOpen(true);
+      } else if (hit("templateManager")) {
+        e.preventDefault();
+        useUi.getState().setTemplateMgr(true);
+      } else if (hit("skillManager")) {
+        e.preventDefault();
+        useUi.getState().setSkillMgrOpen(true);
+      } else if (hit("sendToAgent")) {
+        e.preventDefault();
+        const board = useBoard.getState();
+        sendImagesToAgent(canvasReferenceImages(board.nodes, board.nodes.filter(n => n.selected)));
       } else if (hit("errCenter")) {
         e.preventDefault();
         const u = useUi.getState();
@@ -1014,7 +1058,7 @@ export function SmartCanvas() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [toggleZen, duplicateNode, fitView, zoomIn, zoomOut, undo, redo, toggleTool, groupAction, toggleIgnoreSelected, addAtCenter]);
+  }, [toggleZen, duplicateNode, deleteElements, fitView, zoomIn, zoomOut, undo, redo, toggleTool, groupAction, toggleIgnoreSelected, addAtCenter]);
 
   /* ---- 拖拽事件的指针画布坐标（鼠标/触摸通吃） ---- */
   const dragMouse = useCallback(
@@ -1026,8 +1070,18 @@ export function SmartCanvas() {
   );
 
   /* ---- 拖拽中：预告将要自动连线的两个节点（以鼠标位置命中目标为准） ---- */
+  const assistantDragOrigin = useRef(new Map<string, Pick<AppNode, "position" | "parentId" | "extent">>());
+  const assistantDropTarget = (e: MouseEvent | TouchEvent) => {
+    const panel = document.querySelector<HTMLElement>(".agent-panel");
+    const p = "clientX" in e ? e : (e.touches[0] ?? e.changedTouches[0]);
+    const rect = panel?.getBoundingClientRect();
+    return panel && rect && p && p.clientX >= rect.left && p.clientX <= rect.right && p.clientY >= rect.top && p.clientY <= rect.bottom ? panel : null;
+  };
   const onNodeDrag = useCallback(
     (e: MouseEvent | TouchEvent, node: AppNode) => {
+      const overAssistant = assistantDropTarget(e);
+      document.querySelector(".agent-panel")?.classList.toggle("ag-canvas-drag", !!overAssistant);
+      if (overAssistant) { useUi.getState().setProxHint(null); return; }
       const s = useBoard.getState();
       const pair = findProximityPair(s.nodes, s.edges, node.id, dragMouse(e));
       useUi.getState().setProxHint(pair ? [pair.up.id, pair.down.id] : null);
@@ -1037,7 +1091,21 @@ export function SmartCanvas() {
 
   /* ---- 拖拽结束：鼠标命中/贴近 自动连线 ---- */
   const onNodeDragStop = useCallback(
-    (e: MouseEvent | TouchEvent, node: AppNode) => {
+    (e: MouseEvent | TouchEvent, node: AppNode, draggedNodes: AppNode[]) => {
+      document.querySelector(".agent-panel")?.classList.remove("ag-canvas-drag");
+      if (assistantDropTarget(e)) {
+        const dragged = draggedNodes.length ? draggedNodes : [node];
+        const images = canvasReferenceImages(useBoard.getState().nodes, dragged);
+        // 放进助手是引用操作：把节点恢复原位，不移到侧栏后方，也不触发自动连线。
+        useBoard.getState().onNodesChange(dragged.flatMap(n => {
+          const origin = assistantDragOrigin.current.get(n.id);
+          const current = useBoard.getState().nodes.find(x => x.id === n.id);
+          return origin && current ? [{ id: n.id, type: "replace" as const, item: { ...current, ...origin, dragging: false } }] : [];
+        }));
+        useUi.getState().setProxHint(null);
+        sendImagesToAgent(images);
+        return;
+      }
       proximityConnect(node.id, dragMouse(e));
       useUi.getState().setProxHint(null);
       // 成员拖完后重排所属组（组框按成员新位置自适应）
@@ -1185,6 +1253,7 @@ export function SmartCanvas() {
         onEdgeContextMenu={onEdgeContextMenu}
         onNodeDragStart={(_e, _node) => {
           snapshot();
+          assistantDragOrigin.current = new Map(useBoard.getState().nodes.map(n => [n.id, { position: { ...n.position }, parentId: n.parentId, extent: n.extent }]));
           // 拖动期间不弹生成设置面板（点击节点后才显示）
           useUi.getState().setGenPanelSuppressed(true);
         }}
@@ -1208,7 +1277,7 @@ export function SmartCanvas() {
         selectionMode={SelectionMode.Partial}
         panActivationKeyCode="Space"
         zoomOnDoubleClick={false}
-        deleteKeyCode={hotkeys.delete.includes("+") ? ["Backspace"] : [hotkeys.delete, "Backspace"]}
+        deleteKeyCode={null}
         multiSelectionKeyCode={["Shift", "Control"]}
         onMove={(_, vp) => setZoomPct(Math.round(vp.zoom * 100))}
         onMoveEnd={(_, vp) => {

@@ -15,6 +15,21 @@ MOMO 智能画布：Tauri 2 (Rust 壳) + React 19 + TypeScript + React Flow (@xy
 
 用户已明确排除 Qwen-Image-Layered 及依赖该模型的封装路线，后续不再推荐或集成。目标是整图生成 → 元素识别与人工校准 → 精修蒙版 → 按需逐元素高清重绘 → 原位合成与分层导出。风格文字层当前仍是位图，「改字」是模型重绘，不等于原生字体编辑。图片编辑入口收敛为元素、高清、局部重绘、创意模板及整理工具；实验平面稿收进更多工具。图层组的 layerOutputScale 控制合成/PSD 倍率，默认旧组 1 倍、高清拆解新组 2 倍；layerGeometry/positionedLayer 为预览与 PSD 的统一位置规则。
 
+## 2026-09-12 交互与生成修复基线
+
+- 内置人物预设库弹层与入口已删除，项目人物素材及角色卡保留；旧 `charLib` 快捷键归一化为空。
+- 快捷栏与资产右键发送共用 `sendAsset`，软件启动走 Rust `app_shortcuts`，不再使用 `openPath(asset, program)`。网站链接目前只打开网页并定位素材，不能声称自动上传。
+- ComfyUI 设置、同步中心、顶部启动按钮共用 `comfyRuntime` 与 `useComfy` 状态；目录可读取不代表服务在线，已安装同步桥不等于在线加载。
+- ComfyUI 启动器支持目录自动识别（Rust `comfy_launcher`）：唯一候选直接绑定，多候选共用全局 `ComfyLauncherPicker`，取消保留原配置。识别明确脚本端口时同步共享服务地址；GUI 启动器端口不猜测。只读有界扫描，排除更新/安装脚本和模型目录，手动绑定仍保留。
+- 创作助手图片/视频失败后清确认并结束本次执行，不沿用确认自动重试；助手图片参考冻结为 ImageGenData.referenceImages，画布重试保留输入，不新增参考图副本节点。
+- 2026-09-19 助手恢复一个连续对话入口，不再展示对话/生图/编辑标签；内部按本轮语义选择 reply/image/edit/video，文字和语音同路。编辑直传本轮修改原文与原图，不经过对话扩写/品牌词注入；节点持久化 `imageOperation` 与 `referenceImages`，执行、预检、引用缩略图、输入审阅同源，显式新上游图优先。Codex 编辑强制新图片会话，避免旧生成词污染。模型从统一选择器切换，文件夹任务收进助手更多菜单。回归：`node scripts/test-agent-routing.mjs` 与 `scripts/qa/agent-references.html`。
+- 画布图片/生成结果/放大结果可拖入或右键加入助手；整组展开成员，拖入后原子恢复位置及父组。ComfyUI 依赖检查区分前端备注/虚拟节点与后端节点，递归检查已使用子图，未改动工作流也刷新依赖警告；不要把 MarkdownNote 误报成缺插件。
+- 模型列表 `settings.modelPickerMode` 默认 flat，normalize 加载/导入兜底；设置→模型配置可切 provider。统一 ModelPicker/PopSelect 支持服务商二级菜单、侧向翻转，所有调用入口共享配置。
+- ComfyUI 直启检测便携 Python + main.py，保存 `directRoot`，通过 `comfy_launch_direct` 启动完整服务并写 AppData/comfy-startup.log；同目录旧绘世绑定找到唯一运行环境时自动升级。保持自定义节点开启，不使用 H3 简版的 disable-all-custom-nodes；探活等待最多 5 分钟。安装包依赖与节点兼容性仍以启动日志为准。
+- 电商长图接缝以 `ecomContinuity` 为共享规则；切片 `entryEdge/exitEdge` 两端同步，生成带邻片边缘裁条，缺片不可静默跨过拼接。
+- 资产库普通画布提供“本画布”，导演台提供“本项目”；新资产记录 `boardId`，旧资产以节点证据回退。自动整理仅改变展示分组，保留人工文件夹和标签。
+- 逐项改动、验证及真实能力边界见 `docs/交互与生成链路修复-2026-09-12.md`。
+
 ## 常用命令
 
 ```bash
@@ -175,5 +190,6 @@ src-tauri/              Rust 壳：插件配置（dialog/fs/http/store/opener + 
 
 ## 其他
 
+- 提交署名只使用实际维护者；不添加 Claude 或其他 AI 的共同作者署名。保留已有 Git 历史，不为清理署名改写历史。
 - 包管理器是 **pnpm**。数据/密钥存本机 AppData（`site.jinpengi.momo`），API Key 明文，不要提交任何真实 Key。
 - 产品路线图（未完成事项）维护在 README.md「路线图」一节。

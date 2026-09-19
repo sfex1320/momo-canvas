@@ -9,10 +9,11 @@ import { useEffect, useRef, useState } from "react";
 import { CodexConsole } from "./CodexConsole";
 import { useAgent } from "../../core/stores/agentStore";
 import { generationRefs } from "../../core/agentTurn";
+import { canvasReferenceImages } from "../../core/nodeImages";
 import { useUi } from "../../core/stores/uiStore";
 import { useBoard } from "../../core/stores/boardStore";
 import { useAssets } from "../../core/stores/assetStore";
-import { stopAssistant, answerAgentQuestion, canvasCenterPos, genImageOnCanvas, sendAgentMessage, sendResultToCanvas, sendSideChat } from "../../core/agentEngine";
+import { stopAssistant, answerAgentQuestion, canvasCenterPos, genImageOnCanvas, sendAgentMessage, sendResultToCanvas } from "../../core/agentEngine";
 import { assetToDataUrl, assetUrl } from "../../core/services/assetFiles";
 import { videoDuration } from "../../core/videoEdit";
 import { errMsg, fileToDataUrl } from "../../core/utils";
@@ -47,12 +48,6 @@ import {
 import { toast } from "../../core/stores/uiStore";
 import type { AgentMsg, AgentResult, AgentStep } from "../../core/types";
 import "./agent.css";
-
-const CHAT_SUGGESTIONS = [
-  "帮我把这个想法完善成一段绘画提示词：雨后的森林小径",
-  "图片里的场景换成夜景会是什么效果？帮我写提示词",
-  "给我 3 个「猫咪宇航员」的画面创意",
-];
 
 const AGENT_SUGGESTIONS = [
   "帮我做一张赛博朋克风格的城市夜景海报",
@@ -99,6 +94,10 @@ function StepIcon({ s }: { s: AgentStep }) {
 
 function ResultCard({ r }: { r: AgentResult }) {
   const running = useAgent(s => s.running);
+  const onCanvas = useBoard(s => s.nodes.some(n => {
+    const d = n.data as Record<string, unknown>;
+    return d.src === r.src || d.resultUrl === r.src || (Array.isArray(d.results) && d.results.includes(r.src));
+  }));
   const setLightbox = useUi((s) => s.setLightbox);
   return (
     <div className="ag-result">
@@ -111,9 +110,9 @@ function ResultCard({ r }: { r: AgentResult }) {
       )}
       {r.prompt ? <div className="ag-res-prompt" title={r.prompt}>{r.prompt}</div> : null}
       <div className="ag-res-acts">
-        {r.kind === "image" ? <button className="btn sm" disabled={running} onClick={() => { const state = useAgent.getState(); state.setMode("agent"); useAgent.setState({ attachments: [r.src], referenceMode: "auto" }); if (!state.draft.trim()) state.setDraft("基于这张图，"); }}><IcImage size={13} /> 以此图继续</button> : null}
-        <button className="btn sm" onClick={() => sendResultToCanvas(r)}>
-          <IcPlus size={13} /> 发到画布
+        {r.kind === "image" ? <button className="btn sm" disabled={running} onClick={() => { const state = useAgent.getState(); useAgent.setState({ attachments: [r.src], referenceMode: "auto" }); if (!state.draft.trim()) state.setDraft(""); }}><IcImage size={13} /> 编辑这张图</button> : null}
+        <button className="btn sm" disabled={onCanvas} onClick={() => sendResultToCanvas(r)}>
+          {onCanvas ? <IcCheck size={13} /> : <IcPlus size={13} />} {onCanvas ? "已在画布" : "发到画布"}
         </button>
         {r.kind === "video" ? (
           <button className="btn sm" onClick={() => setLightbox(r.src, null, "video")}>
@@ -301,7 +300,6 @@ export function AgentPanel() {
   const modelId = useAgent((s) => s.modelId);
   const imageModelId = useAgent((s) => s.imageModelId);
   const videoModelId = useAgent((s) => s.videoModelId);
-  const mode = useAgent((s) => s.mode);
   const webSearchOn = useAgent((s) => s.webSearch);
   const thinkingOn = useAgent((s) => s.thinkingOn);
   const toggleThinking = useAgent((s) => s.toggleThinking);
@@ -311,7 +309,6 @@ export function AgentPanel() {
   const setModelId = useAgent((s) => s.setModelId);
   const setImageModelId = useAgent((s) => s.setImageModelId);
   const setVideoModelId = useAgent((s) => s.setVideoModelId);
-  const setMode = useAgent((s) => s.setMode);
   const toggleWebSearch = useAgent((s) => s.toggleWebSearch);
   const clear = useAgent((s) => s.clear);
   const awaiting = useAgent((s) => !!s.resolver);
@@ -355,6 +352,12 @@ export function AgentPanel() {
     e.preventDefault();
     setDragOver(false);
     if (e.dataTransfer.getData("momo/node-kind")) return; // 坞里的节点类型是给画布的，不拦截
+    const nodeIds = e.dataTransfer.getData("momo/node-id").split(",").filter(Boolean);
+    if (nodeIds.length) {
+      const nodes = useBoard.getState().nodes;
+      addAttachments(canvasReferenceImages(nodes, nodes.filter(n => nodeIds.includes(n.id))));
+      return;
+    }
     // 多选拖拽负载取第一张（创作助手按单图理解）
     const assetId = (e.dataTransfer.getData("momo/asset-id") || getNativeDragAsset() || "").split(",")[0] ?? "";
     if (assetId) {
@@ -391,11 +394,9 @@ export function AgentPanel() {
     }
   };
 
-  const send = () => void (awaiting ? sendAgentMessage() : mode === "chat" ? sendSideChat() : sendAgentMessage());
-  const suggestions = mode === "chat" ? CHAT_SUGGESTIONS : AGENT_SUGGESTIONS;
-  // 联网按钮的提示随实际路由变化：MiniMax 官方搜索接口 / 模型请求内联网 / 通用搜索商。
-  let searchTitle =
-    mode === "chat" ? "联网搜索：发送前先搜资料再回答" : "联网：让模型带着联网能力规划（关闭时仍可用内置搜索动作查资料）";
+  const send = () => void sendAgentMessage();
+  const suggestions = AGENT_SUGGESTIONS;
+  let searchTitle = "联网：需要时搜索资料，关闭后仅使用已有知识";
   let capsNote: string | undefined;
   try {
     const card = resolveModelCard("chat", modelId);
@@ -403,7 +404,7 @@ export function AgentPanel() {
     capsNote = caps.note;
     if (canUseMiniMaxSearch(card)) searchTitle = `联网搜索：使用「${card.name} · ${card.model}」的 MiniMax Coding Plan 搜索`;
     else if (caps.builtinSearch) searchTitle = `联网搜索：优先用「${card.name} · ${card.model}」自带的联网搜索，失败自动降级为内置搜索`;
-    else if (mode === "agent") searchTitle = "联网：当前模型没有自带联网，Agent 仍会用内置搜索接口查资料";
+    else searchTitle = "联网：当前模型没有自带联网，Agent 仍会用内置搜索接口查资料";
   } catch {
     /* 未配置对话模型时按默认提示 */
   }
@@ -424,15 +425,6 @@ export function AgentPanel() {
         {codexOpen && <CodexConsole onClose={() => setCodexOpen(false)} />}
         <IcSparkles size={18} />
         <b>创作助手</b>
-        <button className="btn sm" title="用 Codex 对话、分析图片并执行画布创作" onClick={() => { setModelId("codex-membership::codex-chat"); setImageModelId("codex-membership::codex-image"); setMode("agent"); }}>Codex 创作</button>
-        <button className="btn sm" title="在指定文件夹执行 Codex 任务" onClick={() => setCodexOpen(true)}>文件任务</button><span className="ag-seg">
-          <button className={mode === "chat" ? "on" : ""} title="多模态聊天：完善想法与提示词，一键在画布生图" onClick={() => setMode("chat")}>
-            聊天
-          </button>
-          <button className={mode === "agent" ? "on" : ""} title="Agent：自动搜资料、定方向、出图出片" onClick={() => setMode("agent")}>
-            Agent
-          </button>
-        </span>
         <span style={{ flex: 1 }} />
         <button className={`icon-btn ${webSearchOn ? "on" : ""}`} title={searchTitle} onClick={toggleWebSearch}>
           <IcGlobe size={16} />
@@ -460,12 +452,16 @@ export function AgentPanel() {
           <IcMic size={17} />
         </button>
         {running ? <button className="btn sm" title="停止本轮思考或生成" onClick={stopAssistant}><IcClose size={14} /> 停止</button> : null}
+        <details className="ag-more">
+          <summary className="icon-btn" title="更多助手工具" aria-label="更多助手工具">···</summary>
+          <div className="ag-more-pop"><button className="btn sm" onClick={(e) => { e.currentTarget.closest("details")?.removeAttribute("open"); setCodexOpen(true); }}>文件夹任务…</button></div>
+        </details>
         <button className="icon-btn" title="清空对话" onClick={clear} disabled={running}>
           <IcTrash size={17} />
         </button>
       </div>
       <div className="ag-models">
-        <span className="ag-mslot" title={`对话模型（聊天/Agent 都走它）${capsNote ? ` · 能力：${capsNote}` : ""}`}>
+        <span className="ag-mslot" title={`对话模型（对话/生图规划使用）${capsNote ? ` · 能力：${capsNote}` : ""}`}>
           <IcBrain size={13} />
           <small>对话</small>
           <ModelPicker role="chat" value={modelId} onChange={setModelId} />
@@ -486,12 +482,8 @@ export function AgentPanel() {
         {messages.length === 0 ? (
           <div className="ag-welcome">
             <IcSparkles size={40} />
-            <h2>{mode === "chat" ? "聊聊，再把想法变成图" : "想做什么，直接说"}</h2>
-            <p>
-              {mode === "chat"
-                ? "用对话模型（支持多模态）完善创意与提示词，满意后一键在画布生成图片。"
-                : "我会自己查资料、完善提示词，拿不定主意时会给你几个选项，确认后直接出图/出视频。"}
-            </p>
+            <h2>聊想法、生成、修改，都在这里</h2>
+            <p>描述想做的画面，生成后接着说要改哪里。也可把画布图片拖进来，或直接提问。</p>
             <div className="ag-sugg">
               {suggestions.map((s) => (
                 <button key={s} className="ag-sugg-chip" onClick={() => setDraft(s)}>
@@ -514,7 +506,7 @@ export function AgentPanel() {
                 {m.text ? <div className="ag-bubble">{m.text}</div> : null}
               </div>
             ) : // 按消息产生时的模式渲染（不看当前面板模式），切标签不会让轨迹/待答问题/结果消失
-            (m.kind ?? mode) === "chat" && !m.steps?.length && !m.question && !m.results?.length ? (
+            (m.kind ?? "agent") === "chat" && !m.steps?.length && !m.question && !m.results?.length ? (
               <ChatAssistantMsg key={m.id} m={m} />
             ) : (
               <AgentAssistantMsg key={m.id} m={m} />
@@ -526,7 +518,7 @@ export function AgentPanel() {
       {inCall ? <VoiceCallOverlay v={voice} onHangup={stopVoiceCall} /> : null}
 
       <div className="ag-input-wrap">
-        {mode === "agent" && !running && !attachments.length && inheritedRefs.length > 0 ? <div className="ag-reference-plan">
+        {!running && !attachments.length && inheritedRefs.length > 0 ? <div className="ag-reference-plan">
           <div><b>{referenceMode === "none" ? "本轮不参考图片" : "可沿用的参考图"}</b><button className="btn sm" onClick={() => useAgent.setState({ referenceMode: referenceMode === "none" ? "auto" : "none" })}>{referenceMode === "none" ? "恢复参考" : "不用旧图"}</button></div>
           {referenceMode !== "none" ? <><div className="ag-reference-images">{inheritedRefs.map((src, i) => <button key={i} title={`只使用参考图 ${i + 1}`} onClick={() => useAgent.setState({ attachments: [src], referenceMode: "auto" })}><Thumb src={src} alt={`参考图 ${i + 1}`} /></button>)}</div><small>需要改图时使用；点击缩略图可只选这一张。新任务可点“不用旧图”。</small></> : <small>仍保留文字对话，本轮生成不传入历史图片。</small>}
         </div> : null}
@@ -573,9 +565,7 @@ export function AgentPanel() {
             placeholder={
               awaiting
                 ? "正在等你的选择：点上方选项，或在这里输入自己的想法后回车…"
-                : mode === "chat"
-                  ? "向 AI 提问…（Enter 发送；图片/视频/文字可直接拖入或粘贴）"
-                  : "描述你想做的东西…（Enter 发送；图片/视频/文字可直接拖入或粘贴）"
+                : "聊聊想法，或描述要生成、修改的内容…（可拖入画布图片）"
             }
             value={draft}
             onChange={(e) => setDraft(e.target.value)}

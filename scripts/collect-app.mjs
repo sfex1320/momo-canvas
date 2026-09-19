@@ -12,6 +12,7 @@
 //   pnpm app:dist   → tauri build 完成后自动调用本脚本
 //   node scripts/collect-app.mjs  → 仅收集已存在的产物
 import { execFileSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import { writeFileSync, readFileSync, existsSync, readdirSync, statSync, rmSync, mkdirSync, copyFileSync } from 'node:fs'
 import { join, resolve, relative, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -44,6 +45,8 @@ const listFiles = (dir, base = dir, acc = []) => {
   return acc
 }
 
+// 删除前核验绝对路径严格为仓库内 APP，拒绝异常路径。
+if (resolve(appDir) !== resolve(rootDir, 'APP') || dirname(appDir) !== rootDir) throw new Error('发行目录越界')
 // 每次重建 APP，保证目录永远等于最新一次构建的产物（不留旧版本残留）
 if (existsSync(appDir)) rmSync(appDir, { recursive: true, force: true })
 mkdirSync(appDir, { recursive: true })
@@ -119,19 +122,29 @@ if (portableExes.length > 0) {
   } else {
     console.warn('[收集] 警告：未找到 models/sr，便携版超清模型将首跑时联网下载')
   }
+  // 安装版和便携版共用资源声明，补齐 Eagle 插件等目录资源。
+  for (const [source, destination] of Object.entries(conf.bundle?.resources || {})) {
+    const resource = resolve(rootDir, 'src-tauri', source)
+    if (!existsSync(resource)) throw new Error(`发行资源缺失：${source}`)
+    if (!statSync(resource).isDirectory()) continue
+    const target = resolve(portableDir, destination)
+    if (relative(portableDir, target).startsWith('..')) throw new Error(`资源目标越界：${destination}`)
+    for (const file of listFiles(resource)) copyOne(file.src, join(target, file.rel))
+    console.log(`  - ${relative(appDir, portableDir)}/${destination}/`)
+  }
   // 便携版使用说明
   const readme = [
     `${productName} · 便携版 v${version}`,
     '==============================',
     `直接双击 ${productName}.exe 即可运行，无需安装。`,
     '请先完整解压到固定目录，再运行 EXE，不要在压缩软件的临时目录中直接运行。',
-    '启动会自动创建桌面快捷方式；同名旧快捷方式会更新为当前 EXE，已指向当前目录则不重复创建。',
+    '启动优先沿用桌面已有的画布快捷方式（改过名字也可识别），更新为当前 EXE；没有时才创建。',
     '',
     '运行依赖：Windows 系统自带的 WebView2 运行时（Win10 1803+ / Win11 通常已预装）。',
     `运行数据保存在：%APPDATA%\\${dataDir}\\（API Key 已加密绑定本机，拷给他人无效）`,
     '',
     '注意：同目录 DLL 是运行依赖，models/ 文件夹是超清放大的本地模型，',
-    '移动程序时请连同 DLL、models/ 和 portable.txt 一起拷贝，不要只移动 EXE。',
+    '移动程序时请连同 DLL、models/、eagle-plugins/ 和 portable.txt 一起拷贝，不要只移动 EXE。',
     '更新：可在「设置 → 关于与更新」内一键升级，也可重新下载新版 zip 解压覆盖。',
   ].join('\n') + '\n'
   writeFileSync(join(portableDir, '便携版说明.txt'), readme, 'utf8')
@@ -147,7 +160,8 @@ if (portableExes.length > 0) {
   const zipPath = join(appDir, zipName)
   console.log('[收集] 便携版 zip：')
   execFileSync('powershell', ['-NoProfile', '-Command',
-    `Compress-Archive -Path "${portableDir}\\*" -DestinationPath "${zipPath}" -Force`], { stdio: 'inherit' })
+    "$ErrorActionPreference = 'Stop'; Compress-Archive -Path (Join-Path $env:MOMO_PORTABLE_DIR '*') -DestinationPath $env:MOMO_PORTABLE_ZIP -Force"],
+    { stdio: 'inherit', env: { ...process.env, MOMO_PORTABLE_DIR: portableDir, MOMO_PORTABLE_ZIP: zipPath } })
   console.log(`  - ${zipName}  (${(statSync(zipPath).size / 1024 / 1024).toFixed(2)} MB)`)
 }
 
@@ -180,6 +194,10 @@ if (msiSig && nsisSig && msiEntry && nsisEntry) {
 // ⑤ 构建说明.md：逐文件中文备注 + 本版变更（摘自 CHANGELOG，避免两处手工同步）
 writeFileSync(join(appDir, '构建说明.md'), buildReadme(), 'utf8')
 console.log('[收集] 构建说明.md（含逐文件中文备注）')
+const checksumFiles = listFiles(appDir).filter(({ rel }) => !rel.startsWith(`${productName}_${version}_portable`))
+writeFileSync(join(appDir, 'SHA256SUMS.txt'), checksumFiles.map(({ src, rel }) =>
+  `${createHash('sha256').update(readFileSync(src)).digest('hex')}  ${rel.split(/[\\/]/).pop()}`
+).join('\n') + '\n', 'utf8')
 
 /** 读 CHANGELOG.md 里指定版本的节正文（不含 "## vX.Y.Z（日期）" 标题行） */
 function changelogSection(ver) {
@@ -206,7 +224,7 @@ function buildReadme() {
 - 构建时间：${time}
 - 构建命令：\`pnpm app:dist\`（models:prepare 模型校验 → tauri build → collect-app 收集）
 - 签名环境（缺了 .sig/latest.json 不生成，且无终端时 CLI 挂起等密码）：
-  \`TAURI_SIGNING_PRIVATE_KEY_PASSWORD="" pnpm app:dist\`（私钥在 ~/.tauri/momo-canvas.key，空密码加密格式；安装包已产出只缺签名时，可用 \`pnpm tauri signer sign --private-key-path C:\\Users\\96311\\.tauri\\momo-canvas.key --password "" <安装包>\` 单独补）
+  \`TAURI_SIGNING_PRIVATE_KEY_PASSWORD="" pnpm app:dist\`（私钥在 ~/.tauri/momo-canvas.key，空密码加密格式；安装包已产出只缺签名时，可用 \`pnpm tauri signer sign --private-key-path %USERPROFILE%\\.tauri\\momo-canvas.key --password "" <安装包>\` 单独补）
 - 故障排查：NSIS 阶段报 "mis-hashed files / Downloading nsis_tauri_utils.dll timeout" 时，用可用 IP 手动下载该 DLL 放回 %LOCALAPPDATA%\\tauri\\NSIS\\Plugins\\x86-unicode\\ 即可续跑
 - 本目录（APP/）每次构建整体重建，只保留最新一次的产物，历史版本已自动清除
 
@@ -230,8 +248,9 @@ ${changes}
 | 文件 / 目录 | 说明 |
 | --- | --- |
 | \`${relative(rootDir, portableDir).replace(/\\/g, '/')}/\` | 便携版目录（主程序 + 运行 DLL + models + portable.txt） |
-| ├ \`${productName}.exe\` | 主程序：完整解压后双击；自动创建桌面快捷方式，同名旧链接更新为当前程序，不写注册表 |
+| ├ \`${productName}.exe\` | 主程序：完整解压后双击；沿用已有画布桌面快捷方式，没有时创建，不写注册表 |
 | ├ \`*.dll\` | 与安装版相同的运行依赖（含 DirectML 本地超清运行库），请随 EXE 一起保留 |
+| ├ \`eagle-plugins/\` | Eagle 联动插件，与安装版资源一致 |
 | ├ \`models/\` | 超清放大本地模型，必须与 exe 同目录（缺失时首次使用会联网重新下载） |
 | ├ \`portable.txt\` | 便携版标记：应用据此识别便携模式（更新走 zip 整包替换，不走安装版更新器） |
 | └ \`便携版说明.txt\` | 给最终用户的使用说明 |

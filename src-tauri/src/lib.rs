@@ -1,3 +1,5 @@
+mod app_shortcuts;
+mod comfy_launcher;
 mod enhance2;
 mod codex_bridge;
 mod flat_art;
@@ -169,6 +171,10 @@ pub fn run() {
             dpapi::dpapi_decrypt,
             // 便携版首次启动创建桌面快捷方式
             shortcut::create_desktop_shortcut,
+            app_shortcuts::shortcut_inspect,
+            comfy_launcher::comfy_launcher_discover,
+            comfy_launcher::comfy_launch_direct,
+            app_shortcuts::shortcut_launch,
             // 系统资源监控（画布仪表盘）
             sysmon::system_stats,
             // Eagle 资产桥：流式复制/指纹 + 插件环回桥

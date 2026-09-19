@@ -2,21 +2,23 @@
  * 资产库右侧快捷方式栏 — 自定义文件夹/软件图标：
  *  点击 = 打开；把资产卡片拖到图标上 = 复制进文件夹 / 用该软件打开
  */
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useSettings } from "../../core/stores/settingsStore";
 import { useAssets } from "../../core/stores/assetStore";
 import { toast } from "../../core/stores/uiStore";
 import { errMsg, isTauri, sanitizeFilename, uid } from "../../core/utils";
 import { kindFromExt, sniffExt } from "../../core/services/assetFiles";
-import { parseLnkTarget } from "../../core/lnk";
+import { invoke } from "@tauri-apps/api/core";
+import { openExternal } from "../../core/external";
 import { getNativeDragAsset } from "./dragState";
-import { IcClose, IcFolder, IcFolderPlus, IcPlay, IcPlus } from "../../ui/icons";
+import { IcGlobe, IcClose, IcFolder, IcFolderPlus, IcPlay, IcPlus } from "../../ui/icons";
 import type { AssetItem, ShortcutItem } from "../../core/types";
 
 async function openShortcut(s: ShortcutItem) {
   try {
-    const { openPath } = await import("@tauri-apps/plugin-opener");
-    await openPath(s.path);
+    if (s.kind === "website") await openExternal(s.path);
+    else if (s.kind === "app") await invoke("shortcut_launch", {path:s.path});
+    else { const { openPath } = await import("@tauri-apps/plugin-opener"); await openPath(s.path); }
   } catch (e) {
     toast(`打开失败：${errMsg(e)}`, "err");
   }
@@ -25,7 +27,12 @@ async function openShortcut(s: ShortcutItem) {
 /** 资产拖到/发送到快捷方式：文件夹 → 以可读文件名复制过去；软件 → 用它打开资产（右键菜单也复用） */
 export async function sendAsset(s: ShortcutItem, item: AssetItem) {
   try {
-    if (s.kind === "folder") {
+    if (s.kind === "website") {
+      await openExternal(s.path);
+      const { revealItemInDir } = await import("@tauri-apps/plugin-opener");
+      await revealItemInDir(item.path);
+      toast("已打开网站并定位素材。请拖入网页上传区；该链接尚未配置自动上传接口", "info");
+    } else if (s.kind === "folder") {
       const { copyFile, exists, readFile } = await import("@tauri-apps/plugin-fs");
       let ext = item.path.includes(".") ? item.path.split(".").pop()!.toLowerCase() : "";
       if (kindFromExt(ext) === "other" && item.kind !== "other") {
@@ -42,8 +49,7 @@ export async function sendAsset(s: ShortcutItem, item: AssetItem) {
       await copyFile(item.path, dest);
       toast(`已复制到「${s.name}」`, "ok");
     } else {
-      const { openPath } = await import("@tauri-apps/plugin-opener");
-      await openPath(item.path, s.path);
+      await invoke("shortcut_launch", {path:s.path, asset:item.path});
       toast(`已用「${s.name}」打开`, "ok");
     }
   } catch (e) {
@@ -55,8 +61,33 @@ export function ShortcutBar() {
   const shortcuts = useSettings((s) => s.settings.shortcuts);
   const settings = useSettings((s) => s.settings);
   const update = useSettings((s) => s.update);
+  const [website, setWebsite] = useState(false);
+  const [url, setUrl] = useState("");
+  const [webName, setWebName] = useState("");
   const [overId, setOverId] = useState<string | null>(null);
 
+  const saveWebsite = (raw: string, label?: string) => {
+    try {
+      const u = new URL(/^https?:\/\//i.test(raw) ? raw : `https://${raw}`);
+      if (!["http:","https:"].includes(u.protocol) || u.username || u.password || !u.hostname) throw Error("请输入有效的 http/https 网站地址");
+      const cur = useSettings.getState().settings.shortcuts;
+      if (!cur.some(s=>s.path===u.href)) update("shortcuts", [...cur,{id:uid(6),name:label?.trim()||u.hostname,path:u.href,kind:"website"}]);
+      setWebsite(false); setUrl(""); setWebName("");
+    } catch(e) { toast(errMsg(e),"err"); }
+  };
+  useEffect(()=>{
+    let disposed=false;
+    void (async()=>{
+      for(const shortcut of shortcuts.filter(s=>s.kind==="app"&&!s.icon)) {
+        try {
+          const meta=await invoke<Partial<ShortcutItem>>("shortcut_inspect",{path:shortcut.path});
+          if(disposed)return;
+          if(meta.icon) update("shortcuts",useSettings.getState().settings.shortcuts.map(s=>s.id===shortcut.id?{...s,icon:meta.icon}:s));
+        } catch { /* 图标不可用时保留通用图标 */ }
+      }
+    })();
+    return()=>{disposed=true;};
+  },[shortcuts.map(s=>s.id).join(",")]);
   const add = async (kind: ShortcutItem["kind"]) => {
     if (!isTauri) {
       toast("浏览器预览模式不支持快捷方式", "err");
@@ -66,11 +97,14 @@ export function ShortcutBar() {
     const path = await open(
       kind === "folder"
         ? { directory: true, title: "选择要固定的文件夹" }
-        : { title: "选择软件（exe）", filters: [{ name: "程序", extensions: ["exe", "lnk", "bat"] }] },
+        : { title: "选择软件（exe）", filters: [{ name: "程序", extensions: ["exe", "lnk", "bat", "cmd", "appref-ms"] }] },
     );
     if (typeof path !== "string") return;
     const name = path.split(/[\\/]/).filter(Boolean).pop()?.replace(/\.(exe|lnk|bat)$/i, "") ?? "快捷方式";
-    update("shortcuts", [...shortcuts, { id: uid(6), name, path, kind }]);
+    try {
+      const meta = await invoke<ShortcutItem>("shortcut_inspect",{path});
+      update("shortcuts", [...useSettings.getState().settings.shortcuts, {...meta, id: uid(6), name, path, kind}]);
+    } catch(e) { toast(errMsg(e),"err"); return; }
     toast(`已固定「${name}」`, "ok");
   };
 
@@ -86,13 +120,16 @@ export function ShortcutBar() {
     e.stopPropagation();
     setOverId(null);
     // Tauri 下资产卡走原生拖拽（拿不到自定义数据），从拖拽状态里补回资产 id；多选拖拽负载取第一张
-    const id = (e.dataTransfer.getData("momo/asset-id") || getNativeDragAsset() || "").split(",")[0] ?? "";
-    const it = useAssets.getState().items.find((x) => x.id === id);
-    if (it) {
-      void sendAsset(s, it);
+    const ids = (e.dataTransfer.getData("momo/asset-id") || getNativeDragAsset() || "").split(",");
+    const list = useAssets.getState().items.filter(x=>ids.includes(x.id));
+    if (list.length) {
+      void (async()=>{for(const item of list)await sendAsset(s,item);})();
       return;
     }
-    // 不是资产 → 可能是从 OS 拖进来的快捷方式，走创建逻辑
+    // 外部素材直接拖到目标：先正常入库，再复用发送入口，避免误注册成软件。
+    const media=Array.from(e.dataTransfer.files).filter(f=>kindFromExt(f.name.split(".").pop()??"")!=="other");
+    if(media.length){void(async()=>{for(const file of media){const item=await useAssets.getState().importFileGetItem(file);if(item)await sendAsset(s,item);}})();return;}
+    // 不是素材 → 从 OS 拖进来的软件快捷方式，走创建逻辑。
     void createFromOsDrop(e);
   };
 
@@ -100,36 +137,20 @@ export function ShortcutBar() {
    *  Windows 限制：HTML5 拖放拿不到文件夹/程序本体的路径，但 .lnk 的字节里有目标路径，可解析 */
   const createFromOsDrop = async (e: React.DragEvent) => {
     if (!isTauri) return;
+    const link = e.dataTransfer.getData("text/uri-list").split("\n").find(v=>/^https?:\/\//i.test(v));
+    if(link) {saveWebsite(link.trim());return;}
     const files = Array.from(e.dataTransfer.files ?? []);
-    if (!files.length) return;
-    const items: ShortcutItem[] = [];
-    const skipped: string[] = [];
-    const existing = new Set(useSettings.getState().settings.shortcuts.map((s) => s.path.toLowerCase()));
-    for (const f of files) {
-      // WebView2 将来若提供路径就直接用（Electron 式非标准字段）
-      let target = (f as File & { path?: string }).path ?? null;
-      if (!target && /\.lnk$/i.test(f.name)) {
-        try {
-          target = parseLnkTarget(new Uint8Array(await f.arrayBuffer()));
-        } catch {
-          target = null;
-        }
-      }
-      if (!target) {
-        skipped.push(f.name);
-        continue;
-      }
-      if (existing.has(target.toLowerCase())) continue;
-      existing.add(target.toLowerCase());
-      let kind: ShortcutItem["kind"];
+    const items: ShortcutItem[] = [], skipped: string[] = [];
+    const existing = new Set(useSettings.getState().settings.shortcuts.map(s=>s.path.toLowerCase()));
+    for(const f of files) {
       try {
-        const { stat } = await import("@tauri-apps/plugin-fs");
-        kind = (await stat(target)).isDirectory ? "folder" : "app";
-      } catch {
-        kind = /\.(exe|bat|cmd)$/i.test(target) ? "app" : "folder";
-      }
-      const name = target.split(/[\\/]/).filter(Boolean).pop()?.replace(/\.(exe|lnk|bat|cmd)$/i, "") ?? "快捷方式";
-      items.push({ id: uid(6), name, path: target, kind });
+        if(/\.url$/i.test(f.name)) {const match=(await f.text()).match(/^URL=(.+)$/mi);if(match)saveWebsite(match[1].trim(), f.name.replace(/\.url$/i,""));continue;}
+        const path=(f as File & {path?:string}).path;
+        const bytes=!path&&/\.lnk$/i.test(f.name)?Array.from(new Uint8Array(await f.arrayBuffer())):undefined;
+        const meta=await invoke<ShortcutItem>("shortcut_inspect", {path,name:f.name,bytes}).catch(e=>{if(!path&&bytes)return invoke<ShortcutItem>("shortcut_inspect",{name:f.name});throw e;});
+        if(existing.has(meta.path.toLowerCase()))continue;
+        existing.add(meta.path.toLowerCase());items.push({...meta,id:uid(6)});
+      } catch {skipped.push(f.name);}
     }
     if (items.length) {
       const cur = useSettings.getState().settings.shortcuts;
@@ -138,7 +159,7 @@ export function ShortcutBar() {
     }
     if (skipped.length) {
       toast(
-        `「${skipped.join("、")}」读不到路径：Windows 拖放限制，拖文件夹/程序本体拿不到位置。请拖它们的快捷方式（.lnk），或用下方 + 按钮选择`,
+        `「${skipped.join("、")}」无法定位：请用下方 + 选择启动文件。开始菜单快捷方式可直接拖入；无路径的程序文件需要手动选择`,
         "err",
       );
     }
@@ -161,7 +182,7 @@ export function ShortcutBar() {
         <div key={s.id} className={`sc-item ${overId === s.id ? "over" : ""}`}>
           <button
             className="sc-ic"
-            title={`${s.name}\n点击打开 · 把资产拖到这里${s.kind === "folder" ? "自动复制进去" : "用它打开"}`}
+            title={`${s.name}\n点击打开 · 把资产拖到这里${s.kind === "folder" ? "自动复制进去" : s.kind === "website" ? "打开网页并定位素材，需在网页选择上传" : "用它打开"}`}
             onClick={() => void openShortcut(s)}
             onDragOver={(e) => {
               e.preventDefault();
@@ -170,7 +191,7 @@ export function ShortcutBar() {
             onDragLeave={() => setOverId(null)}
             onDrop={(e) => onDropTo(s, e)}
           >
-            {s.kind === "folder" ? <IcFolder size={20} /> : <IcPlay size={18} />}
+            {s.icon ? <img src={s.icon} alt="" width={26} height={26}/> : s.kind === "folder" ? <IcFolder size={20} /> : s.kind === "website" ? <IcGlobe size={20}/> : <IcPlay size={18} />}
           </button>
           <span className="sc-name">{s.name}</span>
           <button className="sc-del" title="移除快捷方式" onClick={() => remove(s.id)}>
@@ -178,7 +199,9 @@ export function ShortcutBar() {
           </button>
         </div>
       ))}
+      {website&&<div className="sc-website-form"><b>固定网站</b><input className="input" aria-label="网站名称" placeholder="网站名称（可选）" value={webName} onChange={e=>setWebName(e.target.value)}/><input className="input" aria-label="网站地址" placeholder="https://…" value={url} onChange={e=>setUrl(e.target.value)}/><button className="btn sm" onClick={()=>saveWebsite(url,webName)}>保存</button><button className="btn sm" onClick={()=>setWebsite(false)}>取消</button></div>}
       <div className="sc-adds">
+        <button className="sc-ic add" title="固定网站链接" onClick={()=>setWebsite(v=>!v)}><IcGlobe size={18}/></button>
         <button className="sc-ic add" title="固定一个文件夹" onClick={() => void add("folder")}>
           <IcFolderPlus size={18} />
         </button>

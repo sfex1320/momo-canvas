@@ -1428,3 +1428,6 @@
 .codex-bridge-card p,.codex-bridge-card small,.codex-bridge-card span{color:var(--text-2);font-size:12px;line-height:1.7}
 .codex-bridge-actions{display:flex;gap:8px;flex-wrap:wrap;margin:12px 0}
 .codex-quota{display:flex;gap:24px;margin:12px 0}.codex-quota>div{display:grid;gap:5px;min-width:190px}.codex-quota progress{width:100%;accent-color:var(--accent)}
+
+.codex-bridge-card { position: relative; }
+.codex-bridge-drawer { position: absolute; z-index: 20; top: calc(100% - 2px); left: 0; right: 0; padding: 20px; border: 1px solid var(--border); border-radius: 16px; background: var(--panel-solid); box-shadow: var(--panel-shadow); max-height: 60vh; overflow: auto; }

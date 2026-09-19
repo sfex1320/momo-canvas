@@ -1,3 +1,4 @@
+import {assetAutoGroup,assetVisibleOnBoard} from "../../core/assetOrganization";
 /**
  * 资产库 — 独立模块
  *  自动收录画布生成内容 + 手动导入；分类 / 文件夹 / 标签 / 筛选 / 批量操作；
@@ -354,17 +355,20 @@ export function AssetLibrary() {
 
   // 3.5 §9.5：项目资产视图——从导演台打开资产库时默认「本项目」；用户可手动切到「全部资产」，
   // 切换剧本后回到默认（跟随新 projectId，不闪旧项目资产）。projectOnly = null 表示未手动设置（跟默认）。
-  const directorProjectId = useUi((s) => s.directorProjectId);
+  const storedDirectorProjectId = useUi((s) => s.directorProjectId);
+  const boardId = useBoard(s=>s.activeId);
+  const boardNodes = useBoard(s=>s.nodes);
   const directorOpen = useUi((s) => s.directorOpen);
+  const directorProjectId=directorOpen?storedDirectorProjectId:undefined;
   const currentProject = useDirector(s => s.projects.find(p => p.id === directorProjectId));
   const [projectOnlyManual, setProjectOnlyManual] = useState<boolean | null>(null);
-  const prevProjectRef = useRef(directorProjectId);
-  if (prevProjectRef.current !== directorProjectId) {
-    prevProjectRef.current = directorProjectId;
+  const prevProjectRef = useRef(directorProjectId||boardId);
+  if (prevProjectRef.current !== (directorProjectId||boardId)) {
+    prevProjectRef.current = directorProjectId||boardId;
     setProjectOnlyManual(null); // 剧本切换：过滤目标跟随新 projectId，手动偏好复位到默认
   }
-  const projectOnly = projectOnlyManual ?? (!!directorProjectId && directorOpen);
-  const scopedItems = useMemo(() => items.filter(i => assetVisibleInProject(i, directorProjectId, projectOnly)), [items, directorProjectId, projectOnly]);
+  const projectOnly = projectOnlyManual ?? true;
+  const scopedItems = useMemo(() => {const ids=new Set(boardNodes.map(n=>n.id));return items.filter(i => !projectOnly || (directorProjectId ? assetVisibleInProject(i,directorProjectId,true) : assetVisibleOnBoard(i,boardId,ids)));}, [items, directorProjectId, projectOnly, boardId, boardNodes]);
   useEffect(() => { setSelected(new Set()); setFocusedGroupId(null); setPreviewIdx(null); }, [kind, folderId, tagFilter, keyword, mediaType, projectOnly, directorProjectId, tab, sort, grouped]);
   const filtered = useMemo(() => {
     const kw = keyword.trim().toLowerCase();
@@ -391,14 +395,15 @@ export function AssetLibrary() {
     const out: { key: string; items: AssetItem[] }[] = [];
     const groupAt = new Map<string, number>();
     for (const item of filtered) {
-      if (!grouped || !item.groupId) {
+      const groupKey=assetAutoGroup(item);
+      if (!grouped || !groupKey) {
         out.push({ key: item.id, items: [item] });
         continue;
       }
-      const at = groupAt.get(item.groupId);
+      const at = groupAt.get(groupKey);
       if (at == null) {
-        groupAt.set(item.groupId, out.length);
-        out.push({ key: item.groupId, items: [item] });
+        groupAt.set(groupKey, out.length);
+        out.push({ key: groupKey, items: [item] });
       } else {
         out[at].items.push(item);
       }
@@ -844,11 +849,11 @@ export function AssetLibrary() {
 
         {/* 主区 */}
         <div className="al-main">
-        <header className="al-view-head"><div><h2>{tab === "eagle" ? "Eagle 素材" : kind === "trash" ? "回收站" : folderId !== "all" ? folders.find(f => f.id === folderId)?.name : KIND_TABS.find(t => t.key === kind)?.label || "全部素材"}</h2><span>{tab === "eagle" ? "远程素材 · 按需导入" : kind === "trash" ? "全库已删除素材" : projectOnly && currentProject ? projectDisplayName(currentProject) : "全部项目与画布"}</span></div><button className="icon-btn" aria-label="关闭资产库" title="关闭 (Esc)" onClick={() => setOpen(false)}><IcClose size={18}/></button></header>
+        <header className="al-view-head"><div><h2>{tab === "eagle" ? "Eagle 素材" : kind === "trash" ? "回收站" : folderId !== "all" ? folders.find(f => f.id === folderId)?.name : KIND_TABS.find(t => t.key === kind)?.label || "全部素材"}</h2><span>{tab === "eagle" ? "远程素材 · 按需导入" : kind === "trash" ? "全库已删除素材" : projectOnly ? (currentProject ? projectDisplayName(currentProject) : "当前画布素材") : "全部项目与画布"}</span></div><button className="icon-btn" aria-label="关闭资产库" title="关闭 (Esc)" onClick={() => setOpen(false)}><IcClose size={18}/></button></header>
         <div className="al-toolbar" style={tab === "local" && kind === "trash" ? { display: "none" } : undefined}>
           {tab === "local" && <div className="al-scope" role="group" aria-label="资产范围">
             <button aria-pressed={!projectOnly} onClick={()=>setProjectOnlyManual(false)}><IcLayers size={14}/>全部资产</button>
-            <button aria-pressed={projectOnly} disabled={!directorProjectId} title={directorProjectId?"仅显示当前导演项目的参考与生成资产":"打开导演项目后可筛选"} onClick={()=>setProjectOnlyManual(true)}><IcFolder size={14}/>本项目</button>
+            <button aria-pressed={projectOnly} title={directorProjectId?"当前导演项目的资产":"当前画布的生成与导入资产；旧素材按节点归属识别"} onClick={()=>setProjectOnlyManual(true)}><IcFolder size={14}/>{directorProjectId?"本项目":"本画布"}</button>
           </div>}
             {tab === "local" ? (
               <div className="search-box">
@@ -910,7 +915,7 @@ export function AssetLibrary() {
           {tab === "local" && kind !== "trash" ? <div className="al-filterbar">
             <PopSelect value={mediaType} onChange={v => setMediaType(v as AssetKind | "all")} options={[{value:"all",label:"所有类型"}, ...KIND_TABS.filter(t => !["all","fav","directorRef","trash"].includes(t.key)).map(t => ({value:t.key,label:t.label,icon:t.icon}))]}/>
             <PopSelect value={sort} onChange={setSort} options={[{value:"newest",label:"最新在前"},{value:"oldest",label:"最早在前"},{value:"name",label:"名称排序"}]}/>
-            <button className="btn sm" aria-pressed={grouped} onClick={() => setGrouped(v=>!v)}><IcLayers size={14}/>{grouped ? "按生成分组" : "逐项显示"}</button>
+            <button className="btn sm" aria-pressed={grouped} onClick={() => setGrouped(v=>!v)}><IcLayers size={14}/>{grouped ? "自动整理" : "逐项显示"}</button>
             {tagFilter ? <span className="al-filter-note">标签：{tagFilter}</span> : null}
             {(keyword || tagFilter || folderId !== "all" || mediaType !== "all") ? <button className="btn sm" onClick={() => {setKeyword("");setTagFilter(null);setFolderId("all");setMediaType("all");}}>清除筛选</button> : null}
           </div> : null}
@@ -1016,7 +1021,7 @@ export function AssetLibrary() {
                       <div
                         className={`a-card a-group-card ${allSelected ? "sel" : ""}`}
                         data-sel-ids={members.map((x) => x.id).join(",")}
-                        title={`${it.groupLabel || it.prompt || it.name}\n${members.length} 个生成结果 · 点击展开\n右键：整组操作`}
+                        title={`${it.groupLabel || it.prompt || it.name}\n${members.length} 个相关素材 · 点击展开\n右键：整组操作`}
                         onMouseDown={(e) => {
                           // 多选模式右键起笔滑选（组卡按整组取反）
                           if (pickMode && e.button === 2) {

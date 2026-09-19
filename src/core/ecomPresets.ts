@@ -1,3 +1,4 @@
+import { ECOM_CONTINUITY_RULES } from "./ecomContinuity";
 /**
  * 电商长图节点共享定义
  *  - 视觉分析用的系统提示词（输出严格 JSON：产品属性 + 各切片生图提示词与文案）
@@ -26,16 +27,17 @@ export function ecomAnalysisSystem(opts: {
     : "";
   return `你是资深电商视觉设计师与 AI 绘画提示词专家。用户会发来一张产品的拍照图（可能角度/光线/背景不完美）。请完成两件事：
 1. 分析产品，提炼属性（名称 / 品类 / 材质 / 主色 / 特征 / 卖点 / 适用人群）与整体风格调性；
-2. 为一张 ${aspect} 竖版电商详情页长图规划 ${n} 个上下拼接的切片。每个切片是一个独立画面（如：主图、卖点 banner、细节特写、使用场景、规格信息等，按产品特点合理编排，覆盖一条详情页的完整叙事），并为每个切片写一段可直接用于 AI 绘画的高质量中文提示词。${toneLine}${descLine}
+2. 为一张 ${aspect} 竖版电商详情页长图规划 ${n} 个上下拼接的切片。每个切片是连续长图中的一个窗口（如：主图、卖点 banner、细节特写、使用场景、规格信息等，按产品特点合理编排，覆盖一条详情页的完整叙事），并为每个切片写一段可直接用于 AI 绘画的高质量中文提示词。${toneLine}${descLine}
 
 要求：
+${ECOM_CONTINUITY_RULES}
 - 每个切片的提示词都必须完整重复产品的核心视觉特征（产品外观、配色、材质、品牌调性），保证 ${n} 张拼在一起风格统一、像同一套详情页；
 - 用户的拍照图可能不理想，提示词要在保持产品真实外观的前提下优化为专业电商大片质感（干净背景、精准光影、高清晰度），并按需补全图中未拍全的部分（结合用户描述合理推断，不要凭空捏造与产品冲突的元素）；
 - 每个切片提示词要写明画面内容与版式，并把卖点文案作为画面的一部分直接设计进图里（用电商海报风格的精美排版写在产品旁的空白区，文字清晰可读、不乱码、不溢出），${aspect} 竖版构图；
 - 文案 copy 是要直接写进画面的实际卖点短语（中文，精炼、有感染力，适合作为海报大字 / 标语；不要长段落），提示词里要规划好它的位置与排版风格。
 
 严格只输出以下 JSON：第一个字符必须是 {，不要 markdown 代码块、不要任何解释、不要思考过程（不要 <think> 之类的标签、不要前后缀文字）：
-{"product":{"name":"产品名","category":"品类","material":"材质","color":"主色","features":["特征"],"sellingPoints":["卖点"],"audience":"适用人群","styleTone":"风格调性"},"slides":[{"title":"切片标题","prompt":"该切片生图提示词","copy":"配套文案"}]}`;
+{"product":{"name":"产品名","category":"品类","material":"材质","color":"主色","features":["特征"],"sellingPoints":["卖点"],"audience":"适用人群","styleTone":"风格调性"},"slides":[{"title":"切片标题","prompt":"该切片生图提示词","copy":"配套文案","entryEdge":"顶部边缘计划","exitEdge":"底部边缘计划"}]}`;
 }
 
 /** H5 长文模式系统提示词：把一篇长文案按内容切成若干切片，每片配一段画面提示词 + 核心文案。 */
@@ -46,17 +48,18 @@ export function h5AnalysisSystem(opts: { styleTone?: string; sliceCount?: number
   const toneLine = tone
     ? `\n整体风格调性（所有切片必须严格遵守，保证 H5 风格统一）：${tone}`
     : "\n所有切片的画风、配色、版式基调必须统一，像同一套 H5 长图。";
-  return `你是资深 H5 / 长图文案策划与 AI 绘画提示词专家。用户会给一篇较长的文案。请把它切成约 ${n} 个适合做长图切片的小节（按内容、段落、主题自然切分；每节是一个独立画面，覆盖文案的完整叙事），并为每节产出：
+  return `你是资深 H5 / 长图文案策划与 AI 绘画提示词专家。用户会给一篇较长的文案。请把它切成约 ${n} 个适合做长图切片的小节（按内容、段落、主题自然切分；每节是连续长图中的一个窗口，覆盖文案的完整叙事），并为每节产出：
 1. title：该小节的简短标题；
 2. prompt：该节画面的高质量中文生图提示词——要体现该节文案的内容与意境，${aspect} 竖版构图，并把该节核心文案作为画面文字直接设计进去（电商海报风格的精美排版，清晰可读、不乱码）；
 3. copy：要写进画面的该节核心文案（精炼短语，不要整段照搬）。${toneLine}
 
 要求：
+${ECOM_CONTINUITY_RULES}
 - 每个切片提示词都要写明画面内容与文案在画面中的排版位置；
 - 相邻切片的画面要有过渡、像一条连续的长图，不要割裂。
 
 严格只输出 JSON（第一个字符必须是 {，不要 markdown 代码块、不要思考过程、不要解释）：
-{"product":{"name":"长图标题","styleTone":"风格调性"},"slides":[{"title":"小节标题","prompt":"画面提示词","copy":"核心文案"}]}`;
+{"product":{"name":"长图标题","styleTone":"风格调性"},"slides":[{"title":"小节标题","prompt":"画面提示词","copy":"核心文案","entryEdge":"顶部边缘计划","exitEdge":"底部边缘计划"}]}`;
 }
 
 /** 从原始模型文本里解析产品分析（剥 <think> 思考块 / 代码块围栏，兼容 {…} 对象与 […] 数组两种返回） */
@@ -114,10 +117,11 @@ export function normalizeEcomAnalysis(parsed: unknown): EcomAnalysis | null {
       if (!prompt) return null;
       const title = pickStr(s, ["title", "name", "label", "标题", "小节"]) || "切片";
       const copy = pickStr(s, ["copy", "文案", "text", "营销文案", "slogan"]);
-      return { title, prompt, copy: copy || undefined };
+      return { title, prompt, copy: copy || undefined, entryEdge:pickStr(s,["entryEdge"])||undefined, exitEdge:pickStr(s,["exitEdge"])||undefined };
     })
     .filter((x): x is EcomSlide => !!x);
   if (!slides.length) return null;
+  for(let i=1;i<slides.length;i++) {const edge=slides[i-1].exitEdge||slides[i].entryEdge;if(edge){slides[i-1].exitEdge=edge;slides[i].entryEdge=edge;}}
 
   const product: EcomAnalysis["product"] = {
     name: pickStr(productRaw, ["name", "名称", "title"]) || "产品",

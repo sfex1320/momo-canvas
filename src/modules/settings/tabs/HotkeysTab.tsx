@@ -5,6 +5,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useSettings } from "../../../core/stores/settingsStore";
 import { toast } from "../../../core/stores/uiStore";
 import { DEFAULT_HOTKEYS, HOTKEY_LABEL, type HotkeyAction } from "../../../core/types";
+import { hotkeysConflict } from "../../../core/hotkeys";
 import { SecHelp } from "../shared";
 
 /** 键名 → 键帽显示（方向键用箭头，精致些） */
@@ -42,8 +43,9 @@ const HOTKEY_GROUPS: { title: string; actions: HotkeyAction[] }[] = [
   { title: "运行", actions: ["runAll", "runSelected"] },
   {
     title: "面板与窗口",
-    actions: ["agent", "voiceCall", "director", "assets", "gallery", "charLib", "errCenter", "runLog", "settings", "theme", "newBoard"],
+    actions: ["agent", "sendToAgent", "voiceCall", "director", "assets", "gallery", "errCenter", "runLog", "settings", "modelSettings", "theme", "newBoard"],
   },
+  { title: "ComfyUI 与创作工具", actions: ["comfyLaunch", "comfySync", "templateManager", "skillManager"] },
   {
     title: "添加节点",
     actions: [
@@ -103,17 +105,11 @@ export function HotkeysTab() {
 
   // 实时冲突检测：同一组合键被多个动作绑定 → 双方标红（录制新键时的拦截只能防新增，标红负责暴露存量冲突）
   const clashOf = useMemo(() => {
-    const byKey = new Map<string, HotkeyAction[]>();
-    for (const [a, k] of Object.entries(hotkeys) as [HotkeyAction, string][]) {
-      if (!k) continue;
-      const key = k.toLowerCase();
-      const list = byKey.get(key) ?? [];
-      list.push(a);
-      byKey.set(key, list);
-    }
     const out = new Map<HotkeyAction, HotkeyAction>(); // 冲突方 → 冲突对方（互相指认）
-    for (const list of byKey.values()) {
-      if (list.length > 1) list.forEach((a, i) => out.set(a, list[(i + 1) % list.length]));
+    const entries = Object.entries(hotkeys) as [HotkeyAction, string][];
+    for (const [action, key] of entries) {
+      const clash = entries.find(([other, value]) => hotkeysConflict(action, key, other, value));
+      if (clash) out.set(action, clash[0]);
     }
     return out;
   }, [hotkeys]);
@@ -138,7 +134,7 @@ export function HotkeysTab() {
       }
       const combo = [...mods, base].join("+");
       const clash = (Object.entries(hotkeys) as [HotkeyAction, string][]).find(
-        ([a, k]) => k.toLowerCase() === combo.toLowerCase() && a !== capturing,
+        ([a, k]) => hotkeysConflict(capturing, combo, a, k),
       );
       if (clash) {
         toast(`「${comboLabel(combo)}」已分配给：${HOTKEY_LABEL[clash[0]]}`, "err");
@@ -160,15 +156,15 @@ export function HotkeysTab() {
             <button className="btn sm" onClick={() => update("hotkeys", { ...DEFAULT_HOTKEYS })}>
               恢复默认
             </button>
-            <SecHelp>点击键帽后按下新按键即可重新绑定（Esc 取消）。冲突的键帽会标红，点击其一重新绑定即可消除。</SecHelp>
+            <SecHelp>点击键帽后按下新按键即可重新绑定（Esc 取消），右侧“解绑”可停用。只检测同一作用域的冲突；导演台与画布允许共用按键。</SecHelp>
           </span>
         </div>
-        <div className="set-page-d">按功能分组、两列排布；最下方为固定组合键，仅作速查。</div>
+        <div className="set-page-d">输入框、输入法组词和弹层内不触发画布快捷键。升级保留自定义及解绑；新增默认键若被占用会留空。</div>
       </div>
 
       {clashOf.size ? (
         <div className="set-hint danger">
-          ⚠ 检测到 {clashOf.size / 2} 组快捷键冲突：标红的键帽有多个功能共用同一按键，点击键帽重新绑定即可消除
+          ⚠ 检测到 {clashOf.size} 项快捷键冲突：标红的动作在同一作用域共用按键，请重新绑定或解绑
         </div>
       ) : null}
 
@@ -192,6 +188,10 @@ export function HotkeysTab() {
                 >
                   {capturing === action ? "按键…" : hotkeys[action] ? comboLabel(hotkeys[action]) : "未绑定"}
                 </button>
+                {hotkeys[action] && <button className="btn sm" title={`解绑：${HOTKEY_LABEL[action]}`} onClick={() => {
+                  if (capturing === action) setCapturing(null);
+                  update("hotkeys", { ...hotkeys, [action]: "" });
+                }}>解绑</button>}
               </div>
             ))}
           </div>

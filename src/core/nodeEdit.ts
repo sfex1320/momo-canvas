@@ -25,14 +25,8 @@ import { notifyDone } from "./sound";
 import { composeMarkedImage } from "./markCanvas";
 import type { AppNode, EditChannel, EnhanceParams, ImageData, OutpaintPads, ResizeParams } from "./types";
 
-/** 节点当前主图：图片节点 = src；生成/打光/多角度/ComfyUI 等 = results[picked] */
-export function nodeMainImage(node: AppNode | undefined): string | undefined {
-  if (!node) return undefined;
-  const d = node.data as Record<string, unknown>;
-  if (node.type === "image") return d.src as string | undefined;
-  const results = d.results as string[] | undefined;
-  return results?.length ? results[(d.picked as number | undefined) ?? 0] : undefined;
-}
+import { nodeMainImage } from "./nodeImages";
+export { nodeMainImage } from "./nodeImages";
 
 /** 就地写回主图（commit：可 Ctrl+Z 撤销到编辑前） */
 function writeMainImage(id: string, url: string) {

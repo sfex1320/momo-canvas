@@ -1,3 +1,4 @@
+import {saveComfyRuntime} from "../comfyRuntime";
 /**
  * Comfy 工作流无感同步引擎（插件规格 v1.0 · M1：ComfyUI 主控单向同步）
  *
@@ -22,7 +23,8 @@ import { useComfySync, newSyncSource } from "../stores/comfySyncStore";
 import { useComfy } from "../stores/comfyStore";
 import { useSettings } from "../stores/settingsStore";
 import { toast } from "../stores/uiStore";
-import { fetchObjectInfo, guessOutputNode, listWorkflowInputs, normalizeHost } from "../services/comfy";
+import { guessOutputNode, listWorkflowInputs, normalizeHost } from "../services/comfy";
+import { xfetch } from "../services/http";
 import { convertFrontendWorkflow, isFrontendWorkflow } from "../../modules/comfy/frontendConvert";
 import { autoExposeMap, paramsFromExpose, applyComfyLayout, saveTextFile } from "../../modules/comfy/templateIO";
 import { isTauri, errMsg, uid } from "../utils";
@@ -36,6 +38,8 @@ import {
   displayNameOfRel,
   computeRevisionKeep,
   dependencyWarnings,
+  replaceDependencyWarnings,
+  type DependencyWorkflow,
 } from "./classify";
 import { normRel, normAbs, matchRenames, type NewFileRecord } from "./identity";
 import { applyParamPatches, detectPatchConflicts, injectStableNodeIds, patchesFromValues, type ParamPatch, type UiGraph } from "./writeBack";
@@ -97,7 +101,7 @@ const st = {
   /** M2 写入令牌（规格 §11.4）：自己写的文件监听回来时按 路径+内容哈希 匹配消费，不当外部修改 */
   writeTokens: new Map<string, { path: string; sha256: string; at: number }>(),
   queue: Promise.resolve() as Promise<unknown>,
-  objectInfo: { at: 0, info: null as Record<string, any> | null },
+  objectInfo: { host: "", at: 0, info: null as Record<string, any> | null },
 };
 
 /** 写入令牌有效期：超时的令牌不再抑制（防哈希碰撞巧合吞掉真实外部修改） */
@@ -114,11 +118,15 @@ const sync = () => useComfySync.getState();
 const log = (e: Omit<ComfySyncEventLog, "id" | "createdAt">) => sync().log(e);
 
 async function objectInfoCached(): Promise<Record<string, any> | null> {
-  const host = useSettings.getState().settings.comfy.host;
-  if (!host) return null;
-  if (st.objectInfo.info && Date.now() - st.objectInfo.at < OBJECT_INFO_TTL) return st.objectInfo.info;
-  const info = await fetchObjectInfo(host);
-  if (info) st.objectInfo = { at: Date.now(), info };
+  const configuredHost = useSettings.getState().settings.comfy.host;
+  if (!configuredHost) return null;
+  const host = normalizeHost(configuredHost);
+  if (st.objectInfo.host === host && Date.now() - st.objectInfo.at < OBJECT_INFO_TTL) return st.objectInfo.info;
+  // 同步诊断需要看到重启后新安装的节点；不能复用服务层的永久 object_info 缓存。
+  const info = await xfetch(`${host}/object_info`, { cache: "no-store" }, { timeoutMs: 10_000 })
+    .then((r) => r.ok ? r.json() as Promise<Record<string, any>> : null)
+    .catch(() => null);
+  st.objectInfo = { host, at: Date.now(), info };
   return info;
 }
 
@@ -131,6 +139,15 @@ export async function startEngine(): Promise<void> {
   if (useSettings.getState().settings.comfy.syncV2Enabled === false) return; // 功能开关（规格 §16.3）
   st.started = true;
   sync().setRunning(true);
+  st.objectInfo.at = 0;
+  st.unlisten.push(useComfy.subscribe((current, previous) => {
+    if (current.online !== "ok" || previous.online === "ok") return;
+    st.objectInfo.at = 0;
+    void enqueue(async () => {
+      await rederivePending();
+      await refreshDependencyWarnings();
+    });
+  }));
   const { listen } = await import("@tauri-apps/api/event");
   st.unlisten.push(
     await listen<{ sourceId: string }>("comfy-sync-fs-event", (e) => scheduleRescan(e.payload.sourceId)),
@@ -312,7 +329,8 @@ async function scanSource(sourceId: string): Promise<void> {
   if (!src || !src.enabled) return;
   const firstScan = src.lastScanAt === undefined;
   // ComfyUI 上线补派生（派生失败的工作流重试一次，规格 §5.2）
-  void rederivePending();
+  await rederivePending();
+  await refreshDependencyWarnings(sourceId);
   sync().patchSource(sourceId, { status: "scanning" });
 
   let entries: ScanEntry[];
@@ -633,7 +651,7 @@ async function deriveAndApplyTemplate(
       warnings.push(...r.warnings);
       apiWf = applyComfyLayout(apiWf, info);
       // 依赖检查（规格 FR-016）：缺失自定义节点/模型只进警告，不阻塞同步与版本保存
-      warnings.push(...dependencyWarnings(json as { nodes: Array<{ id: number | string; type: string; widgets_values?: unknown[] }> }, info));
+      warnings.push(...dependencyWarnings(json as DependencyWorkflow, info));
     } catch (e) {
       return { ok: false, warnings, error: `SYNC_API_DERIVE_FAILED: ${errMsg(e)}` };
     }
@@ -804,6 +822,7 @@ export async function bindWorkflowToTemplate(workflowId: string, templateId: str
 
 /** 立即扫描某来源（同步中心「立即扫描」） */
 export async function rescanSourceNow(sourceId: string): Promise<void> {
+  st.objectInfo.at = 0;
   await enqueue(() => scanSource(sourceId));
   const src = sync().sources.find((s) => s.id === sourceId);
   if (src && src.status === "online") toast(`来源「${src.name}」扫描完成`, "ok");
@@ -826,6 +845,26 @@ export async function rederivePending(): Promise<void> {
       sync().patchWorkflow(w.workflowId, { status: "synced", warnings: derive.warnings, templateId: derive.templateId ?? w.templateId });
       log({ workflowId: w.workflowId, level: "info", event: "rederived", message: `「${w.displayName}」已在 ComfyUI 在线后完成派生` });
     }
+  }
+}
+
+/** 文件未变也重新核对依赖；只更新诊断，不重写源文件、版本或模板参数。 */
+async function refreshDependencyWarnings(sourceId?: string): Promise<void> {
+  const candidates = sync().workflows.filter((w) =>
+    (!sourceId || w.sourceId === sourceId) && w.format === "ui_v04" &&
+    ["synced", "source_offline", "source_deleted", "detached"].includes(w.status));
+  if (!candidates.length) return;
+  const info = await objectInfoCached();
+  if (!info) return; // 离线不清除已有诊断。
+  for (const w of candidates) {
+    const text = await readWorkflowFile(w.workflowId).catch(() => null);
+    if (!text) continue;
+    const cls = classifyWorkflowText(text);
+    if (cls.format !== "ui_v04") continue;
+    const current = sync().workflows.find((item) => item.workflowId === w.workflowId);
+    if (!current || current.sourceHash !== w.sourceHash || current.status !== w.status) continue;
+    const warnings = replaceDependencyWarnings(current.warnings, dependencyWarnings(cls.json as DependencyWorkflow, info));
+    if (JSON.stringify(warnings) !== JSON.stringify(current.warnings)) sync().patchWorkflow(w.workflowId, { warnings });
   }
 }
 
@@ -1106,7 +1145,7 @@ export async function bridgeInstalledInComfy(): Promise<boolean> {
   if (!host) return false;
   try {
     const { xfetch } = await import("../services/http");
-    const r = await xfetch(`${normalizeHost(host)}/extensions`, { cache: "no-store" });
+    const r = await xfetch(`${normalizeHost(host)}/extensions`, { cache: "no-store" }, { timeoutMs:5000 });
     if (!r.ok) return false;
     const list = (await r.json()) as string[];
     return Array.isArray(list) && list.some((x) => String(x).includes("momo_bridge"));
@@ -1124,6 +1163,7 @@ export async function installBridge(): Promise<string> {
   });
   if (!picked || typeof picked !== "string") throw new Error("已取消");
   const dir = await invoke<string>("comfy_bridge_install", { comfyDir: picked });
+  await saveComfyRuntime({bridgeDir:dir});
   log({ level: "info", event: "bridge_installed", message: `同步桥扩展已安装到 ${dir}——重启 ComfyUI 后生效（保存即时同步 / 在 ComfyUI 中打开）` });
   return dir;
 }

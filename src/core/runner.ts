@@ -1,3 +1,4 @@
+import { ecomContinuityPrompt, ecomEdge } from "./ecomContinuity";
 /**
  * 节点运行引擎：收集上游 → 调用对应服务 → 结果写回节点 + 收录资产库
  */
@@ -225,9 +226,9 @@ function nodeOutput(
       const g = d as EcomImageData;
       if (g.outMode === "prompt") {
         // 提示词模式：各切片提示词逐条输出（下游可接生成图像节点自行出图）
-        for (const s of g.analysis?.slides ?? []) {
+        for (const [index, s] of (g.slides ?? g.analysis?.slides ?? []).entries()) {
           const t = (s.prompt ?? "").trim();
-          if (t) texts.push(t);
+          if (t) texts.push(t + "\n" + ecomContinuityPrompt(g.slides ?? g.analysis?.slides ?? [],index,[]));
         }
       } else {
         const r = g.result;
@@ -340,6 +341,9 @@ export function collectUpstream(
   }
   // 退出本节点：只在「当前路径」上防环，兄弟分支仍能正常展开同一个上游
   visited.delete(nodeId);
+  // 助手任务没有额外参考图节点；预检、参数栏、重试共用这份确认时快照。
+  const target = nodes.find(n => n.id === nodeId);
+  if (!images.length && target?.type === "imageGen") images.push(...((target.data as ImageGenData).referenceImages ?? []));
   return { texts, images, videos, audios };
 }
 
@@ -373,6 +377,14 @@ export function collectUpstreamParts(nodeId: string): UpstreamPart[] {
       continue;
     }
     push(nodeTitle(src), src.id, nodeOutput(src, new Set([nodeId])));
+  }
+  if (!out.some(p => p.kind === "image")) {
+    const target = nodes.find(n => n.id === nodeId);
+    if (target?.type === "imageGen") {
+      for (const [i, value] of ((target.data as ImageGenData).referenceImages ?? []).entries()) {
+        out.push({ from: `助手参考图 ${i + 1}`, nodeId, kind: "image", value });
+      }
+    }
   }
   return out;
 }
@@ -636,6 +648,14 @@ export function collectImageRefsFor(nodeId: string): { src: string; label: strin
     if (seen.has(src.id)) continue;
     if (pushNode(src)) seen.add(src.id);
   }
+  if (!out.length) {
+    const node = nodes.find(n => n.id === nodeId);
+    if (node?.type === "imageGen") {
+      for (const [i, src] of ((node.data as ImageGenData).referenceImages ?? []).entries()) {
+        out.push({ src, label: `助手参考图 ${i + 1}` });
+      }
+    }
+  }
   return out;
 }
 
@@ -691,7 +711,7 @@ export async function runImageGen(id: string) {
   const sizeDirectives = texts.filter(isSizeDirective);
   const promptTexts = texts.filter((t) => !isSizeDirective(t));
   const rawPrompt = (data.prompt ?? "").trim() || promptTexts.join("\n");
-  const prompt = rawPrompt ? brandPrompt(useBoard.getState().activeId,rawPrompt) : "";
+  const prompt = data.imageOperation==="edit"?rawPrompt:rawPrompt ? brandPrompt(useBoard.getState().activeId,rawPrompt) : "";
   if (!prompt && !images.length) {
     toast("请输入提示词，或连接一个提示词/对话节点", "err");
     return;
@@ -702,9 +722,10 @@ export async function runImageGen(id: string) {
   try {
     const card = resolveModelCard("image", data.modelId);
     primaryCard = card;
-    let finalPrompt = await localizePrompt(resolveAtRefs(prompt, id), data.lang);
+    if(data.imageOperation==="edit" && !images.length)throw Error("编辑需要原图，请连接要修改的图片");
+    let finalPrompt = data.imageOperation==="edit"?prompt:await localizePrompt(resolveAtRefs(prompt, id), data.lang);
     // 创意度（仅图生图）：翻译成模型能懂的力度描述，附在提示词末尾
-    const cv = images.length ? creativityPhrase(data.creativity) : null;
+    const cv = images.length && data.imageOperation!=="edit" ? creativityPhrase(data.creativity) : null;
     if (cv) finalPrompt = `${finalPrompt}\n${cv}`;
 
     // 预算护栏：超日预算阻断、超确认阈值弹确认（生成类才预拦；返回 idle 不算错误）
@@ -744,6 +765,7 @@ export async function runImageGen(id: string) {
       const parallel = Math.max(1, Math.min(3, Math.round(data.parallel ?? 1)));
       if(c.protocol==="codex"&&(parallel>1||data.count>1))throw Error("Codex 会员通道请设置单路、每次 1 张，避免重复扣用额度");
       const req = {
+        operation: data.imageOperation,
         newConversation: data.newConversation,
         onProgress: (stage:string) => upd(id,{progress:stage}),
         prompt: finalPrompt,
@@ -2097,6 +2119,8 @@ function atRefsFromPrompt(prompt: string | undefined, nodeId: string): string[] 
 /** 选参考图：该片提示词里 @引用的图 > 上一片(过渡) > 首张产出(风格锚)；product 模式保底塞 1 张产品图防丢主体；去重取前 max 张 */
 function ecomRefs(o: {
   atRefs?: string[];
+  edge?: string;
+  next?: string;
   prev?: string;
   anchor?: string;
   productImg?: string;
@@ -2106,7 +2130,7 @@ function ecomRefs(o: {
   const max = Math.max(1, o.max);
   // product 模式保底留 1 张产品图槽：用户 @的参考图再多也不丢主体一致性
   const reserve = o.mode === "product" && o.productImg ? 1 : 0;
-  const head = [...(o.atRefs ?? []), o.prev, o.anchor].filter((x): x is string => !!x);
+  const head = [o.edge, o.next, ...(o.atRefs ?? []), o.prev, o.anchor].filter((x): x is string => !!x);
   const dedupHead = [...new Set(head)].slice(0, Math.max(0, max - reserve));
   const chain = reserve && o.productImg ? [...dedupHead, o.productImg] : dedupHead;
   return [...new Set(chain)].slice(0, max);
@@ -2208,7 +2232,7 @@ export async function analyzeEcom(id: string) {
         `分析结果解析失败：模型没有按 JSON 格式返回（请重试，或在「设置」换一个遵循 JSON 的对话模型）。模型回复前 200 字：${text.slice(0, 200).replace(/\s+/g, " ")}`,
       );
     }
-    const slides: EcomSlide[] = analysis.slides.map((s) => ({ title: s.title, prompt: s.prompt, copy: s.copy }));
+    const slides: EcomSlide[] = analysis.slides.map((s) => ({ title: s.title, prompt: s.prompt, copy: s.copy, entryEdge:s.entryEdge, exitEdge:s.exitEdge }));
     // 只规划：清掉旧图，保留可编辑的提示词脚本，等用户确认后再生成长图
     upd(id, { status: "done", analysis, slides, result: undefined, progress: undefined });
     notifyDone(mode === "h5" ? "切片规划" : "产品分析");
@@ -2255,8 +2279,9 @@ export async function generateEcom(id: string) {
     for (let i = 0; i < slides.length; i++) {
       if (taskSignal(id)?.aborted) throw new DOMException("Aborted", "AbortError");
       upd(id, { progress: `生成切片 ${i + 1}/${slides.length}：${slides[i].title}…` });
-      const refs = ecomRefs({ atRefs: atRefsFromPrompt(slides[i].prompt, id), prev, anchor, productImg, mode, max: maxRef });
-      const enriched = ecomEnriched({ ...slides[i], prompt: ecomResolvePrompt(slides[i].prompt, refs, id) }, analysis.product, refs.length > 0);
+      const edge = prev ? await ecomEdge(prev,"bottom") : undefined;
+      const refs = ecomRefs({ edge, atRefs: atRefsFromPrompt(slides[i].prompt, id), prev, anchor, productImg, mode, max: maxRef });
+      const enriched = ecomEnriched({ ...slides[i], prompt: ecomResolvePrompt(slides[i].prompt, refs, id) }, analysis.product, refs.length > 0) + "\n" + ecomContinuityPrompt(slides,i,refs,edge);
       const results = await generateImage(imgCard, {
         prompt: enriched,
         n: 1,
@@ -2327,6 +2352,7 @@ export async function stitchEcomResult(id: string) {
     toast("还没有切片图，先「生成长图」", "err");
     return;
   }
+  if(imgs.length!==slides.length){toast("还有切片未生成，补齐后再拼接，避免跨过缺片造成断层", "err");return;}
   upd(id, { status: "running", error: undefined, progress: "拼接长图中…" });
   try {
     let modelName = "未知模型";
@@ -2376,7 +2402,7 @@ export async function stitchEcomResult(id: string) {
 export async function regenEcomSlide(id: string, index: number) {
   const data = ecomData(id);
   if (!data || data.status === "running") return;
-  const slides = data.slides ?? [];
+  const slides = (data.slides ?? []).map(s=>({...s}));
   const slide = slides[index];
   if (!slide) {
     toast("该切片不存在", "err");
@@ -2396,8 +2422,10 @@ export async function regenEcomSlide(id: string, index: number) {
     const imgCard = resolveModelCard("image", data.imageModelId);
     const anchor = slides.find((s) => s.img)?.img;
     const prev = index > 0 ? slides[index - 1]?.img : undefined;
-    const refs = ecomRefs({ atRefs: atRefsFromPrompt(slide.prompt, id), prev, anchor, productImg, mode, max: maxRef });
-    const enriched = ecomEnriched({ ...slide, prompt: ecomResolvePrompt(slide.prompt, refs, id) }, data.analysis?.product, refs.length > 0);
+    const edge=prev?await ecomEdge(prev,"bottom"):undefined;
+    const next=slides[index+1]?.img?await ecomEdge(slides[index+1].img!,"top"):undefined;
+    const refs = ecomRefs({ edge, next, atRefs: atRefsFromPrompt(slide.prompt, id), prev, anchor, productImg, mode, max: maxRef });
+    const enriched = ecomEnriched({ ...slide, prompt: ecomResolvePrompt(slide.prompt, refs, id) }, data.analysis?.product, refs.length > 0) + "\n" + ecomContinuityPrompt(slides,index,refs,edge,next);
     const results = await generateImage(imgCard, {
       prompt: enriched,
       n: 1,

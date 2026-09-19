@@ -112,7 +112,7 @@
 }
 
 /* ------------- 深邃黑主题（中性石墨底 + 灰白强调） ------------- */
-:root[data-theme="black"] {
+:root[data-theme="black"], .tc-preview[data-theme="black"] {
   --logo-from: #626971;
   --logo-mid: #4b5159;
   --logo-to: #373c43;

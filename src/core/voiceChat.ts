@@ -13,7 +13,7 @@ import { resolveModelCard } from "./stores/settingsStore";
 import { pushError, toast } from "./stores/uiStore";
 import { transcribe } from "./services/asr";
 import { generateAudio } from "./services/audioGen";
-import { sendAgentMessage, sendSideChat } from "./agentEngine";
+import { sendAgentMessage } from "./agentEngine";
 import { errMsg } from "./utils";
 
 /* ---------------- 调参（依据常见麦克风底噪与中文语速） ---------------- */
@@ -247,8 +247,7 @@ async function loop(epoch:number,signal:AbortSignal) {
     const st = useAgent.getState();
     st.setDraft(text);
     // 有挂起的抉择问题时，这句话就是对问题的回答（sendAgentMessage 内部已处理）
-    if (st.mode === "chat") void sendSideChat();
-    else void sendAgentMessage();
+    void sendAgentMessage();
     await waitAssistantDone();
     if (!active || epoch!==callEpoch) break;
 

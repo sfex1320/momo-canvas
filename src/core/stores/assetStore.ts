@@ -135,6 +135,8 @@ export const useAssets = create<AssetState>((set, get) => {
     setOpen: (v) => set({ open: v }),
 
     collect: async (input) => {
+      const originBoard = useBoard.getState();
+      const boardId = input.nodeId ? (originBoard.nodes.some(n=>n.id===input.nodeId)?originBoard.activeId:Object.values(originBoard.boards).find(b=>b.nodes.some(n=>n.id===input.nodeId))?.meta.id) : originBoard.activeId;
       try {
         // 导演台参考素材按内容指纹去重：同一张图/一段声音无论复用多少次（拖进多个片段、重复导入文件夹），
         // 只落一份磁盘文件、返回同一个资产条目，杜绝「导演台参考」里堆重复副本。生成结果不去重（内容相同也是新版本）。
@@ -173,7 +175,7 @@ export const useAssets = create<AssetState>((set, get) => {
         // 按当前画布名自动归入同名文件夹（不存在则创建）
         let folderId: string | null = null;
         const b = useBoard.getState();
-        const boardName = b.boards[b.activeId]?.meta.name?.trim();
+        const boardName = b.boards[boardId??""]?.meta.name?.trim();
         if (boardName) {
           folderId = get().folders.find((f) => f.name === boardName)?.id ?? get().createFolder(boardName);
         }
@@ -201,6 +203,7 @@ export const useAssets = create<AssetState>((set, get) => {
           source: "canvas",
           gen: input.gen,
           nodeId: input.nodeId,
+          boardId,
           director: input.director,
           // dataURL 来源自动写内容指纹：导演台参考图等按内容去重的场景才能跨入口生效
           contentHash: input.contentHash ?? (input.src.startsWith("data:") ? hashDataUrl(input.src) : undefined),
@@ -225,6 +228,7 @@ export const useAssets = create<AssetState>((set, get) => {
     },
 
     importFileGetItem: async (f) => {
+      const boardId=useBoard.getState().activeId;
       try {
         const bytes = new Uint8Array(await f.arrayBuffer());
         let ext = f.name.includes(".") ? f.name.split(".").pop()! : extFromMime(f.type);
@@ -244,6 +248,7 @@ export const useAssets = create<AssetState>((set, get) => {
           height: stored.height,
           folderId: null,
           source: "import",
+          boardId,
           createdAt: Date.now(),
         };
         set((s) => ({ items: [item, ...s.items] }));

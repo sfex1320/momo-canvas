@@ -34,6 +34,7 @@ export function ModelPicker({
   // 订阅整份模型配置：服务商增删/改名/改槽位都要刷新列表
   useSettings((s) => s.settings.models);
   const defaults = useSettings((s) => s.settings.models.defaults);
+  const grouped=useSettings(s=>s.settings.modelPickerMode==="provider");
   // 本地 GGUF 注册表增删也触发刷新（providersOfRole 内部注入虚拟服务商）
   useLocalGguf((s) => s.models);
   const providers = providersOfRole(role);
@@ -58,12 +59,12 @@ export function ModelPicker({
       desc: defEntry ? `跟随角色默认 · ${defEntry.provider} ${defEntry.model}` : "尚未配置模型",
       icon: <IcSparkles size={16} />,
     },
-    ...entries.map((e) => ({
+    ...(grouped?providers.map(p=>({value:`provider:${p.id}`,label:p.name,desc:`${p.models[role]?.models.length??0} 个模型`,icon:ROLE_ICON[role],children:entries.filter(e=>splitModelKey(e.key).pid===p.id).map(e=>({value:e.key,label:e.model,icon:ROLE_ICON[role]}))})):entries.map((e) => ({
       value: e.key,
       label: e.model,
       desc: e.provider,
       icon: ROLE_ICON[role],
-    })),
+    }))),
   ];
 
   return (
@@ -76,6 +77,7 @@ export function ModelPicker({
       placeholder="选择模型…"
       onChange={(v) => onChange(v || undefined)}
       up={up}
+      triggerIcon
     />
   );
 }

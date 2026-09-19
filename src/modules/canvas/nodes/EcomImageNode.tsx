@@ -40,6 +40,12 @@ export function EcomWorkshop({ id, d, onClose }: { id: string; d: EcomImageData;
     upd(id, { slides: next });
   };
 
+  const setEdge=(index:number,side:"entryEdge"|"exitEdge",value:string)=>{
+    const next=slides.map(s=>({...s}));next[index][side]=value;
+    const neighbor=side==="entryEdge"?index-1:index+1;
+    if(next[neighbor])next[neighbor][side==="entryEdge"?"exitEdge":"entryEdge"]=value;
+    upd(id,{slides:next,result:undefined});
+  };
   // @引用：上游图 chips 点击插入到「最近点过的切片」提示词，作该片风格参考
   const upstreamRefs = useOwnUpstreamImageRefs(id);
   const [focusedSlide, setFocusedSlide] = useState(0);
@@ -190,6 +196,7 @@ export function EcomWorkshop({ id, d, onClose }: { id: string; d: EcomImageData;
                     {s.title}
                   </div>
                   <p className="ecom-card-summary">{s.prompt || "尚未填写提示词"}</p>
+                  <details className="nodrag" onDragStart={e=>e.stopPropagation()}><summary>上下接缝计划</summary><label>顶部过渡<textarea className="textarea" rows={2} disabled={running} value={s.entryEdge??""} placeholder="底色、纹理、延伸元素的位置" onChange={e=>setEdge(i,"entryEdge",e.target.value)}/></label><label>底部过渡<textarea className="textarea" rows={2} disabled={running} value={s.exitEdge??""} placeholder="自动同步到下一片顶部" onChange={e=>setEdge(i,"exitEdge",e.target.value)}/></label></details>
                   <PromptAiTools value={s.prompt ?? ""} image={s.img ?? upstreamRefs[0]?.src} onApply={text => setPrompt(i, text)}/>
                   {s.copy ? (
                     <div className="ecom-card-copy" title={s.copy}>

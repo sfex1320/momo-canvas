@@ -5,6 +5,7 @@ import { ReactFlowProvider } from "@xyflow/react";
 const PlanarSheetPanel = lazy(()=>import("./modules/canvas/PlanarSheetPanel").then(m=>({default:m.PlanarSheetPanel})));
 const LayerEditor = lazy(()=>import("./modules/canvas/LayerEditor").then(m=>({default:m.LayerEditor})));
 import { Titlebar } from "./modules/shell/Titlebar";
+import { ComfyLauncherPicker } from "./ui/ComfyLaunchButton";
 import { SmartCanvas } from "./modules/canvas/SmartCanvas";
 import { AgentPanel } from "./modules/agent/AgentPanel";
 import { GalleryDock } from "./modules/shell/GalleryDock";
@@ -12,7 +13,6 @@ const SettingsDialog = lazy(()=>import("./modules/settings/SettingsDialog").then
 const TemplateManager = lazy(()=>import("./modules/comfy/TemplateManager").then(m=>({default:m.TemplateManager})));
 const SyncCenter = lazy(()=>import("./modules/comfySync/SyncCenter").then(m=>({default:m.SyncCenter})));
 import { AssetLibrary } from "./modules/assets/AssetLibrary";
-const CharLibrary = lazy(()=>import("./modules/charlib/CharLibrary").then(m=>({default:m.CharLibrary})));
 const SkillManager = lazy(()=>import("./modules/skills/SkillManager").then(m=>({default:m.SkillManager})));
 const DirectorStudio = lazy(()=>import("./modules/director/DirectorStudio").then(m=>({default:m.DirectorStudio})));
 import { GgufImportDialog } from "./modules/settings/GgufImportDialog";
@@ -377,7 +377,7 @@ function SeqPlayer() {
 export default function App() {
   const [ready, setReady] = useState(false);
   const agentOpen = useUi((s) => s.agentOpen);
-  const panels = useUi(useShallow(s=>({settingsOpen:s.settingsOpen,templateMgrOpen:s.templateMgrOpen,comfySyncOpen:s.comfySyncOpen,charLibOpen:s.charLibOpen,skillMgrOpen:s.skillMgrOpen,directorOpen:s.directorOpen,localLlmSetupOpen:s.localLlmSetupOpen,layerEditorNodeId:s.layerEditorNodeId,planarSheetNodeId:s.planarSheetNodeId})));
+  const panels = useUi(useShallow(s=>({settingsOpen:s.settingsOpen,templateMgrOpen:s.templateMgrOpen,comfySyncOpen:s.comfySyncOpen,skillMgrOpen:s.skillMgrOpen,directorOpen:s.directorOpen,localLlmSetupOpen:s.localLlmSetupOpen,layerEditorNodeId:s.layerEditorNodeId,planarSheetNodeId:s.planarSheetNodeId})));
 
   useEffect(() => {
     void Promise.all([
@@ -490,10 +490,10 @@ export default function App() {
       {panels.templateMgrOpen && <Suspense fallback={<div role="status">加载中…</div>}><TemplateManager /></Suspense>}
       {panels.comfySyncOpen && <Suspense fallback={<div role="status">加载中…</div>}><SyncCenter /></Suspense>}
       <AssetLibrary />
-      {panels.charLibOpen && <Suspense fallback={<div role="status">加载中…</div>}><CharLibrary /></Suspense>}
       {panels.skillMgrOpen && <Suspense fallback={<div role="status">加载中…</div>}><SkillManager /></Suspense>}
       {panels.directorOpen && <Suspense fallback={<div role="status">加载中…</div>}><DirectorStudio /></Suspense>}
       <GgufImportDialog />
+      <ComfyLauncherPicker />
       {panels.localLlmSetupOpen && <Suspense fallback={<div role="status">加载中…</div>}><LocalLlmSetup /></Suspense>}
       <Lightbox />
       <SeqPlayer />

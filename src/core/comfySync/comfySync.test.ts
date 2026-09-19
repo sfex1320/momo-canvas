@@ -16,6 +16,8 @@ import {
   computeRevisionKeep,
   displayNameOfRel,
   fnv1a,
+  dependencyWarnings,
+  replaceDependencyWarnings,
 } from "./classify.ts";
 import { normRel, matchRenames } from "./identity.ts";
 import { applyParamPatches, detectPatchConflicts, injectStableNodeIds, patchesFromValues, readWidgetValue, isLinked } from "./writeBack.ts";
@@ -235,6 +237,22 @@ const mkUi = () => ({
   eq("扩展字段 1", d.counts.meta, 1);
   ok("参数名映射（objectInfo 在线）", d.rows.some((r) => r.kind === "param" && r.text.includes("steps")));
   ok("摘要非空", !!diffSummary(d));
+}
+
+/* ---------------- 依赖检查与旧警告刷新 ---------------- */
+{
+  const oi = { RealNode: { input: { required: {} } } };
+  eq("备注和前端虚拟节点不误报缺后端插件", dependencyWarnings({ nodes: ["Note", "MarkdownNote", "Reroute", "PrimitiveNode", "SetNode", "GetNode"].map((type, id) => ({ id, type })) }, oi), []);
+  const subgraph = { id: "uuid-defined", nodes: [{ id: 2, type: "RealNode" }, { id: 3, type: "MissingInner" }] };
+  const warnings = dependencyWarnings({ nodes: [{ id: 1, type: subgraph.id }], definitions: { subgraphs: [subgraph] } }, oi);
+  ok("已定义子图不当作缺失的 UUID 插件", !warnings.some((w) => w.includes("uuid-defined")));
+  ok("子图内真实缺失节点仍报警", warnings.some((w) => w.includes("MissingInner")));
+  ok("没有定义的 UUID 不能一概忽略", dependencyWarnings({ nodes: [{ id: 1, type: "uuid-undefined" }] }, oi).some((w) => w.includes("uuid-undefined")));
+  eq("未使用子图不产生依赖报警", dependencyWarnings({ nodes: [{ id: 1, type: "RealNode" }], definitions: { subgraphs: [subgraph] } }, oi), []);
+  eq("静音与旁路节点不检查执行依赖", dependencyWarnings({ nodes: [{ id: 1, type: "MissingMuted", mode: 2 }, { id: 2, type: "MissingBypassed", mode: 4 }] }, oi), []);
+  eq("子图循环不会无限递归", dependencyWarnings({ nodes: [{ id: 1, type: "loop" }], definitions: { subgraphs: [{ id: "loop", nodes: [{ id: 2, type: "loop" }] }] } }, oi), []);
+  eq("刷新移除旧依赖警告且保留转换警告", replaceDependencyWarnings(["SYNC_MISSING_NODE: 旧误报", "疑似缺失模型：旧模型", "嵌套子图未展开"], []), ["嵌套子图未展开"]);
+  eq("刷新保留真实缺失并去重", replaceDependencyWarnings(["其他警告"], ["真实缺失", "真实缺失"]), ["其他警告", "真实缺失"]);
 }
 
 /* ---------------- 汇总 ---------------- */

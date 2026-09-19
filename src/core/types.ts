@@ -72,7 +72,7 @@ export type AgentMsg = {
   /** 生成结果（内联展示，同时已收录资产库） */
   results?: AgentResult[];
   /** 这条助手消息由哪种模式产生：决定用哪种气泡渲染，切换面板模式后历史不会变形/消失 */
-  kind?: "chat" | "agent";
+  kind?: "chat" | "agent" | "edit";
   time: number;
 };
 
@@ -168,6 +168,10 @@ export type ChatData = {
 export type GridAspect = "16:9" | "9:16" | "1:1";
 
 export type ImageGenData = {
+  /** 编辑节点保留修改原文，重试不注入整图风格模板。 */
+  imageOperation?: "generate" | "edit";
+  /** 助手确认时冻结的参考图；重试直接读取，避免复制参考节点或重跑旧生成。显式上游图片优先。 */
+  referenceImages?: string[];
   progress?: string;
   /** Codex：不沿用参考图片的历史会话。 */
   newConversation?: boolean;
@@ -601,6 +605,9 @@ export type EcomSlide = {
   title: string;
   /** 该切片的生图提示词（视觉分析产出，可手动编辑） */
   prompt: string;
+  /** 连续长图的顶部/底部接缝计划，旧规划缺省由运行时补充。 */
+  entryEdge?: string;
+  exitEdge?: string;
   /** 配套文案（产品介绍 / 卖点 / 适用人群等，展示用） */
   copy?: string;
   /** 生成后的切片图（dataURL/assetUrl） */
@@ -935,6 +942,12 @@ export type HotkeyAction =
   | "newBoard"
   | "voiceCall"
   | "director"
+  | "comfyLaunch"
+  | "comfySync"
+  | "templateManager"
+  | "skillManager"
+  | "sendToAgent"
+  | "modelSettings"
   // 下方工具坞：添加各类节点到视图中心（与 nodeCatalog 的条目一一对应）
   | "addImage"
   | "addVideo"
@@ -985,7 +998,7 @@ export const HOTKEY_LABEL: Record<HotkeyAction, string> = {
   align: "对齐所选节点（多选按主轴对齐，单选吸到网格）",
   zen: "沉浸模式",
   agent: "打开/关闭创作助手",
-  charLib: "打开/关闭角色库",
+  charLib: "旧角色预设（已停用）",
   settings: "打开设置",
   errCenter: "打开/关闭报错中心",
   runLog: "打开/关闭运行日志",
@@ -993,6 +1006,12 @@ export const HOTKEY_LABEL: Record<HotkeyAction, string> = {
   newBoard: "新建画布",
   voiceCall: "语音通话（开始/挂断）",
   director: "打开/关闭导演台",
+  comfyLaunch: "一键启动 ComfyUI",
+  comfySync: "打开 Comfy 工作流同步中心",
+  templateManager: "打开 ComfyUI 模板管理",
+  skillManager: "打开 Skill 管理",
+  sendToAgent: "将所选图片/组加入创作助手",
+  modelSettings: "打开模型配置",
   undo: "撤销",
   redo: "重做",
   duplicate: "创建副本",
@@ -1056,7 +1075,7 @@ export const DEFAULT_HOTKEYS: Record<HotkeyAction, string> = {
   align: "a",
   // 标题栏功能（默认全走 Ctrl+Shift，避免和画布单键/浏览器快捷键打架）
   agent: "ctrl+shift+a",
-  charLib: "ctrl+shift+c",
+  charLib: "",
   settings: "ctrl+,",
   errCenter: "ctrl+shift+e",
   runLog: "ctrl+shift+l",
@@ -1064,6 +1083,12 @@ export const DEFAULT_HOTKEYS: Record<HotkeyAction, string> = {
   newBoard: "ctrl+shift+n",
   voiceCall: "ctrl+shift+v",
   director: "ctrl+shift+d",
+  comfyLaunch: "ctrl+shift+c",
+  comfySync: "ctrl+shift+s",
+  templateManager: "ctrl+shift+m",
+  skillManager: "ctrl+shift+k",
+  sendToAgent: "ctrl+shift+i",
+  modelSettings: "ctrl+shift+u",
   // 工具坞按排列顺序对应 1~9、0，编辑/角色类用 Alt+数字
   addImage: "1",
   addVideo: "6",
@@ -1106,7 +1131,8 @@ export type ShortcutItem = {
   name: string;
   /** exe / 文件夹的绝对路径 */
   path: string;
-  kind: "app" | "folder";
+  kind: "app" | "folder" | "website";
+  icon?: string;
 };
 
 /* ---------------- 自定义生成协议（协议执行器） ----------------
@@ -1177,6 +1203,8 @@ export type Budget = {
 };
 
 export type Settings = {
+  /** 模型选择器：平铺或按服务商显示二级列表。 */
+  modelPickerMode: "flat" | "provider";
   models: ModelsCfg;
   search: SearchCfg;
   save: SaveCfg;
@@ -1208,6 +1236,7 @@ export type Settings = {
 };
 
 export const DEFAULT_SETTINGS: Settings = {
+  modelPickerMode: "flat",
   models: { providers: [], defaults: {} },
   search: { provider: "tavily", apiKey: "", baseUrl: "", maxResults: 5 },
   save: { dir: "", format: "png", pattern: "{date}_{time}_{model}", autoSave: false, embedMeta: true },
@@ -1651,6 +1680,8 @@ export type AssetItem = {
   annotation?: string;
   /** 生成参数快照（画布生成物才有）：资产卡「Remix」按此还原生成节点 */
   gen?: AssetGenMeta;
+  /** 资产所属画布，旧资产按节点归属回退。 */
+  boardId?: string;
   /** 该资产来自哪个画布生成节点（资产卡「定位到画布节点」用；老资产无此字段） */
   nodeId?: string;
   /** 同一次生成的多个结果共用；资产库据此折叠成一张组卡片 */
@@ -2707,3 +2738,11 @@ export type DirectorSessionData = {
   summaryUpto?: number;
   epoch: number;
 };
+/** 本机 ComfyUI 目录只读识别出的启动入口。 */
+export interface ComfyLauncherCandidate {
+  directRoot?: string | null;
+  path: string;
+  name: string;
+  reason: string;
+  port: number | null;
+}

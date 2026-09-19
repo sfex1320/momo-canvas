@@ -14,6 +14,8 @@ export interface PopOption {
   desc?: string;
   icon?: ReactNode;
   disabled?: boolean;
+  /** 二级选项：悬停、点击或键盘进入侧边列表。 */
+  children?: PopOption[];
 }
 
 /** 当前打开的浮层栈（后开的在末尾）：Esc 只关最上层 */
@@ -29,6 +31,7 @@ export function PopLayer({
   children,
   className,
   style,
+  side,
 }: {
   /** 触发器所在容器：点在容器内（如触发按钮）不视为外部点击 */
   anchorRef: RefObject<HTMLElement | null>;
@@ -38,8 +41,11 @@ export function PopLayer({
   children: ReactNode;
   className?: string;
   style?: CSSProperties;
+  side?: boolean;
 }) {
   const ref = useRef<HTMLDivElement>(null);
+  const closeRef=useRef(onClose);
+  closeRef.current=onClose;
   const [flipUp, setFlipUp] = useState(up ?? false);
   // 初始放到屏幕外，useLayoutEffect 在首帧绘制前量好坐标，避免闪烁
   const [pos, setPos] = useState<{ left: number; top: number; minW: number }>({ left: -9999, top: -9999, minW: 200 });
@@ -60,9 +66,10 @@ export function PopLayer({
       left = Math.max(8, Math.min(left, window.innerWidth - lw - 8));
       // 纵向：向下优先，下方不够则向上翻；整体收进视口
       let top = flip ? r.top - lh - 6 : r.bottom + 6;
+      if(side){left=r.right+lw+8<window.innerWidth?r.right+4:r.left-lw-4;left=Math.max(8,Math.min(left,window.innerWidth-lw-8));top=r.top;}
       top = Math.max(8, Math.min(top, window.innerHeight - lh - 8));
       // 最小宽度：至少与触发器同宽（兜底 180），替代原先 max(100%,200px)（fixed 下 100%=视口，会撑满）
-      setPos({ left, top, minW: Math.max(r.width, 180) });
+      setPos({ left, top, minW: side?220:Math.max(r.width, 180) });
     };
     measure();
     const ro = new ResizeObserver(measure);
@@ -74,22 +81,24 @@ export function PopLayer({
       window.removeEventListener("resize", measure);
       window.removeEventListener("scroll", measure, true);
     };
-  }, [up, anchorRef]);
+  }, [up, side, anchorRef]);
 
   useEffect(() => {
     // 浮层栈：嵌套弹层时 Esc 只关最上面那层（否则一次全关，外层弹窗也跟着没了）
     layerStack.push(ref);
     const onDown = (e: PointerEvent) => {
       const t = e.target as Node;
+      const index=layerStack.indexOf(ref);
+      if(layerStack.slice(index+1).some(layer=>layer.current?.contains(t)))return;
       if (ref.current?.contains(t)) return;
       if (anchorRef.current?.contains(t)) return; // 触发按钮的 onClick 自己处理开合
-      onClose();
+      closeRef.current();
     };
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
       if (layerStack[layerStack.length - 1] !== ref) return;
       e.stopPropagation();
-      onClose();
+      closeRef.current();
     };
     window.addEventListener("pointerdown", onDown, true);
     window.addEventListener("keydown", onKey);
@@ -99,7 +108,7 @@ export function PopLayer({
       window.removeEventListener("pointerdown", onDown, true);
       window.removeEventListener("keydown", onKey);
     };
-  }, [onClose, anchorRef]);
+  }, [anchorRef]);
 
   return createPortal(
     <div
@@ -144,21 +153,25 @@ export function PopSelect({
 }) {
   const [open, setOpen] = useState(false);
   const wrapRef = useRef<HTMLDivElement>(null);
-  const cur = options.find((o) => o.value === value);
+  const childRef=useRef<HTMLButtonElement|null>(null);
+  const [group,setGroup]=useState<PopOption|null>(null);
+  const activeGroup=options.find(o=>o.value===group?.value);
+  const cur = options.flatMap(o=>o.children??[o]).find((o) => o.value === value);
+  const close=()=>{setOpen(false);setGroup(null);};
   return (
     <div ref={wrapRef} className={`pop-wrap ${className ?? ""}`} style={style}>
       <button
         type="button"
         className={`pop-trigger ${open ? "open" : ""}`}
         disabled={disabled}
-        onClick={() => setOpen((v) => !v)}
+        onClick={() => {setOpen((v) => !v);setGroup(null);}}
       >
         {triggerIcon && cur?.icon ? <span className="pt-ic">{cur.icon}</span> : null}
         <span className={`pt-label ${cur ? "" : "ph"}`}>{cur ? cur.label : placeholder}</span>
         <IcChevronD size={13} />
       </button>
       {open ? (
-        <PopLayer anchorRef={wrapRef} onClose={() => setOpen(false)} up={up} className={layerClassName}>
+        <PopLayer anchorRef={wrapRef} onClose={close} up={up} className={layerClassName}>
           {title ? <div className="pop-title">{title}</div> : null}
           <div className="pop-list">
             {options.map((o) => (
@@ -167,10 +180,15 @@ export function PopSelect({
                 type="button"
                 className={`pop-item ${o.value === value ? "on" : ""}`}
                 disabled={o.disabled}
-                onClick={() => {
+                aria-haspopup={o.children?"menu":undefined}
+                onMouseEnter={e=>{childRef.current=e.currentTarget;setGroup(o.children?o:null);}}
+                onFocus={e=>{if(o.children){childRef.current=e.currentTarget;setGroup(o);}}}
+                onKeyDown={e=>{if(o.children&&e.key==="ArrowRight"){e.preventDefault();childRef.current=e.currentTarget;setGroup(o);}}}
+                onClick={(e) => {
                   if (o.disabled) return;
+                  if(o.children){childRef.current=e.currentTarget;setGroup(o);return;}
                   onChange(o.value);
-                  setOpen(false);
+                  close();
                 }}
               >
                 {o.icon ? <span className="pi-icon">{o.icon}</span> : null}
@@ -179,9 +197,15 @@ export function PopSelect({
                   {o.desc ? <span className="pi-desc">{o.desc}</span> : null}
                 </span>
                 {o.value === value ? <IcCheck size={15} /> : null}
+                {o.children?<span aria-hidden="true">›</span>:null}
               </button>
             ))}
           </div>
+          {activeGroup?.children?<PopLayer key={activeGroup.value} anchorRef={childRef} side onClose={()=>setGroup(null)} className={layerClassName}>
+            <div className="pop-title">{activeGroup.label}</div><div className="pop-list">{activeGroup.children.map(o=><button type="button" key={o.value} className={`pop-item ${o.value===value?"on":""}`} disabled={o.disabled} onClick={()=>{onChange(o.value);close();}}>
+              {o.icon?<span className="pi-icon">{o.icon}</span>:null}<span className="pi-text"><span className="pi-label">{o.label}</span>{o.desc?<span className="pi-desc">{o.desc}</span>:null}</span>{o.value===value?<IcCheck size={15}/>:null}
+            </button>)}</div>
+          </PopLayer>:null}
         </PopLayer>
       ) : null}
     </div>

@@ -8,7 +8,7 @@ type AgentPrefs = {
   modelId?: string;
   imageModelId?: string;
   videoModelId?: string;
-  mode?: "chat" | "agent";
+  mode?: "chat" | "agent" | "edit";
   webSearch?: boolean;
   /** 思考模式（仅创作助手生效；Ollama / 本地 GGUF 等支持思考的模型） */
   thinkingOn?: boolean;
@@ -47,7 +47,7 @@ type AgentState = {
   /** Agent 生视频用的视频模型复合键，空 = 角色默认 */
   videoModelId?: string;
   /** 面板模式：chat = 多模态聊天（完善想法/提示词）；agent = 自动搜资料出图出片 */
-  mode: "chat" | "agent";
+  mode: "chat" | "agent" | "edit";
   /** 聊天模式：发送前先联网搜索 */
   webSearch: boolean;
   /** 思考模式开关（仅创作助手生效；关闭时给支持思考的模型下发禁用思考指令） */
@@ -69,7 +69,7 @@ type AgentState = {
   setVideoModelId: (v?: string) => void;
   /** 载入上次的模型/模式选择（应用启动时调一次） */
   initPrefs: () => Promise<void>;
-  setMode: (m: "chat" | "agent") => void;
+  setMode: (m: "chat" | "agent" | "edit") => void;
   toggleWebSearch: () => void;
   toggleThinking: () => void;
   setSummary: (s: string, upto: number) => void;
@@ -77,7 +77,7 @@ type AgentState = {
 
   /* ---- 引擎内部使用 ---- */
   pushUser: (text: string, images: string[]) => void;
-  beginAssistant: (kind?: "chat" | "agent") => string;
+  beginAssistant: (kind?: "chat" | "agent" | "edit") => string;
   updateMsg: (id: string, patch: Partial<AgentMsg>) => void;
   addStep: (msgId: string, kind: AgentStepKind, text: string) => string;
   setStep: (msgId: string, stepId: string, patch: Partial<AgentStep>) => void;
@@ -96,7 +96,7 @@ export const useAgent = create<AgentState>((set, get) => ({
   modelId: undefined,
   imageModelId: undefined,
   videoModelId: undefined,
-  mode: "chat",
+  mode: "agent",
   // 默认开启：联网是创作助手的核心能力；模型自带联网时优先用模型自己的（不额外花钱），
   // 不支持的家族走内置搜索接口，未配置时自动降级直接回答。面板上可一键关闭
   webSearch: true,
@@ -107,7 +107,7 @@ export const useAgent = create<AgentState>((set, get) => ({
   resolver: null,
 
   setDraft: (v) => set({ draft: v }),
-  addAttachments: (imgs) => set((s) => ({ attachments: [...s.attachments, ...imgs].slice(0, 6), referenceMode: "auto" })),
+  addAttachments: (imgs) => set((s) => ({ attachments: [...new Set([...s.attachments, ...imgs])].slice(0, 6), referenceMode: "auto" })),
   removeAttachment: (i) => set((s) => ({ attachments: s.attachments.filter((_, x) => x !== i) })),
   setModelId: (v) => {
     set({ modelId: v });
@@ -129,7 +129,8 @@ export const useAgent = create<AgentState>((set, get) => ({
       modelId: p.modelId,
       imageModelId: p.imageModelId,
       videoModelId: p.videoModelId,
-      mode: p.mode ?? "chat",
+      // 旧版模式不再决定界面入口；所有新会话统一按本轮自然语言选择动作。
+      mode: "agent",
       // 只有从未保存过偏好（undefined）才用默认 true；用户显式关过就是 false
       webSearch: p.webSearch ?? true,
       thinkingOn: p.thinkingOn ?? true,
@@ -231,3 +232,9 @@ export const useAgent = create<AgentState>((set, get) => ({
     r?.(answer);
   },
 }));
+
+/** 设置卡片与助手顶栏共用的一键选择，模型/模式原子更新并只保存一次。 */
+export function selectCodexCreation() {
+  useAgent.setState({modelId:"codex-membership::codex-chat",imageModelId:"codex-membership::codex-image"});
+  savePrefs(useAgent.getState);
+}

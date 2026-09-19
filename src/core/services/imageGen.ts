@@ -11,6 +11,7 @@ import { dataUrlToBlob, toDataUrl } from "../utils";
 import { gptSize, grsaiGptRoute } from "../modelMeta";
 
 export type ImageGenReq = {
+  operation?: "generate" | "edit";
   prompt: string;
   size?: string;
   n?: number;
@@ -304,6 +305,7 @@ async function genCustom(card: ModelCard, req: ImageGenReq): Promise<string[]> {
 }
 
 export async function generateImage(card: ModelCard, req: ImageGenReq): Promise<string[]> {
+  if(req.operation==="edit" && !req.refImages?.length)throw Error("编辑图片必须提供原图");
   card = grsaiGptRoute(card);
   if (card.protocol === "codex") return (await import("../codexBridge")).codexGenerate(req);
   if (!card.model) throw new Error(`模型「${card.name}」缺少模型名称`);

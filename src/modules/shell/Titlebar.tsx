@@ -1,3 +1,4 @@
+import { ComfyLaunchButton } from "../../ui/ComfyLaunchButton";
 /**
  * 自绘标题栏 — 品牌 / 画板切换 / 主题 / 设置 / 窗口控制
  */
@@ -34,7 +35,6 @@ import {
   IcSparkles,
   IcSun,
   IcTrash,
-  IcUsers,
 } from "../../ui/icons";
 
 function useWindowControls() {
@@ -518,8 +518,6 @@ export function Titlebar() {
   const galleryCount = useUi((s) => s.gallery.length);
   const libOpen = useAssets((s) => s.open);
   const setLibOpen = useAssets((s) => s.setOpen);
-  const charLibOpen = useUi((s) => s.charLibOpen);
-  const setCharLibOpen = useUi((s) => s.setCharLibOpen);
   const agentOpen = useUi((s) => s.agentOpen);
   const setAgentOpen = useUi((s) => s.setAgentOpen);
   const comfySyncOpen = useUi((s) => s.comfySyncOpen);
@@ -553,6 +551,7 @@ export function Titlebar() {
       <RunLogCenter />
       <ErrCenter />
       <MemFreeBtn />
+      <ComfyLaunchButton />
       {(() => {
         // Comfy 同步入口（规格 §6.1：状态点 灰=未配置 绿=正常 蓝=有新 黄=警告 红=失败）
         const dotTitle: Record<string, string> = {
@@ -566,7 +565,7 @@ export function Titlebar() {
         return (
           <button
             className={`icon-btn ${comfySyncOpen ? "on" : ""}`}
-            title={`Comfy 工作流同步：配置一次 ComfyUI 工作流目录，之后自动同步，无需再导出 API JSON\n${dotTitle[syncHealth] ?? ""}`}
+            title={`Comfy 工作流同步${hk("comfySync")}：配置一次 ComfyUI 工作流目录，之后自动同步，无需再导出 API JSON\n${dotTitle[syncHealth] ?? ""}`}
             onClick={() => setComfySyncOpen(!comfySyncOpen)}
           >
             <IcFlow size={19} />
@@ -574,13 +573,6 @@ export function Titlebar() {
           </button>
         );
       })()}
-      <button
-        className={`icon-btn ${charLibOpen ? "on" : ""}`}
-        title={`角色库：内置人物预设，一键生成整套角色素材${hk("charLib")}`}
-        onClick={() => setCharLibOpen(!charLibOpen)}
-      >
-        <IcUsers size={19} />
-      </button>
       <button className={`icon-btn ${libOpen ? "on" : ""}`} title={`资产库${hk("assets")}`} onClick={() => setLibOpen(!libOpen)}>
         <IcLibrary size={19} />
       </button>

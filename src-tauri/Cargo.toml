@@ -1,6 +1,6 @@
 [package]
 name = "momo-canvas"
-version = "0.1.0"
+version = "0.7.0"
 description = "MOMO 智能画布 - AI 创作智能画布工作站"
 authors = ["PENG"]
 edition = "2021"

@@ -1,6 +1,5 @@
 import { create } from "zustand";
 import {
-  DEFAULT_HOTKEYS,
   DEFAULT_SETTINGS,
   PROTOCOLS,
   ROLE_LABEL,
@@ -22,6 +21,7 @@ import { PROTO_PRESETS, presetProtoId } from "../protoPresets";
 import { useLocalGguf } from "./localGgufStore";
 import { toast } from "./uiStore";
 import { grsaiGptRoute } from "../modelMeta";
+import { normalizeHotkeys } from "../hotkeys";
 
 /** API Key 落盘加密前缀（DPAPI 密文 hex）；内存中始终是明文，只有写盘/读盘时转换 */
 const KEY_ENC_PREFIX = "dpapi:";
@@ -234,6 +234,7 @@ function normalize(v: Partial<Settings>): Settings {
   const providers = normalizeProviders(v.models?.providers ?? []);
   const protos = syncPresetProtocols(providers, v.customProtocols ?? []);
   return {
+    modelPickerMode: v.modelPickerMode === "provider" ? "provider" : "flat",
     models: fixDefaults({ providers, defaults: v.models?.defaults ?? {} }),
     search: { ...DEFAULT_SETTINGS.search, ...(v.search ?? {}) },
     save: { ...DEFAULT_SETTINGS.save, ...(v.save ?? {}) },
@@ -241,8 +242,9 @@ function normalize(v: Partial<Settings>): Settings {
     theme: v.theme ?? "dark",
     gpuBoost: v.gpuBoost ?? true,
     sound: { ...DEFAULT_SETTINGS.sound, ...(v.sound ?? {}) },
-    hotkeys: { ...DEFAULT_HOTKEYS, ...(v.hotkeys ?? {}) },
-    shortcuts: v.shortcuts ?? [],
+    hotkeys: normalizeHotkeys(v.hotkeys),
+    // 兼容旧快捷方式；网站与系统图标字段从同一个归一化入口加载/导入。
+    shortcuts: (v.shortcuts ?? []).filter(s=>s&&typeof s.path==="string"&&s.path.trim()).map(s=>({...s,kind:/^https?:\/\//i.test(s.path)?"website":s.kind==="folder"?"folder":"app",icon:typeof s.icon==="string"&&s.icon.startsWith("data:image/")?s.icon:undefined})),
     customProtocols: protos,
     // 稳定性/成本：浅合并默认值，老数据无这些键 → 拿全默认（submitMax=0 不重复扣费）
     retry: { ...DEFAULT_SETTINGS.retry, ...(v.retry ?? {}) },

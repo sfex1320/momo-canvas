@@ -39,7 +39,9 @@ pub fn create_desktop_shortcut(name: String) -> Result<ShortcutResult, String> {
 fn create_shortcut_win(name: &str) -> Result<ShortcutResult, String> {
     use windows::core::PCWSTR;
     use windows::Win32::System::Com::CoTaskMemFree;
-    use windows::Win32::UI::Shell::{FOLDERID_Desktop, SHGetKnownFolderPath};
+    use windows::Win32::UI::Shell::{
+        FOLDERID_Desktop, FOLDERID_PublicDesktop, SHGetKnownFolderPath,
+    };
 
     // 名称去非法字符（文件名不允许的字符替换掉），防止用户可见名写出非法 .lnk 文件名
     let safe_name: String = name
@@ -63,8 +65,103 @@ fn create_shortcut_win(name: &str) -> Result<ShortcutResult, String> {
         let desktop = PCWSTR(desktop_pw.0).to_string();
         CoTaskMemFree(Some(desktop_pw.0 as _));
         let desktop = desktop.map_err(|e| format!("桌面路径转换失败：{e}"))?;
-        let lnk_path = std::path::Path::new(&desktop).join(format!("{safe_name}.lnk"));
+        let desktop = std::path::PathBuf::from(desktop);
+        let mut desktops = vec![desktop.clone()];
+        if let Ok(public_pw) =
+            SHGetKnownFolderPath(&FOLDERID_PublicDesktop, Default::default(), None)
+        {
+            let public = PCWSTR(public_pw.0).to_string();
+            CoTaskMemFree(Some(public_pw.0 as _));
+            if let Ok(public) = public {
+                desktops.push(std::path::PathBuf::from(public));
+            }
+        }
+        // 按真实程序目标识别已有入口，用户改过快捷方式名字也仍沿用。
+        let lnk_path = find_existing_shortcut(&desktops, &exe)?
+            .unwrap_or_else(|| unused_shortcut_path(&desktop, &safe_name));
         sync_shortcut_file(&lnk_path, &exe)
+    }
+}
+
+#[cfg(windows)]
+fn unused_shortcut_path(desktop: &std::path::Path, name: &str) -> std::path::PathBuf {
+    let preferred = desktop.join(format!("{name}.lnk"));
+    if !preferred.exists() {
+        return preferred;
+    }
+    // 同名却不属于本程序的链接不得覆盖。
+    for i in 1.. {
+        let suffix = if i == 1 {
+            "（便携版）".into()
+        } else {
+            format!("（便携版 {i}）")
+        };
+        let path = desktop.join(format!("{name}{suffix}.lnk"));
+        if !path.exists() {
+            return path;
+        }
+    }
+    unreachable!()
+}
+
+#[cfg(windows)]
+fn find_existing_shortcut(
+    desktops: &[std::path::PathBuf],
+    exe: &std::path::Path,
+) -> Result<Option<std::path::PathBuf>, String> {
+    use windows::core::{Interface, PCWSTR};
+    use windows::Win32::System::Com::{
+        CoCreateInstance, CoInitializeEx, CoUninitialize, IPersistFile, CLSCTX_INPROC_SERVER,
+        COINIT_APARTMENTTHREADED, STGM_READ,
+    };
+    use windows::Win32::UI::Shell::{IShellLinkW, ShellLink};
+    unsafe {
+        CoInitializeEx(None, COINIT_APARTMENTTHREADED)
+            .ok()
+            .map_err(|e| e.to_string())?;
+        struct Guard;
+        impl Drop for Guard {
+            fn drop(&mut self) {
+                unsafe { CoUninitialize() };
+            }
+        }
+        let _guard = Guard;
+        for desktop in desktops {
+            let Ok(entries) = std::fs::read_dir(desktop) else {
+                continue;
+            };
+            let mut paths: Vec<_> = entries
+                .flatten()
+                .map(|e| e.path())
+                .filter(|p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case("lnk")))
+                .collect();
+            paths.sort();
+            for path in paths {
+                let link: IShellLinkW = CoCreateInstance(&ShellLink, None, CLSCTX_INPROC_SERVER)
+                    .map_err(|e| e.to_string())?;
+                let file = link.cast::<IPersistFile>().map_err(|e| e.to_string())?;
+                let wide = to_wide(&path.to_string_lossy());
+                let mut target = vec![0u16; 32768];
+                if file.Load(PCWSTR(wide.as_ptr()), STGM_READ).is_err()
+                    || link.GetPath(&mut target, std::ptr::null_mut(), 0).is_err()
+                {
+                    continue;
+                }
+                let target = from_wide(&target);
+                let main_name = target
+                    .replace('/', "\\")
+                    .rsplit('\\')
+                    .next()
+                    .unwrap_or("")
+                    .to_lowercase();
+                if same_windows_path(&target, &exe.to_string_lossy())
+                    || main_name == "momo-canvas.exe"
+                {
+                    return Ok(Some(path));
+                }
+            }
+        }
+        Ok(None)
     }
 }
 
@@ -104,14 +201,15 @@ fn sync_shortcut_file(
             .map_err(|e| format!("COM 初始化失败：{e}"))?;
         let _guard = ComGuard;
 
+        let mut existing_link = None;
         if existed {
             let old: IShellLinkW = CoCreateInstance(&ShellLink, None, CLSCTX_INPROC_SERVER)
                 .map_err(|e| format!("读取快捷方式失败：{e}"))?;
             let old_file = old.cast::<IPersistFile>().map_err(|e| e.to_string())?;
             let mut old_target = vec![0u16; 32768];
             let mut old_dir = vec![0u16; 32768];
-            // 只有目标与工作目录都仍指向当前程序才跳过；旧路径或损坏的 .lnk 一律重写。
-            if old_file.Load(PCWSTR(lnk_w.as_ptr()), STGM_READ).is_ok()
+            let loaded = old_file.Load(PCWSTR(lnk_w.as_ptr()), STGM_READ).is_ok();
+            if loaded
                 && old
                     .GetPath(&mut old_target, std::ptr::null_mut(), 0)
                     .is_ok()
@@ -125,23 +223,32 @@ fn sync_shortcut_file(
                     path: lnk_text,
                 });
             }
+            if loaded {
+                existing_link = Some(old);
+            }
         }
 
         let exe_w = to_wide(&exe_text);
         let dir_w = to_wide(&work_dir);
         let desc_w = to_wide("MOMO 智能画布（便携版）");
 
-        let link: IShellLinkW = CoCreateInstance(&ShellLink, None, CLSCTX_INPROC_SERVER)
-            .map_err(|e| format!("创建 COM 对象失败：{e}"))?;
+        // 复用旧 COM 对象，保留用户设置的快捷键、参数和窗口显示方式。
+        let link: IShellLinkW = match existing_link {
+            Some(link) => link,
+            None => CoCreateInstance(&ShellLink, None, CLSCTX_INPROC_SERVER)
+                .map_err(|e| format!("创建 COM 对象失败：{e}"))?,
+        };
         link.SetPath(PCWSTR(exe_w.as_ptr()))
             .map_err(|e| format!("设置目标失败：{e}"))?;
         link.SetWorkingDirectory(PCWSTR(dir_w.as_ptr()))
             .map_err(|e| format!("设置工作目录失败：{e}"))?;
-        link.SetDescription(PCWSTR(desc_w.as_ptr()))
-            .map_err(|e| format!("设置描述失败：{e}"))?;
+        if !existed {
+            link.SetDescription(PCWSTR(desc_w.as_ptr()))
+                .map_err(|e| format!("设置描述失败：{e}"))?;
+            let _ = link.SetShowCmd(SW_SHOWNORMAL);
+        }
         link.SetIconLocation(PCWSTR(exe_w.as_ptr()), 0)
             .map_err(|e| format!("设置快捷方式图标失败：{e}"))?;
-        let _ = link.SetShowCmd(SW_SHOWNORMAL);
 
         // IShellLinkW → IPersistFile 接口转换后落盘为 .lnk
         let persist = link
@@ -209,6 +316,25 @@ mod tests {
             !verified.created && !verified.updated,
             "重读应验证目标已指向新路径"
         );
+        let renamed = dir.join("我的创作画布.lnk");
+        std::fs::rename(&link, &renamed).unwrap();
+        assert_eq!(
+            find_existing_shortcut(&[dir.clone()], &new_exe).unwrap(),
+            Some(renamed.clone()),
+            "沿用用户重命名的画布入口"
+        );
+        std::fs::write(&link, "非画布同名文件").unwrap();
+        assert_ne!(
+            unused_shortcut_path(&dir, "MOMO 智能画布"),
+            link,
+            "不覆盖无法识别的同名入口"
+        );
+        assert_eq!(
+            find_existing_shortcut(&[dir.clone()], &old_exe).unwrap(),
+            Some(renamed.clone()),
+            "移动便携目录后仍能找到旧入口"
+        );
+        std::fs::remove_file(&renamed).unwrap();
         std::fs::remove_file(&link).unwrap();
         std::fs::remove_dir(&dir).unwrap();
     }

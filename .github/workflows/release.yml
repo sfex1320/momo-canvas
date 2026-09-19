@@ -57,7 +57,7 @@ jobs:
         run: |
           $ver = "${{ github.ref_name }}"
           node scripts/collect-app.mjs
-          $dir = "APP/portable"
-          $zip = "MOMO-Canvas_${ver}_portable.zip"
-          Compress-Archive -Path "$dir/*" -DestinationPath $zip -Force
-          gh release upload "$ver" $zip --clobber
+          if ($LASTEXITCODE -ne 0) { throw "发行包收集失败" }
+          $zip = "APP/MOMO-Canvas_${ver}_portable.zip"
+          gh release upload "$ver" $zip APP/latest.json APP/SHA256SUMS.txt APP/构建说明.md --clobber
+          if ($LASTEXITCODE -ne 0) { throw "发行包上传失败" }

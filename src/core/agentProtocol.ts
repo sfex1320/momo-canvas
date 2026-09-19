@@ -3,7 +3,7 @@
 export type AgentAction =
   | { action: "search"; query: string }
   | { action: "ask"; question: string; options?: string[] }
-  | { action: "image"; prompt: string; count?: number; aspect?: string; resolution?: string; useRefs?: boolean }
+  | { action: "image" | "edit"; prompt: string; count?: number; aspect?: string; resolution?: string; useRefs?: boolean }
   | { action: "video"; prompt: string; useRefs?: boolean; duration?: string }
   | { action: "tool"; tool: string; args?: Record<string, unknown> }
   | { action: "reply"; text: string };
@@ -25,9 +25,9 @@ export function normalizeAgentAction(j: Record<string, unknown> | null): AgentAc
       options: Array.isArray(j.options) ? j.options.filter((x): x is string => typeof x === "string").slice(0, 4) : [],
     };
   }
-  if (action === "image" && typeof j.prompt === "string" && j.prompt.trim()) {
+  if ((action === "image" || action === "edit") && typeof j.prompt === "string" && j.prompt.trim()) {
     return {
-      action: "image",
+      action,
       prompt: j.prompt,
       count: Number.isFinite(count) && count > 0 ? count : undefined,
       aspect: typeof j.aspect === "string" ? j.aspect : undefined,

@@ -73,8 +73,6 @@ type UiState = {
   templateMgrOpen: boolean;
   /** 打开模板管理器时要直接进入编辑的模板 id（设置页卡片「编辑」用） */
   templateMgrEdit: string | null;
-  /** 角色库弹层（人物预设） */
-  charLibOpen: boolean;
   /** Skill 管理器弹层 */
   skillMgrOpen: boolean;
   /** Comfy 工作流同步中心弹层 */
@@ -150,7 +148,6 @@ type UiState = {
   closeSettings: () => void;
   setSideEditorOpen: (v: boolean) => void;
   setTemplateMgr: (v: boolean, editId?: string | null) => void;
-  setCharLibOpen: (v: boolean) => void;
   setSkillMgrOpen: (v: boolean) => void;
   setComfySyncOpen: (v: boolean) => void;
   setDirectorOpen: (v: boolean) => void;
@@ -186,7 +183,6 @@ export const useUi = create<UiState>((set) => ({
   sideEditorOpen: false,
   templateMgrOpen: false,
   templateMgrEdit: null,
-  charLibOpen: false,
   skillMgrOpen: false,
   comfySyncOpen: false,
   directorOpen: false,
@@ -239,7 +235,6 @@ export const useUi = create<UiState>((set) => ({
   closeSettings: () => set({ settingsOpen: false, sideEditorOpen: false }),
   setSideEditorOpen: (v) => set({ sideEditorOpen: v }),
   setTemplateMgr: (v, editId) => set({ templateMgrOpen: v, templateMgrEdit: v ? (editId ?? null) : null }),
-  setCharLibOpen: (v) => set({ charLibOpen: v }),
   setSkillMgrOpen: (v) => set({ skillMgrOpen: v }),
   setComfySyncOpen: (v) => set({ comfySyncOpen: v }),
   setDirectorOpen: (v) => set({ directorOpen: v }),

@@ -1,3 +1,5 @@
+import { ComfyLaunchButton } from "../../ui/ComfyLaunchButton";
+import {discoverComfyBridge,useComfyRuntime} from "../../core/comfyRuntime";
 /**
  * Comfy 工作流同步中心（插件规格 v1.0 · §6）
  *  - 顶部入口按钮的状态点用 syncHealthOf 计算（灰/绿/蓝/黄/红）
@@ -82,8 +84,8 @@ const STATUS_META: Record<ComfySyncedWorkflow["status"], { label: string; cls: s
 };
 
 const SOURCE_STATUS: Record<ComfySyncSource["status"], { label: string; cls: string }> = {
-  online: { label: "在线", cls: "ok" },
-  offline: { label: "离线", cls: "warn" },
+  online: { label: "目录可读取", cls: "ok" },
+  offline: { label: "目录离线", cls: "warn" },
   permission_denied: { label: "无权限", cls: "err" },
   scanning: { label: "扫描中", cls: "info" },
 };
@@ -112,6 +114,8 @@ export function SyncCenter() {
 }
 
 function SyncCenterBody({ onClose }: { onClose: () => void }) {
+  const bridgeDir = useComfyRuntime(s=>s.bridgeDir);
+  const host = useSettings(s=>s.settings.comfy.host);
   const sources = useComfySync((s) => s.sources);
   const workflows = useComfySync((s) => s.workflows);
   const events = useComfySync((s) => s.events);
@@ -144,11 +148,12 @@ function SyncCenterBody({ onClose }: { onClose: () => void }) {
   const openConflicts = useMemo(() => conflicts.filter((c) => c.status === "open"), [conflicts]);
   const templates = useComfyTemplates();
 
+  useEffect(()=>{void discoverComfyBridge(sources.map(s=>s.rootPath)).catch(()=>{});},[sources]);
   // 打开时顺带探测同步桥是否已装进 ComfyUI（用于按钮文案）
   useEffect(() => {
     if (!isTauri) return;
     void bridgeInstalledInComfy().then((ok) => setBridgeChecked(ok ? "installed" : "missing"));
-  }, []);
+  }, [host]);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -232,6 +237,7 @@ function SyncCenterBody({ onClose }: { onClose: () => void }) {
             <span className={`cfs-dot cfs-dot-${syncHealthOf(sources, workflows, running)}`} title={running ? "同步服务运行中" : "同步服务未运行"} />
           </h2>
           <div className="cfs-head-acts">
+            <ComfyLaunchButton/><button className="btn sm" onClick={()=>{onClose();useUi.getState().openSettings("comfy");}}><IcGear size={15}/>ComfyUI 设置</button>
             {openConflicts.length ? (
               <span className="cfs-conflict-pill" title={`有 ${openConflicts.length} 个写回冲突待处理（双方都改了同一参数），见下方冲突区`}>
                 ⚠ {openConflicts.length} 个写回冲突
@@ -248,9 +254,10 @@ function SyncCenterBody({ onClose }: { onClose: () => void }) {
               onClick={async () => {
                 setBusy(true);
                 try {
+                  if(bridgeDir && bridgeChecked!=="installed"){const {exists}=await import("@tauri-apps/plugin-fs");if(await exists(`${bridgeDir}/js/momo_bridge.js`)){const enabled=await bridgeInstalledInComfy();setBridgeChecked(enabled?"installed":"unknown");toast(enabled?"同步桥已启用":"同步桥文件已安装，启动或重启 ComfyUI 后生效，无需重复安装","info");return;}}
                   const dir = await installBridge();
                   toast(`同步桥已安装到 ${dir}——重启 ComfyUI 后生效`, "ok");
-                  setBridgeChecked("missing"); // 重启 ComfyUI 前探测不到，等它加载后自然变 installed
+                  setBridgeChecked("unknown"); // 已安装状态另行持久化，离线不当作未安装
                 } catch (e) {
                   if (errMsg(e) !== "已取消") toast(`安装失败：${errMsg(e)}`, "err");
                 } finally {
@@ -258,7 +265,7 @@ function SyncCenterBody({ onClose }: { onClose: () => void }) {
                 }
               }}
             >
-              <IcGlobe size={15} /> {bridgeChecked === "installed" ? "同步桥已装" : "装同步桥"}
+              <IcGlobe size={15} /> {bridgeChecked === "installed" ? "同步桥已启用" : bridgeDir ? "同步桥已安装 · 检查/修复" : "安装同步桥（仅首次）"}
             </button>
             <button className="btn sm" onClick={() => void startAdd()}>
               <IcPlus size={15} /> 添加来源

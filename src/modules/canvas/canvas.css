@@ -5190,3 +5190,6 @@
 .prompt-adjust-toolbar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .gd-prompt .gd-row textarea { max-height: 96px; }
 @media (max-width: 800px) { .ecom-ws { flex-direction: column; } .ecom-ws-side { width: 100%; flex-direction: row; flex-wrap: wrap; max-height: 150px; } .ecom-ws-side .gp-sec-title,.ecom-ws-side .hint { display: none; } .ecom-ws-final-thumb { max-height: 70px; } .ecom-ws-main { width: 100%; } .ecom-ws-toolbar { flex-wrap: wrap; } }
+
+/* 生成状态保留内边距与明确的段落换行。 */
+.mnode-body .skeleton > span { padding: 24px; box-sizing: border-box; text-align: center; white-space: pre-line; line-height: 1.7; overflow-wrap: anywhere; }

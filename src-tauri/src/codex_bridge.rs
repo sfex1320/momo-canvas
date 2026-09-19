@@ -243,6 +243,7 @@ pub fn codex_bridge_cancel(task_id: String) {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ImageRequest {
+    pub operation: Option<String>,
     pub prompt: String,
     #[serde(default)]
     pub refs: Vec<String>,
@@ -306,7 +307,7 @@ fn generate(
         if flag.load(Ordering::SeqCst) {
             return Err("已取消等待 Codex 生图".into());
         }
-        if waiting.elapsed() > Duration::from_secs(600) {
+        if waiting.elapsed() > Duration::from_secs(60) {
             return Err("Codex 图片队列等待超时，请稍后重试".into());
         }
         if let Ok(g) = GENERATION.try_lock() {
@@ -345,7 +346,7 @@ fn generate(
     for r in &request.refs {
         let b = decode_image(r)?;
         let hash = fingerprint(&b)?;
-        if !request.new_conversation {
+        if !request.new_conversation && request.operation.as_deref()!=Some("edit") {
             if let Ok(t) = std::fs::read_to_string(dir.join(format!("{hash}.thread"))) {
                 if valid_id(t.trim()) {
                     previous = Some(t.trim().to_owned());
@@ -361,7 +362,17 @@ fn generate(
     let t = if let Some(id) = previous {
         params["threadId"] = json!(id);
         params["excludeTurns"] = json!(true);
-        s.call("thread/resume", params)?
+        event("正在续接图片会话");
+        match s.call("thread/resume", params.clone()) {
+            Ok(t) => t,
+            Err(e) => {
+                if s.cancelled.load(Ordering::SeqCst) || Instant::now()>s.deadline {return Err(e);}
+                event("旧图片会话不可用，使用本次参考图建立新会话");
+                params.as_object_mut().unwrap().remove("threadId");
+                params.as_object_mut().unwrap().remove("excludeTurns");
+                s.call("thread/start",params)?
+            }
+        }
     } else {
         s.call("thread/start", params)?
     };
@@ -369,7 +380,12 @@ fn generate(
         .as_str()
         .ok_or("Codex 没有返回会话编号")?
         .to_owned();
-    let prompt=format!("{}\n请直接调用内置生图工具，仅生成一张图片。目标尺寸：{}（若不能精确满足请保留比例）。背景：{}。",request.prompt,request.size.as_deref().unwrap_or("自动"),request.background.as_deref().unwrap_or("遵照用户要求"));
+    let prompt=if request.operation.as_deref()==Some("edit") {
+        if request.refs.is_empty(){return Err("编辑图片必须提供原图".into());}
+        format!("任务：编辑所附原图。只执行下面的修改要求，未提及部分保持原样；不要重写成整图生成方案。直接调用图片工具返回一张编辑结果。\n修改要求原文：\n{}",request.prompt)
+    } else {
+        format!("任务：生成新图片。\n{}\n请直接调用内置生图工具，仅生成一张图片。目标尺寸：{}（若不能精确满足请保留比例）。背景：{}。",request.prompt,request.size.as_deref().unwrap_or("自动"),request.background.as_deref().unwrap_or("遵照用户要求"))
+    };
     input.insert(0, json!({"type":"text","text":prompt}));
     // turn/start 的回复可能与早到的通知交错，必须先发请求再统一读，不能丢弃结果条目。
     s.seq += 1;
@@ -377,12 +393,13 @@ fn generate(
     s.write(
         json!({"id":start_id,"method":"turn/start","params":{"threadId":thread,"input":input}}),
     )?;
-    event("Codex 正在生成图片，可停止；无需保持 Codex 桌面窗口开启");
+    event(if request.operation.as_deref()==Some("edit"){"Codex 正在编辑图片，可随时停止。\n无需保持 Codex 桌面窗口开启。"}else{"Codex 正在生成图片，可随时停止。\n无需保持 Codex 桌面窗口开启。"});
     let mut images = Vec::new();
     let mut failure = None;
     loop {
         let next = s.next();
         if next.is_err() {
+            if !images.is_empty() && !s.cancelled.load(Ordering::SeqCst) {break;}
             if let Some((tid, turn)) = &s.active {
                 let msg = json!({"id":99999,"method":"turn/interrupt","params":{"threadId":tid,"turnId":turn}});
                 let _ = s.write(msg);
@@ -420,6 +437,8 @@ fn generate(
                         .map_err(|e| e.to_string())?;
                     images.push(format!("data:image/png;base64,{}", STANDARD.encode(b)));
                     event("图片已回传，正在完成本轮");
+                    // 图片已落地后只等短暂收尾，不能因结束通知丢失丢掉付费结果。
+                    s.deadline=Instant::now()+Duration::from_secs(20);
                 } else {
                     failure = Some(format!("Codex 生图未返回图片：{}", i["failure"]));
                 }
@@ -518,7 +537,7 @@ mod tests {
             PathBuf::from(std::env::var("MOMO_CODEX_ACCEPTANCE_DIR").expect("须指定隔离验收目录"));
         std::fs::create_dir_all(&dir).unwrap();
         let input = std::fs::read(dir.join("image.png")).expect("先放入验收参考图");
-        let first=generate(&dir,"",ImageRequest{prompt:"保留参考图的红圆、蓝方块、绿星星，清理颜色噪点，做成完全纯色的平面图。不得改变形状。".into(),refs:vec![format!("data:image/png;base64,{}",STANDARD.encode(input))],size:Some("1024x1024".into()),background:None,new_conversation:true},Arc::new(AtomicBool::new(false)),|s|println!("{s}")).unwrap();
+        let first=generate(&dir,"",ImageRequest{operation:Some("edit".into()),prompt:"保留参考图的红圆、蓝方块、绿星星，清理颜色噪点，做成完全纯色的平面图。不得改变形状。".into(),refs:vec![format!("data:image/png;base64,{}",STANDARD.encode(input))],size:Some("1024x1024".into()),background:None,new_conversation:true},Arc::new(AtomicBool::new(false)),|s|println!("{s}")).unwrap();
         let src = first["images"][0].as_str().unwrap();
         std::fs::write(dir.join("bridge-first.png"), decode_image(src).unwrap()).unwrap();
         let second = generate(
@@ -531,6 +550,7 @@ mod tests {
                 refs: vec![src.into()],
                 size: Some("1024x1024".into()),
                 background: None,
+                operation: Some("edit".into()),
                 new_conversation: false,
             },
             Arc::new(AtomicBool::new(false)),

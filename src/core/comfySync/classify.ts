@@ -198,15 +198,51 @@ export function computeRevisionKeep(revisions: RevisionMetaLite[], now = Date.no
 
 /* ---------------- 依赖检查（规格 FR-016：只标记，不阻塞同步/入库） ---------------- */
 
+type DependencyNode = { id: number | string; type: string; mode?: number; widgets_values?: unknown[] };
+export type DependencyWorkflow = {
+  nodes: DependencyNode[];
+  definitions?: { subgraphs?: Array<{ id: string; nodes?: DependencyNode[] }> };
+};
+
+// ComfyUI 前端备注、转接、原始值及 KJNodes/Easy-Use 的 Set/Get 虚拟节点不注册到后端 object_info。
+// 只列确定的类型，不能用 UUID/名称片段过滤，否则会掩盖真实缺失的插件。
+const FRONTEND_ONLY_NODE_TYPES = new Set(["Note", "MarkdownNote", "Reroute", "PrimitiveNode", "SetNode", "GetNode"]);
+
+/** 只替换依赖诊断；转换限制、离线和写回冲突等其他警告保持原样。 */
+export function replaceDependencyWarnings(previous: string[], current: string[]): string[] {
+  return [...new Set([
+    ...previous.filter((w) => !w.startsWith("SYNC_MISSING_NODE:") && !w.startsWith("疑似缺失模型：")),
+    ...current,
+  ])];
+}
+
 /** 检查 UI Workflow 的依赖：缺失的自定义节点类型 + 疑似缺失的模型引用（loader 类）。
  * 需要 object_info（ComfyUI 在线）；离线时调用方应跳过。最多各报 5 条，防刷屏。 */
 export function dependencyWarnings(
-  ui: { nodes: Array<{ id: number | string; type: string; widgets_values?: unknown[] }> },
+  ui: DependencyWorkflow,
   objectInfo: Record<string, any>,
 ): string[] {
   const missing = new Set<string>();
   const modelMissing: string[] = [];
-  for (const n of ui.nodes ?? []) {
+  const subgraphs = Array.isArray(ui.definitions?.subgraphs) ? ui.definitions.subgraphs : [];
+  const definitions = new Map(subgraphs.filter((sg) => sg && typeof sg.id === "string").map((sg) => [sg.id, sg]));
+  const visited = new Set<string>();
+  const nodes: DependencyNode[] = [];
+  const collect = (list: DependencyNode[]) => {
+    for (const n of list) {
+      if (!n || typeof n.type !== "string") continue;
+      if (n.mode === 2 || n.mode === 4 || FRONTEND_ONLY_NODE_TYPES.has(n.type)) continue;
+      const subgraph = definitions.get(n.type);
+      if (subgraph) {
+        if (!visited.has(subgraph.id)) {
+          visited.add(subgraph.id);
+          collect(Array.isArray(subgraph.nodes) ? subgraph.nodes : []);
+        }
+      } else nodes.push(n);
+    }
+  };
+  collect(ui.nodes ?? []);
+  for (const n of nodes) {
     const oi = objectInfo[n.type];
     if (!oi) {
       missing.add(n.type);

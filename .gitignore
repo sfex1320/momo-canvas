@@ -12,7 +12,7 @@ dist
 dist-ssr
 *.local
 
-# Claude Code hook runtime files
+# 本地开发工具 hook 运行文件
 .claude/last-restart.txt
 .claude/scheduled_tasks.lock
 .claude/*.cjs
@@ -55,3 +55,15 @@ quality-baseline/manifest.json
 quality-baseline/report.html
 quality-baseline/report.json
 quality-baseline/report_assets/
+
+# 本地验收与维护产物（可能包含用户素材和配置，不发布）
+.codex-test-image.png
+.codex/*acceptance/
+.codex/codex-schema/
+.codex/codex-text-qa/
+.codex/core-tests/
+.codex/interaction-regression/
+.codex/maintenance/
+.codex/model-refresh/
+.codex/vector-research/
+__pycache__/

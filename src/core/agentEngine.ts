@@ -16,6 +16,7 @@ import { useBoard } from "./stores/boardStore";
 import { chatStream } from "./services/llm";
 import { searchContext, webSearchForModel } from "./services/webSearch";
 import { brandPrompt } from "./stores/designStore";
+import { imageDims } from "./imageInfo";
 import { generateImage } from "./services/imageGen";
 import { generateVideo } from "./services/videoGen";
 import { runFlow } from "./runner";
@@ -50,7 +51,7 @@ const AGENT_SYSTEM = `你是 MOMO 智能画布的「创作 Agent」，一位全�
 {"action":"search","query":"搜索词"} —— 联网搜索资料/参考/灵感，结果下一轮给你。
 {"action":"ask","question":"问题","options":["选项A","选项B","选项C"]} —— 需求存在关键分叉（风格、用途、画幅、色调等）且不同选择会明显影响成品时，给用户 2-4 个互斥选项。用户的选择下一轮告诉你。只为真正影响方向的抉择提问，整个任务最多问 1-2 轮。想给用户多个风格/方向候选时必须用这个动作（选项=各方案的简短描述），用户选定后直接 image——禁止一边介绍多个方案一边直接发起 image：程序的「确认生成」卡不是风格选择工具。
 {"action":"image","prompt":"完整绘图提示词","count":1,"aspect":"1:1","resolution":"1K","useRefs":true} —— 生成图片。prompt 必须是成品级中文提示词：主体、细节、构图、光影、色彩、风格、质感、镜头，宁详勿略。useRefs=true 表示把用户的参考图传给绘图模型（图生图/参考风格）。
-{"action":"video","prompt":"完整视频提示词","useRefs":true,"duration":"5"} —— 生成视频。useRefs=true 时用最近生成/用户提供的图片作为首帧或主体参考。
+{"action":"edit","prompt":"本轮修改要求原文","useRefs":true} —— 编辑已有图片，与生图和对话分开。不得扩写整图描述、补光影风格或复用历史生成词。\n{"action":"video","prompt":"完整视频提示词","useRefs":true,"duration":"5"} —— 生成视频。useRefs=true 时用最近生成/用户提供的图片作为首帧或主体参考。
 {"action":"reply","text":"对用户说的话"} —— 收尾：汇报成果/回答问题/闲聊。生成图片或视频后必须用它结束本轮。
 
 【画幅与清晰度——必须遵守】
@@ -64,18 +65,18 @@ const AGENT_SYSTEM = `你是 MOMO 智能画布的「创作 Agent」，一位全�
 - 若用户选择「再想想/再改改」，先与用户完善方案（reply / ask），在用户明确要求前不要再输出生成动作。
 - 当用户已经对你上一条生成方案回答「确认/开始/生成/可以」，或明确说「立即生成/重新生成/再来一张」时，必须立刻输出对应的 image / video 动作。禁止再用 reply 说「方案已锁定」「确认后程序会自动生成」「下一轮开始生成」——reply 只是文字，不会调用生成工具。
 
-【每轮创作闭环——首轮与后续修改完全一致】
+【同一对话中的内部动作路由】
 1. 理解本轮目标与上一轮成果；涉及药品说明、产品参数、时效信息、事实核对或用户明确要求搜索时，先 search。只改颜色、构图、文字等已有方案内容时可直接沿用上下文，不为走流程而搜索。
-2. 综合搜索结果、参考图片和历史方案进行思考，形成完整成品提示词。
-3. 准备好后直接输出 image/video 动作；程序会在确认卡里向用户展示提示词，并提供「确认生成 / 再想想」。不要先用 reply 展示一遍方案再让用户另发“生成”。
-4. 用户要求修改上一轮图片时，把上一轮成图当作视觉参考，image 动作设 useRefs=true；修改完成后重新走本闭环。
+2. 仅生图/视频综合资料与参考形成完整成品提示词；编辑只使用本轮修改原文，不扩写；只讨论问题时使用 reply。
+3. 需要制作时直接输出 image/edit/video 动作；程序会在确认卡里向用户展示提示词，并提供「确认生成 / 再想想」。不要先用 reply 展示一遍方案再让用户另发“生成”。
+4. 用户要求编辑上一轮图片时输出 edit 动作，不再撰写完整成品提示词。edit 的 prompt 只含用户本轮修改要求，useRefs=true。程序直接使用用户修改原文和原图，保留未提及的部分。
 
 【行为准则】
-- 目标导向：用户要的是成品，不是聊天。需求明确（含画幅）时尽快进入生成，不要无谓地多问。用户没指定风格时，用你的专业判断直接定一个高质量方向生成——用户不满意自然会说「再改改」，这比先抛一堆方案问一圈更受欢迎。
+- 一个连续对话同时支持讨论、生图、编辑。用户只是提问、分析图片、索要建议或修改文字方案时使用 reply；不能仅因附图就执行编辑。明确要求新图用 image；要求改已有图片用 edit。不要让用户切换界面或模式。
 - 需要事实、潮流、参考资料时先 search，把搜到的要点织进提示词。
 - 用户要求 N 张时把 count 填成 N（上限 4）；一轮可以生成多张方案图对比，但总数不超过 3 张图或 1 条视频，除非用户明确要求更多。
-- 【重要】历史里的「已交付」只属于当时那一轮。用户在后续消息中再次要求生成、要求修改后重新生成、或说"再来一张/换个风格"时，你必须重新执行 image / video 动作产出新图——只用 reply 说"已生成/已完成"而不执行动作，等于什么都没做。
-- 【禁止虚构系统状态】生成是否失败、失败原因，一律以「【系统反馈】」里的原文为准——不要自己编造"通道异常/模型未返回结果/连续失败"这类说辞，也不要引用不存在的界面按钮（如「重新生成」按钮）。用户说"重新生成/再来一次"时，正确做法是你自己重新输出 image / video 动作，而不是让用户去点什么。
+- 【重要】历史里的「已交付」只属于当时那一轮。用户在后续消息中再次要求生成、要求修改后重新生成、或说"再来一张/换个风格"时，你必须执行 image / edit / video 中符合本轮意图的动作产出新结果——只用 reply 说"已生成/已完成"而不执行动作，等于什么都没做。
+- 【禁止虚构系统状态】生成是否失败、失败原因，一律以「【系统反馈】」里的原文为准——不要自己编造"通道异常/模型未返回结果/连续失败"这类说辞，也不要引用不存在的界面按钮（如「重新生成」按钮）。用户说"重新生成/再来一次"时，正确做法是你自己输出符合意图的 image / edit / video 动作，而不是让用户去点什么。
 - 全程使用中文。`;
 
 /** 从模型输出里抠出动作 JSON；抠不出来就返回 null（当普通文本回复处理） */
@@ -153,7 +154,7 @@ function buildContext(scratch: string[], includeGeneratedImages = false): ChatMs
       if (m.id === lastVisualMsgId && m.results?.some((r) => r.kind === "image")) {
         ctx.push({
           role: "user",
-          text: "【上一轮成图视觉上下文】这是你刚才交付的图片。后续若用户要求修改，请结合图片实际画面与文字要求决定新提示词，不要把这条说明当成用户的新需求。",
+          text: "【上一轮成图视觉上下文】这是你刚才交付的图片。后续若用户要求修改，请选择 edit 动作，保留用户修改原文，不要把这条说明当成用户的新需求。",
           images: m.results.filter((r) => r.kind === "image").slice(0, 2).map((r) => r.src),
         });
       }
@@ -258,7 +259,7 @@ function sniffCountFromChat(): number | undefined {
 
 /** 用户最近一次附带的参考图 */
 /** 收录成果：资产库 + 生成记录（与画布节点生成同等待遇） */
-function collectResults(results: AgentResult[]) {
+function collectResults(results: AgentResult[], nodeId?: string) {
   const group = results.length > 1
     ? { groupId: `gen-${uid(12)}`, groupLabel: results[0]?.prompt || "Agent 批量生成", groupKind: "generation" as const }
     : undefined;
@@ -269,6 +270,7 @@ function collectResults(results: AgentResult[]) {
       kind: r.kind,
       prompt: r.prompt,
       name: r.prompt,
+      nodeId,
       group: group ? { ...group, groupSlot: `result:${index}` } : undefined,
     });
   }
@@ -278,9 +280,10 @@ function collectResults(results: AgentResult[]) {
 const NET_HINT = `\n\n【联网——已启用】本次请求已启用你自带的联网搜索能力（tools 已注入请求）。需要实时资料、潮流、事实核查时，直接自行联网检索，再基于结果输出下一个动作；**禁止输出 search 动作**——它专供没有内置联网时使用，在你联网开启期间会被程序直接拒绝执行。若你发现自己实际无法联网（检索不到结果），基于已有知识创作并在回复中说明。`;
 
 /** 第二次创作的语义动作复核：由对话模型理解意图，程序不靠固定口令猜“是否生成”。 */
-const ACTION_AUDIT_HINT = `\n\n【当前轮次：动作审计】你上一轮准备输出普通回复，但本会话此前已经交付过生成成果。请以用户最新自然语言、参考图片和完整上下文为准，重新判断用户此刻真正需要的是继续讨论/修改方案，还是实际制作新的图片或视频。若需要实际制作，必须输出 image/video 动作；reply 只能表达文字，绝不能承诺稍后、下一轮或自动生成。不要根据某个关键词机械判断，要理解整句话与上下文。`;
+const ACTION_AUDIT_HINT = `\n\n【当前轮次：动作审计】你上一轮准备输出普通回复，但本会话此前已经交付过生成成果。请以用户最新自然语言、参考图片和完整上下文为准，重新判断用户此刻真正需要的是继续讨论/修改方案，还是实际制作新的图片或视频。若需要实际制作，必须输出 image/edit/video 动作；reply 只能表达文字，绝不能承诺稍后、下一轮或自动生成。不要根据某个关键词机械判断，要理解整句话与上下文。`;
 
-async function agentLoop(asstId: string, signal: AbortSignal) {
+async function agentLoop(asstId: string, signal: AbortSignal, editOnly = false) {
+  const userInput=[...useAgent.getState().messages].reverse().find(m=>m.role==="user")?.text??"";
   const ask = (id: string, question: string, options: string[]) => waitAgentTurn(useAgent.getState().askQuestion(id, question, options), signal);
   const st = () => useAgent.getState();
   const scratch: string[] = [];
@@ -305,7 +308,12 @@ async function agentLoop(asstId: string, signal: AbortSignal) {
 
   for (let round = 0; round < MAX_ROUNDS; round++) {
     checkAgentTurn(signal);
-    const card = resolveModelCard("chat", st().modelId);
+    let raw: string;
+    let card:ModelCard|undefined;
+    let useBuiltin=false;
+    if(editOnly){raw=JSON.stringify({action:"edit",prompt:userInput,useRefs:true,count:1});}
+    else {
+    card = resolveModelCard("chat", st().modelId);
     const thinkSid = st().addStep(
       asstId,
       "think",
@@ -314,10 +322,9 @@ async function agentLoop(asstId: string, signal: AbortSignal) {
     // 联网开关开启且模型支持请求内服务端联网（GLM/混元等）→ 让模型自己查，比 search 动作少绕一圈。
     // 必须在系统提示里告知模型「已启用内置联网」，否则模型不知道自己带着 tools，
     // 仍会按协议输出 search 动作去走外部搜索接口（自带联网形同虚设）
-    const useBuiltin = !netBroken && st().webSearch && chatCaps(card).builtinSearch;
+    useBuiltin = !netBroken && st().webSearch && chatCaps(card).builtinSearch;
     const system =
       AGENT_SYSTEM + agentToolHint() + (useBuiltin ? NET_HINT : "") + (replyAudited && !executableActionSeen ? ACTION_AUDIT_HINT : "");
-    let raw: string;
     try {
       raw = (
         await chatStream(card, buildContext(scratch, chatCaps(card).vision), {
@@ -358,6 +365,7 @@ async function agentLoop(asstId: string, signal: AbortSignal) {
       status: "done",
       text: `${replyAudited ? "已复核意图与执行动作" : "已理解需求并完善方案"}（${modelLabel(card)}）`,
     });
+    }
     let act = parseAction(raw);
     if (!act) {
       // 宽容：部分模型按 function-calling 风格输出 {"name":"能力id","arguments":{…}}（没有 action 字段）。
@@ -380,7 +388,7 @@ async function agentLoop(asstId: string, signal: AbortSignal) {
       const candidate = act?.action === "reply" ? act.text : raw;
       scratch.push(
         `（动作审计）当前对话已经交付过图片或视频。请重新理解用户最新消息与完整上下文，并检查你刚才准备给用户的回复：\n「${candidate.slice(0, 800)}」\n` +
-          "如果用户只想讨论、询问或继续修改方案，可以继续输出 reply/ask；如果用户是在要求制作、按修改方案重新制作、继续生成或立即执行，就必须输出真正的 image/video 动作。不要用 reply 承诺稍后或下一轮生成，因为 reply 不会调用工具。仍然只输出一个 JSON 动作。",
+          "如果用户只想讨论、询问或继续修改方案，可以继续输出 reply/ask；如果用户是在要求制作、按修改方案重新制作、继续生成或立即执行，就必须输出真正的 image/edit/video 动作。不要用 reply 承诺稍后或下一轮生成，因为 reply 不会调用工具。仍然只输出一个 JSON 动作。",
       );
       continue;
     }
@@ -419,7 +427,7 @@ async function agentLoop(asstId: string, signal: AbortSignal) {
       }
       const sid = st().addStep(asstId, "search", `搜索：${act.query}`);
       try {
-        const searched = await waitAgentTurn(webSearchForModel(card, useSettings.getState().settings.search, act.query), signal);
+        const searched = await waitAgentTurn(webSearchForModel(card!, useSettings.getState().settings.search, act.query), signal);
         const hits: SearchHit[] = searched.hits;
         st().setStep(asstId, sid, {
           status: "done",
@@ -491,15 +499,25 @@ async function agentLoop(asstId: string, signal: AbortSignal) {
       continue;
     }
 
-    if (act.action === "image") {
+    if (act.action === "image" || act.action === "edit") {
       executableActionSeen = true;
       const imgCard = resolveModelCard("image", st().imageModelId);
-      const actualImagePrompt=brandPrompt(useBoard.getState().activeId,act.prompt);
-      const refs = act.useRefs ? generationRefs(st().messages, lastGenImages) : undefined;
+      const editing=act.action==="edit";
+      // 编辑原文是执行真源，不能被对话模型重写、旧提示词或品牌模板覆盖。
+      if(editing)act.prompt=userInput;
+      const actualImagePrompt=editing?userInput:brandPrompt(useBoard.getState().activeId,act.prompt);
+      const refs = editing || act.useRefs ? generationRefs(st().messages, lastGenImages) : undefined;
+      if(editing && !refs?.length)throw Error("编辑需要图片，请先选择要修改的原图");
+      if(editing){
+        const dims=await waitAgentTurn(imageDims(refs![0]),signal);
+        if(!dims)throw Error("无法读取原图，请重新选择有效图片后编辑");
+        spec.aspect=sniffAspectFrom(userInput)??(dims?`${dims.w}:${dims.h}`:undefined);
+        spec.resolution=sniffResolutionFrom(userInput)??"1K";
+      }
       /* 画幅解析（模型经常漏填/乱填 JSON 字段，必须自己兜底，否则一律回落 1024x1024 出方图）：
          已确认的规格 > 动作里的字段 > 提示词里的措辞 > 用户在对话中说过的原话；每一级都先归一化（"竖屏"/"1920×1080" → "9:16"/"16:9"） */
       const fromChat = sniffSpecFromChat();
-      const aspect = normAspect(spec.aspect) ?? normAspect(act.aspect) ?? sniffAspectFrom(act.prompt) ?? fromChat.aspect;
+      const aspect = (editing?spec.aspect:undefined) ?? normAspect(spec.aspect) ?? normAspect(act.aspect) ?? sniffAspectFrom(act.prompt) ?? fromChat.aspect;
       const resolution = normResolution(spec.resolution) ?? normResolution(act.resolution) ?? fromChat.resolution;
       // 画幅完全没着落 → 强制问一轮再生成（用户明确要求过"要问分辨率"）
       if (!aspect || !resolution) {
@@ -519,7 +537,7 @@ async function agentLoop(asstId: string, signal: AbortSignal) {
       spec.resolution = resolution;
 
       /* 生成前最终确认（防自动扣费）：规格齐了也不直接跑，先把完整方案给用户看，确认后才真正发起 */
-      const n0 = clamp(Math.round(act.count ?? sniffCountFromChat() ?? 1), 1, 4);
+      const n0 = editing?1:clamp(Math.round(act.count ?? sniffCountFromChat() ?? 1), 1, 4);
       /* 统一预算闸（与画布 runner 同一道门）：单次上限/日预算直接阻断，超阈值的花费并入确认卡提示。
          此前助手生图不过预算、不记用量——同一笔花费从不同入口发起必须走同一道门。 */
       let estCost = 0;
@@ -531,6 +549,7 @@ async function agentLoop(asstId: string, signal: AbortSignal) {
       }
       const gate1 = budgetGate(estCost, `生成 ${n0} 张图片`,{billing:imgCard.protocol==="codex"?"subscription":undefined});
       if (gate1.block) {
+        if(editing)throw Error(gate1.block);
         scratch.push(`（预算闸）${gate1.block}。本次不执行 image 动作；请把原因告知用户，或按用户意见减少张数后再试。`);
         continue;
       }
@@ -547,10 +566,11 @@ async function agentLoop(asstId: string, signal: AbortSignal) {
         const brief0 = actualImagePrompt;
         const answer = await ask(
           asstId,
-          `方案已就绪，确认后开始生成（会调用模型扣费）：\n· 提示词：${brief0}\n· 画幅：${aspect} · ${resolution} · ${n0} 张\n· 模型：${modelLab}${costNote}\n· 参考图：${refs?.length??0} 张（按对话中显示顺序）`,
-          ["确认生成", "再想想"],
+          `方案已就绪，确认后${editing?"编辑图片":"开始生成"}（会调用模型额度）：\n· ${editing?"修改原文":"提示词"}：${brief0}\n· 画幅：${aspect} · ${resolution} · ${n0} 张\n· 模型：${modelLab}${costNote}\n· 参考图：${refs?.length??0} 张（按对话中显示顺序）`,
+          [editing?"确认编辑":"确认生成", "再想想"],
         );
         if (!isConfirmAnswer(answer)) {
+          if(editing){st().updateMsg(asstId,{text:"本次编辑未执行，请调整修改词后重新发送。"});return;}
           // 方案要改，旧规格不作数（改完会重新走规格确认 + 生成确认）
           spec.aspect = undefined;
           spec.resolution = undefined;
@@ -567,12 +587,13 @@ async function agentLoop(asstId: string, signal: AbortSignal) {
       // 确认后二次过闸（等待用户作答期间日预算可能已被画布任务吃满）
       const gate2 = budgetGate(estCost, `生成 ${n0} 张图片`,{billing:imgCard.protocol==="codex"?"subscription":undefined});
       if (gate2.block) {
+        if(editing)throw Error(gate2.block);
         scratch.push(`（预算闸）${gate2.block}。已取消本次生成，请把原因告知用户。`);
         continue;
       }
 
       const brief = act.prompt.length > 42 ? `${act.prompt.slice(0, 42)}…` : act.prompt;
-      const sid = st().addStep(asstId, "image", `生成图片：${brief}`);
+      const sid = st().addStep(asstId, "image", `${editing?"编辑图片":"生成图片"}：${brief}`);
       // 点下生成的那一瞬间，画布上就先出一个「生成中」的节点（波光动效由 .mnode.running 提供），
       // 结果直接写回这个节点——创作助手出图与画布同步出内容
       const board = useBoard.getState();
@@ -583,8 +604,11 @@ async function agentLoop(asstId: string, signal: AbortSignal) {
           return {};
         }
       })();
+      // 参考图随任务冻结，不新增可见副本，也不连回会被 runFlow 再次运行的生成节点。
       const nodeId = board.addNode("imageGen", canvasCenterPos(-165, -120), {
         prompt: act.prompt,
+        imageOperation: editing?"edit":"generate",
+        referenceImages: refs?.length ? [...refs] : undefined,
         status: "running",
         count: n0,
         modelId: `${imgCard.id}::${imgCard.model}`,
@@ -599,13 +623,13 @@ async function agentLoop(asstId: string, signal: AbortSignal) {
         // 比例/清晰度 → 该模型家族的实际参数（用户指定的画幅必须生效，不再静默退回 1:1）
         const sizing = agentImageParams(imgCard, aspect, resolution);
         const sizeLab = sizing.aspect ? `${sizing.aspect}·${sizing.resolution ?? resolution}` : sizing.size ?? "默认";
-        st().setStep(asstId, sid, { text: `生成图片：${brief}（${modelLabel(imgCard)} · ${sizeLab}）` });
-        let results = await generateImage(imgCard, { prompt: actualImagePrompt, n, refImages: refs, signal: imageSignal, onProgress:stage=>{st().setStep(asstId,sid,{text:stage});useBoard.getState().updateData(nodeId,{progress:stage},{result:true});}, ...sizing });
+        st().setStep(asstId, sid, { text: `${editing?"编辑图片":"生成图片"}：${brief}（${modelLabel(imgCard)} · ${sizeLab}）` });
+        let results = await generateImage(imgCard, { operation:editing?"edit":"generate", prompt: actualImagePrompt, n, refImages: refs, signal: imageSignal, onProgress:stage=>{st().setStep(asstId,sid,{text:stage});useBoard.getState().updateData(nodeId,{progress:stage},{result:true});}, ...sizing });
         // 中转站普遍无视 n 参数只回 1 张：不够就并行补齐（用户要 3 张就必须给 3 张）
         if (results.length < n) {
           const extra = await Promise.allSettled(
             Array.from({ length: n - results.length }, () =>
-              generateImage(imgCard, { prompt: actualImagePrompt, n: 1, refImages: refs, signal: imageSignal, ...sizing }),
+              generateImage(imgCard, { operation:editing?"edit":"generate", prompt: actualImagePrompt, n: 1, refImages: refs, signal: imageSignal, ...sizing }),
             ),
           );
           for (const r of extra) if (r.status === "fulfilled") results = results.concat(r.value);
@@ -614,34 +638,37 @@ async function agentLoop(asstId: string, signal: AbortSignal) {
         results = results.slice(0, n);
         if (!results.length) throw new Error("绘画模型未返回图片，请重试或检查模型配置");
         lastGenImages = results;
-        useBoard.getState().updateData(nodeId, { status: "done", results, picked: 0 });
+        useBoard.getState().updateData(nodeId, { status: "done", results, picked: 0, progress:undefined });
         const items: AgentResult[] = results.map((src) => ({ kind: "image" as const, src, prompt: act.prompt }));
         st().appendResults(asstId, items);
         st().setStep(asstId, sid, {
           status: "done",
-          text: `已生成 ${results.length} 张图片（${modelLabel(imgCard)} · ${sizeLab}）`,
+          text: `已${editing?"编辑":"生成"} ${results.length} 张图片（${modelLabel(imgCard)} · ${sizeLab}）`,
         });
-        collectResults(items);
+        collectResults(items,nodeId);
         // 用量记账（与画布 runner 同一张账）：助手生成不再游离在用量看板之外
         useUsage.getState().record(imgCard, { ok: true, images: results.length, durMs: Date.now() - t0 });
         // 本次方案已交付：确认闸复位，用户之后的新需求要重新确认一轮（防再次自动扣费）
         confirmedSig = "";
+        if(editing){st().updateMsg(asstId,{text:"已按本轮修改要求编辑图片。"});return;}
         scratch.push(
           `本轮已成功生成 ${results.length} 张图片并展示给用户（提示词：${act.prompt}；画幅：${sizeLab}）。注意：这只算完成当前这次请求；用户之后再提生成/修改需求时，必须重新执行 image 动作。`,
         );
       } catch (e) {
         if (isAbortError(e)) {
-          useBoard.getState().updateData(nodeId, { status: "idle", error: undefined });
+          useBoard.getState().updateData(nodeId, { status: "idle", error: undefined, progress:undefined });
           st().setStep(asstId, sid, { status: "error", text: "已停止生成" });
           st().updateMsg(asstId, { text: "已停止本次图片生成。你可以继续修改要求。" });
           return;
         } else {
-          useBoard.getState().updateData(nodeId, { status: "error", error: errMsg(e) });
+          useBoard.getState().updateData(nodeId, { status: "error", error: errMsg(e), progress:undefined });
           st().setStep(asstId, sid, { status: "error", text: `生图失败：${errMsg(e)}` });
           pushError("Agent 生图", errMsg(e));
           // 失败也记账（与 runner 一致）；卡在 try 内解析不到时跳过
           try { useUsage.getState().record(imgCard, { ok: false, durMs: Date.now() - t0 }); } catch { /* 无卡不计 */ }
-          scratch.push(`生成图片失败：${errMsg(e)}。请调整策略（改提示词/换方案）或直接告知用户。`);
+          confirmedSig = "";
+          st().updateMsg(asstId, {text:`生成失败：${errMsg(e)}。本次已停止，请检查后重新确认生成。`});
+          return; // 超时/失败不让模型沿用旧确认反复发起生图。
         }
       } finally {
         endTask(nodeId);
@@ -739,11 +766,13 @@ async function agentLoop(asstId: string, signal: AbortSignal) {
           st().updateMsg(asstId, { text: "已停止本次视频生成。你可以继续修改要求。" });
           return;
         } else {
-          useBoard.getState().updateData(nodeId, { status: "error", error: errMsg(e) });
+          useBoard.getState().updateData(nodeId, { status: "error", error: errMsg(e), progress:undefined });
           st().setStep(asstId, sid, { status: "error", text: `生成视频失败：${errMsg(e)}` });
           pushError("Agent 生视频", errMsg(e));
           try { useUsage.getState().record(vidCard, { ok: false, durMs: Date.now() - vt0 }); } catch { /* 无卡不计 */ }
-          scratch.push(`生成视频失败：${errMsg(e)}。请调整策略或直接告知用户。`);
+          confirmedSig="";
+          st().updateMsg(asstId,{text:`生成视频失败：${errMsg(e)}。本次已停止，请检查后重新确认生成。`});
+          return;
         }
       } finally {
         endTask(nodeId);
@@ -773,6 +802,7 @@ export async function sendAgentMessage() {
   if (st.running) return;
   const text = st.draft.trim();
   const images = st.attachments;
+  if(st.mode==="edit" && !text){toast("请输入本次修改要求", "err");return;}
   if (!text && !images.length) return;
   const turn = new AbortController();
   activeTurn = turn;
@@ -780,7 +810,7 @@ export async function sendAgentMessage() {
   st.pushUser(text, images);
   const asstId = useAgent.getState().beginAssistant();
   try {
-    await agentLoop(asstId, turn.signal);
+    await agentLoop(asstId, turn.signal, st.mode === "edit");
   } catch (e) {
     useAgent.getState().updateMsg(asstId, { text: isAbortError(e) ? "已停止。可以继续输入新的要求。" : `出错了：${errMsg(e)}` });
     if (!isAbortError(e)) pushError("Agent", errMsg(e));
@@ -794,7 +824,7 @@ export async function sendAgentMessage() {
     useAgent.setState({ running: false, resolver: null });
     // Agent 的多轮任务同样推进前情摘要（与聊天模式共用；失败静默，结果留给下一轮）
     try {
-      void maybeCompressHistory(resolveModelCard("chat", useAgent.getState().modelId)).catch(() => {});
+      if(st.mode!=="edit")void maybeCompressHistory(resolveModelCard("chat", useAgent.getState().modelId)).catch(() => {});
     } catch {
       /* 对话模型缺失/未配置时跳过 */
     }
@@ -869,7 +899,7 @@ export async function sendSideChat() {
       } else {
         useAgent.getState().updateMsg(asstId, { reasoning: "正在联网搜索…" });
         try {
-          const searched = await webSearchForModel(card, useSettings.getState().settings.search, text);
+          const searched = await webSearchForModel(card!, useSettings.getState().settings.search, text);
           useAgent.getState().updateMsg(asstId, { reasoning: `正在使用「${searched.source}」联网搜索…` });
           const ctx = searchContext(searched.hits ?? []);
           if (ctx) parts.push(ctx);
@@ -912,7 +942,7 @@ export async function sendSideChat() {
       toast(`「${card.name}」自带联网调用失败，改用内置搜索重试`, "info");
       useAgent.getState().updateMsg(asstId, { text: "", reasoning: "正在联网搜索…" });
       try {
-        const searched = await webSearchForModel(card, useSettings.getState().settings.search, text);
+        const searched = await webSearchForModel(card!, useSettings.getState().settings.search, text);
         const ctx = searchContext(searched.hits ?? []);
         if (ctx) parts.push(ctx);
       } catch {
@@ -992,6 +1022,10 @@ export function genImageOnCanvas(prompt: string) {
 /** 把生成结果发到画布（图片/视频源节点） */
 export function sendResultToCanvas(r: AgentResult) {
   const b = useBoard.getState();
+  if (b.nodes.some(n => {
+    const d = n.data as Record<string, unknown>;
+    return d.src === r.src || d.resultUrl === r.src || (Array.isArray(d.results) && d.results.includes(r.src));
+  })) { toast("这份结果已在当前画布中", "ok"); return; }
   b.addNode(r.kind === "video" ? "video" : "image", canvasCenterPos(-160, -120), {
     status: "done",
     src: r.src,

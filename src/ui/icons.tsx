@@ -236,9 +236,9 @@ export const IcMoon = (p: IconProps) => (
 );
 export const IcBlack = (p: IconProps) => (
   <I {...p}>
-    {/* 深邃黑：实心圆 + 右上角暖橙弧光，呼应黑主题冷暖反差 */}
-    <circle cx="12" cy="12" r="8.5" fill="currentColor" stroke="none" />
-    <path d="M16.5 7.5a3 3 0 0 0 0 6" stroke="#ff9a3c" strokeWidth="1.6" fill="none" strokeLinecap="round" />
+    {/* 深邃黑：石墨圆环，图标与全局主题同源 */}
+    <circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" />
+    <path d="M16.5 7.5a3 3 0 0 0 0 6" stroke="currentColor" strokeWidth="1.6" fill="none" strokeLinecap="round" />
   </I>
 );
 

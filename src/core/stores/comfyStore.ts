@@ -35,6 +35,9 @@ function normalizeTemplate(t: ComfyTemplate): ComfyTemplate {
   return { ...t, variants: [def] };
 }
 
+let connectionSeq = 0;
+let connectionHost = "";
+let connectionPending: Promise<{ok:boolean;err?:string}> | undefined;
 let initOnce: Promise<void> | null = null;
 
 /** 落盘防抖：同步引擎/批量导入会连续 upsert 多个模板（全量 JSON 每次都重写），
@@ -85,11 +88,15 @@ export const useComfy = create<ComfyState>((set, get) => ({
     scheduleSave();
   },
 
-  test: async (host) => {
-    set({ online: "unknown", onlineInfo: "" });
-    const r = await pingComfy(host);
-    set({ online: r.ok ? "ok" : "down", onlineInfo: r.info ?? "" });
-    return { ok: r.ok, err: r.err };
+  test: (host) => {
+    if(connectionPending && host===connectionHost)return connectionPending;
+    if(host!==connectionHost)set({online:"unknown",onlineInfo:""});
+    connectionHost=host; const seq=++connectionSeq;
+    const pending=pingComfy(host).then(r=>{
+      if(seq===connectionSeq)set({online:r.ok?"ok":"down",onlineInfo:r.info??""});
+      return {ok:r.ok,err:r.err};
+    }).finally(()=>{if(seq===connectionSeq)connectionPending=undefined;});
+    connectionPending=pending;return pending;
   },
 }));
 

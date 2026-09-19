@@ -1,3 +1,6 @@
+import { ComfyLaunchButton } from "../../../ui/ComfyLaunchButton";
+import { chooseComfyDirectory, chooseComfyLauncher, useComfyRuntime } from "../../../core/comfyRuntime";
+import { errMsg } from "../../../core/utils";
 /**
  * 设置面板 · ComfyUI 页
  */
@@ -14,6 +17,8 @@ import { SecHelp } from "../shared";
 import { Switch } from "../../../ui/kit";
 
 export function ComfyTab() {
+  const launcher = useComfyRuntime(s=>s.launcher);
+  const selecting = useComfyRuntime(s=>s.selecting || s.launching);
   const settings = useSettings((s) => s.settings);
   const update = useSettings((s) => s.update);
   const online = useComfy((s) => s.online);
@@ -83,7 +88,9 @@ export function ComfyTab() {
       </div>
 
       <div className="set-card">
-        <div className="set-card-h">服务连接</div>
+        <div className="set-card-h">服务连接与本机启动</div>
+        <Row style={{flexWrap:"wrap"}}><ComfyLaunchButton/><button className="btn sm" disabled={selecting} onClick={()=>void chooseComfyDirectory().catch(e=>toast(errMsg(e), "err"))}>选择目录 · 自动识别…</button><button className="btn sm" disabled={selecting} onClick={()=>void chooseComfyLauncher().catch(e=>toast(errMsg(e), "err"))}>手动选择启动文件…</button></Row>
+        <div className="set-hint" style={{marginTop:8,overflowWrap:"anywhere"}} title={launcher}>{launcher || "选择 ComfyUI 文件夹，自动查找绘世启动器、便携版和直接启动脚本；绑定一次即可。"}</div>
         <Field label="服务地址">
           <Row>
             <input className="input" value={settings.comfy.host} placeholder="http://127.0.0.1:8188"

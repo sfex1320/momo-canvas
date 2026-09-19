@@ -17,9 +17,10 @@ export function normalizeHost(host: string): string {
 
 export async function pingComfy(host: string): Promise<{ ok: boolean; info?: string; err?: string }> {
   try {
-    const resp = await xfetch(`${normalizeHost(host)}/system_stats`);
+    const resp = await xfetch(`${normalizeHost(host)}/system_stats`, {}, { timeoutMs: 5000 });
     if (!resp.ok) return { ok: false, err: `HTTP ${resp.status}` };
     const j = await resp.json();
+    if (!j.system || !Array.isArray(j.devices)) return {ok:false,err:"该地址未返回 ComfyUI 服务信息"};
     const dev = j.devices?.[0];
     return { ok: true, info: dev ? `${dev.name ?? ""}`.trim() : "已连接" };
   } catch (e) {
